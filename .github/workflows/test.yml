@@ -1,0 +1,27 @@
+# 下書き（2026-11-14作成）。置き場所：リポジトリ直下の .github/workflows/test.yml
+# 目的：プッシュするたびに Windows と Linux でテストを自動で回す。
+# KINAKOの方針「新しいライブラリは極力なし」に沿い、テストのみ。exe化は含まない。
+# exe化を後で足す場合は、CI専用のビルド道具（PyInstaller）を追加する判断が別途必要。
+# 無料枠：公開リポジトリなら標準ランナーは無制限。非公開なら月2,000分
+# （WindowsはLinuxの2倍消費のため、Windowsばかり回すと実質1,200分程度）。
+# 課金上限0円の設定は、リポジトリ作成後にKINAKOと一緒に確認すること。
+name: test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python-version: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -r requirements.txt
+      - run: python -m unittest tests.test_core_logic -v
+        env:
+          QT_QPA_PLATFORM: offscreen

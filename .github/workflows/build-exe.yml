@@ -1,0 +1,90 @@
+# 下書き（2026-11-15作成）。置き場所：リポジトリ直下の .github/workflows/build-exe.yml
+# 目的：タグ（v1.0.0 など）を打ったときだけ、Windows で exe を自動ビルドして
+# GitHub Release に添付する。ホームページのダウンロードURL（プレースホルダー
+# __DOWNLOAD_URL__）は、その Release の exe 公開URLに差し替える想定。
+# まだどのリポジトリにも置いていない下書き。公開・ビルドは KINAKO の判断の後。
+#
+# 前提（リポジトリの置き方）:
+# - リポジトリ直下に pdf_edit_3_fixed.zip の中身（pdf_edit_3/ の中身）が置かれていること。
+#   すなわち直下に secure_local_pdf_editor.py / requirements.txt / core/ / ui/ / tests/ があること。
+#   もし pdf_edit_3/ というサブフォルダのまま置くなら、各 run の先頭に cd pdf_edit_3 が要る。
+# - エントリ: secure_local_pdf_editor.py（2026-11-14に中身を確認済み。PyQt6 + PyMuPDF）
+# - テスト: python -m unittest tests.test_core_logic -v（35件。test.yml と同じ）
+#
+# KINAKOの方針「新しいライブラリは極力なし」について:
+# - PyInstaller はアプリ本体の依存ではなく、CI（GitHub Actions）の中だけで使う
+#   ビルド道具。配布する exe に入るのはアプリ＋既存の PyQt6 / PyMuPDF のみ。
+#   それでも「CIに道具を1つ足す」判断なので、使う前に KINAKO のOKが必要。
+# - ビルドはタグを打ったときと手動実行だけ。毎プッシュでは回さないので、
+#   Windowsランナーの無料枠（非公開リポジトリは月2,000分、Windowsは2倍消費）を
+#   無駄に使わない。公開リポジトリなら標準ランナーは無制限。
+# - 課金上限0円の設定は、リポジトリ作成後に KINAKO と一緒に確認すること
+#   （test.yml の注意書きと同じ）。
+#
+# ライセンス対応（2026-11-15追加）:
+# - PyQt6 は GPLv3、PyMuPDF は AGPLv3。本体は AGPL-3.0 で公開し、exe と同じ
+#   Release に LICENSE 全文・THIRD_PARTY_NOTICES.md・ソースコード版 zip を添付する。
+#   リポジトリ直下に LICENSE と THIRD_PARTY_NOTICES.md が無いと Release が不完全になるので、
+#   初回ビルド前にこの2つを置くこと。全文は各公式配布物からコピーする。
+# - PyInstaller は CI の中だけで使うビルド道具で、アプリ本体の依存は増えない。
+# 未検証の点:
+# - このワークフローはまだ実際に回していない。初回はタグを打つ前に
+#   workflow_dispatch（手動実行）で1回だけ試し、exe が起動するか確認するのが安全。
+# - PyInstaller の --onefile は起動が少し遅くなる。気になる場合は --onedir に変える。
+# - OCR は Windows 専用（既知の注意書き通り）。exe 化してもその点は変わらない。
+name: build-exe
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    # Releaseを作るには contents: write が必要。付けないと gh release create が 403 で失敗する。
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Run tests first (fail the build if tests fail)
+        run: python -m unittest tests.test_core_logic -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Build exe with PyInstaller (CI-only tool)
+        run: pyinstaller --noconfirm --onefile --windowed --name KinakoPDF secure_local_pdf_editor.py
+      - name: Check the exe exists
+        run: |
+          dir dist
+          if (-not (Test-Path dist\KinakoPDF.exe)) { throw "KinakoPDF.exe was not built" }
+      - name: Upload exe as a build artifact (kept 30 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KinakoPDF-windows-exe
+          path: dist/KinakoPDF.exe
+          retention-days: 30
+      - name: Check license files exist (fail if missing)
+        run: |
+          if (-not (Test-Path LICENSE)) { throw "LICENSE (AGPL-3.0 full text) is missing" }
+          if (-not (Test-Path THIRD_PARTY_NOTICES.md)) { throw "THIRD_PARTY_NOTICES.md is missing" }
+      - name: Attach exe to the GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 注意：タグを打っただけでは Release は自動で作られない。gh release upload は
+        # Release が無いと失敗するので、ここでは create で Release ごと作る。
+        # --verify-tag は、タグがリモートに無い場合に止めるための安全策。
+        # exe だけでなく LICENSE と THIRD_PARTY_NOTICES.md も一緒に添付する。
+        # ソースコード版 zip は、リポジトリ公開＝ソース公開になるが、念のため
+        # 同じ Release に添付する運用にする（別手順で作成すること）。
+        run: gh release create "${{ github.ref_name }}" dist/KinakoPDF.exe LICENSE THIRD_PARTY_NOTICES.md --title "${{ github.ref_name }}" --generate-notes --verify-tag

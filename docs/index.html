@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>きなこPDF | 無料・完全ローカル PDFエディタ</title>
+<meta name="description" content="きなこPDFは無料で使える、完全ローカルのPDF編集ソフト。クラウドへのアップロードなし。墨消し・OCR・見開きリーダー・表の電卓つき。">
+<!-- 下書き（2026-11-14作成、2026-11-15更新）。公開前チェックリストは README-draft.md を参照。
+サイト名は2026-11-15に「きなこPDF」で決定。
+ダウンロードURL・アフィリエイト枠はプレースホルダーのまま。仮リンクでの公開はしないこと。 -->
+<style>
+body{font-family:sans-serif;line-height:1.8;margin:0;color:#222}
+header,section,footer{max-width:760px;margin:0 auto;padding:24px 20px}
+header{background:#fdf6e3;text-align:center}
+.btn{display:inline-block;background:#c0392b;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;margin:12px 0}
+.note{background:#f6f6f6;border-left:4px solid #c0392b;padding:12px 16px}
+.slot{border:2px dashed #999;padding:16px;margin:16px 0;color:#555}
+h2{border-bottom:2px solid #eee;padding-bottom:6px}
+</style>
+</head>
+<body>
+<header>
+<h1>きなこPDF</h1>
+<p>無料・完全ローカル PDFエディタ</p>
+<p>安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。</p>
+<!-- TODO: ダウンロード先を差し替える。GitHub Releases の公開URLか Googleドライブ公開リンク。
+きなこの仮リンク（48時間で切れる）は使わないこと。 -->
+<a class="btn" href="__DOWNLOAD_URL__">無料ダウンロード（KinakoPDF.exe）</a>
+<p><small>ダブルクリックで起動できる exe 版を配布予定です。ソースコード版も同じ場所に置きます。<br>
+exe 版は GitHub Actions で自動ビルドします。初回は手動で試して起動確認してから公開します。</small></p>
+</header>
+
+<section>
+<h2>できること</h2>
+<ul>
+<li><strong>墨消し（物理削除）</strong> — 消した文字が保存後のPDFに残っていないか自動で検証します</li>
+<li><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
+<li><strong>ペン・マーカー・トリミング・回転</strong> — ページの並べ替え・挿入・削除も</li>
+<li><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます</li>
+<li><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき</li>
+<li><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
+<li><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
+<li><strong>文字検索・印刷・最近開いたファイル</strong></li>
+</ul>
+</section>
+
+<section>
+<h2>使い方（3ステップ）</h2>
+<ol>
+<li>上のボタンからzipをダウンロードして解凍する</li>
+<li><code>pip install -r requirements.txt</code> を実行する</li>
+<li><code>python secure_local_pdf_editor.py</code> で起動する</li>
+</ol>
+<p><small>必要なもの：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）。新しいライブラリは追加していません。</small></p>
+</section>
+
+<section>
+<h2>会計事務所向け（近日公開）</h2>
+<p>今はPDFソフトのみ公開中です。会計事務所向けのページに育てていきます。</p>
+<div class="slot">会計ソフトのおすすめ — アフィリエイト枠（ASP・商品未定。登録済みのASPがあれば差し替え）</div>
+<div class="slot">伝票印刷のおすすめ — アフィリエイト枠（ASP・商品未定）</div>
+</section>
+
+<section>
+<h2>注意書き</h2>
+<div class="note">
+<ul>
+<li>OCR（スキャン色抜き・範囲OCR）はWindows専用です。色抜き以外の編集機能はどのOSでも使えます。</li>
+<li>墨消しの検証は文字層が中心で、画像や図形の残りまでは完全には確認していません。</li>
+<li>パスワード付きPDFを上書き保存すると、暗号化が解除される場合があります。保存時の確認ダイアログをよく読んでから選んでください。</li>
+<li>WindowsでのOCRの生の動作は未検証です。お試しのうえ、気づいた点があれば教えてください。</li>
+</ul>
+</div>
+</section>
+
+<section>
+<h2>ライセンス・ソースコード公開</h2>
+<p>きなこPDFはオープンソース（AGPL-3.0）で公開します。使っている PyQt6（GPLv3）と PyMuPDF（AGPLv3）の条件に合わせ、ソースコードとライセンス表示を一緒に配布します。</p>
+<p><a href="__SOURCE_URL__">ソースコード（GitHub）</a> / <a href="__LICENSE_URL__">ライセンス・サードパーティ表示</a></p>
+<p><small>詳しくは配布物に同梱の THIRD_PARTY_NOTICES をご覧ください。これは法律相談ではありません。</small></p>
+</section>
+
+<footer>
+<p><small>きなこPDF（無料公開版） / 運営：KINAKO</small></p>
+</footer>
+</body>
+</html>
