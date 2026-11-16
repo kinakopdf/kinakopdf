@@ -25,7 +25,7 @@ h2{border-bottom:2px solid #eee;padding-bottom:6px}
 <p>安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。</p>
 <!-- TODO: ダウンロード先を差し替える。GitHub Releases の公開URLか Googleドライブ公開リンク。
 きなこの仮リンク（48時間で切れる）は使わないこと。 -->
-<a class="btn" href="__DOWNLOAD_URL__">無料ダウンロード（KinakoPDF.exe）</a>
+<a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.0/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
 <p><small>ダブルクリックで起動できる exe 版を配布予定です。ソースコード版も同じ場所に置きます。<br>
 exe 版は GitHub Actions で自動ビルドします。初回は手動で試して起動確認してから公開します。</small></p>
 </header>
@@ -49,7 +49,7 @@ exe 版は GitHub Actions で自動ビルドします。初回は手動で試し
 <ol>
 <li>上のボタンからzipをダウンロードして解凍する</li>
 <li><code>pip install -r requirements.txt</code> を実行する</li>
-<li><code>python secure_local_pdf_editor.py</code> で起動する</li>
+<li><code>python secure_local_pdf_editor.pyw</code> で起動する</li>
 </ol>
 <p><small>必要なもの：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）。新しいライブラリは追加していません。</small></p>
 </section>
@@ -76,7 +76,7 @@ exe 版は GitHub Actions で自動ビルドします。初回は手動で試し
 <section>
 <h2>ライセンス・ソースコード公開</h2>
 <p>きなこPDFはオープンソース（AGPL-3.0）で公開します。使っている PyQt6（GPLv3）と PyMuPDF（AGPLv3）の条件に合わせ、ソースコードとライセンス表示を一緒に配布します。</p>
-<p><a href="__SOURCE_URL__">ソースコード（GitHub）</a> / <a href="__LICENSE_URL__">ライセンス・サードパーティ表示</a></p>
+<p><a href="https://github.com/kinakopdf/kinakopdf">ソースコード（GitHub）</a> / <a href="https://github.com/kinakopdf/kinakopdf/blob/main/LICENSE">ライセンス・サードパーティ表示</a></p>
 <p><small>詳しくは配布物に同梱の THIRD_PARTY_NOTICES をご覧ください。これは法律相談ではありません。</small></p>
 </section>
 
