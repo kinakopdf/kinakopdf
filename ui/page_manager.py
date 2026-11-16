@@ -136,7 +136,7 @@ class BasePageListWidget(QListWidget):
                 payload = extracted.tobytes(garbage=1, deflate=True)
         except Exception:
             logger.debug("Failed to extract drag pages", exc_info=True)
-            BasePageListWidget._in_process_drag_doc = None
+            self.clear_in_process_drag_doc()
 
         mime = QMimeData()
         mime.setData(MIME_PDF_PAGES, QByteArray(payload))

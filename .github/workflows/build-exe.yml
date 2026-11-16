@@ -6,9 +6,11 @@
 #
 # 前提（リポジトリの置き方）:
 # - リポジトリ直下に pdf_edit_3_fixed.zip の中身（pdf_edit_3/ の中身）が置かれていること。
-#   すなわち直下に secure_local_pdf_editor.py / requirements.txt / core/ / ui/ / tests/ があること。
+#   すなわち直下に secure_local_pdf_editor.pyw / requirements.txt / core/ / ui/ / tests/ があること。
 #   もし pdf_edit_3/ というサブフォルダのまま置くなら、各 run の先頭に cd pdf_edit_3 が要る。
-# - エントリ: secure_local_pdf_editor.py（2026-11-14に中身を確認済み。PyQt6 + PyMuPDF）
+# - エントリ: secure_local_pdf_editor.pyw（2026-11-16に .py から .pyw へ変更。黒い画面が出ない）。
+#   アイコンは assets/kinako_pdf.ico を --icon と --add-data で同封する。
+#   get_app_icon_path が PyInstaller の _MEIPASS 内の assets/ を見る作り。
 # - テスト: python -m unittest tests.test_core_logic -v（35件。test.yml と同じ）
 #
 # KINAKOの方針「新しいライブラリは極力なし」について:
@@ -28,8 +30,7 @@
 #   初回ビルド前にこの2つを置くこと。全文は各公式配布物からコピーする。
 # - PyInstaller は CI の中だけで使うビルド道具で、アプリ本体の依存は増えない。
 # 未検証の点:
-# - このワークフローはまだ実際に回していない。初回はタグを打つ前に
-#   workflow_dispatch（手動実行）で1回だけ試し、exe が起動するか確認するのが安全。
+# - exe の実機（Windows PC）での起動は未確認。Release 後に MIWA の Windows PC で確認する。
 # - PyInstaller の --onefile は起動が少し遅くなる。気になる場合は --onedir に変える。
 # - OCR は Windows 専用（既知の注意書き通り）。exe 化してもその点は変わらない。
 name: build-exe
@@ -61,7 +62,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Build exe with PyInstaller (CI-only tool)
-        run: pyinstaller --noconfirm --onefile --windowed --name KinakoPDF secure_local_pdf_editor.py
+        run: pyinstaller --noconfirm --onefile --windowed --name KinakoPDF --icon assets/kinako_pdf.ico --add-data "assets;assets" secure_local_pdf_editor.pyw
       - name: Check the exe exists
         run: |
           dir dist

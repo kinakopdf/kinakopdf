@@ -79,9 +79,6 @@ class _OcrTestWorker(QRunnable):
                 fix_numeric=self.fix_numeric,
                 cancel_event=self.cancel_event,
             )
-            # NOTE: キャンセル時も必ず finished を emit する (cancelled=True)。
-            # emit しないと _on_test_ocr_finished が走らず UI が
-            # "⏳ OCR解析中..." のまま固まる (#13)。
             if self.cancel_event.is_set():
                 self.signals.finished.emit([], "", True)
                 return
@@ -125,8 +122,6 @@ class _BatchApplyWorker(QRunnable):
         self.cancel_event = cancel_event
         self.signals = _BatchApplySignals()
 
-    # 一度にメモリに保持するクリーニング済み画像の上限 (#4)。
-    # 従来は全対象ページ分を一括保持していたため、360DPI A4 20ページで約1GBに達した。
     BATCH_SIZE = 3
 
     def run(self):
@@ -151,7 +146,6 @@ class _BatchApplyWorker(QRunnable):
                     _cancel_and_finish()
                     return
 
-                # 1) このバッチ分のページだけレンダリング＋色抜きする
                 cleaned_images: List[QImage] = []
                 for step_i in range(batch_start, batch_end):
                     if self.cancel_event.is_set():
@@ -174,7 +168,6 @@ class _BatchApplyWorker(QRunnable):
                     _cancel_and_finish()
                     return
 
-                # 2) このバッチ分だけOCRする (PowerShellはバッチごとに起動)
                 ocr_results_list: List[Optional[List[Dict]]] = [None] * len(cleaned_images)
                 if self.need_ocr and cleaned_images:
                     self.signals.progress.emit(
@@ -204,7 +197,6 @@ class _BatchApplyWorker(QRunnable):
                         ocr_results_list[i] = ch_list
                         total_ocr_words += len(ch_list)
 
-                # 3) このバッチ分をPDFへ反映し、使い終わった画像を即破棄する
                 for j, step_i in enumerate(range(batch_start, batch_end)):
                     if self.cancel_event.is_set():
                         break
@@ -244,7 +236,6 @@ class _BatchApplyWorker(QRunnable):
                 after_doc.close()
                 src_doc.close()
             self.signals.finished.emit(None, [], 0, str(e))
-
 
 
 class _PreviewGraphicsView(QGraphicsView):
@@ -336,6 +327,7 @@ class ScanCleanOcrDialog(QDialog):
         self._batch_cancel_event: Optional[threading.Event] = None
         self._progress_dlg: Optional[QProgressDialog] = None
         self._active_worker_ref = None
+        self._active_batch_worker_ref = None
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -354,7 +346,6 @@ class ScanCleanOcrDialog(QDialog):
         root_layout.setContentsMargins(10, 10, 10, 10)
         root_layout.setSpacing(12)
 
-        # 左側：プレビュー領域
         left_layout = QVBoxLayout()
         top_bar = QHBoxLayout()
         top_bar.setSpacing(6)
@@ -434,14 +425,12 @@ class ScanCleanOcrDialog(QDialog):
         left_layout.addWidget(hint_lbl)
         root_layout.addLayout(left_layout, stretch=7)
 
-        # 右側：設定コントロールパネル
         self.right_panel = QWidget(self)
         self.right_panel.setFixedWidth(410)
         right_layout = QVBoxLayout(self.right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        # 1. プリセット＆色抜き調整グループ
         grp_clean = QGroupBox("1. 色抜き・点々（網点）除去の設定")
         clean_layout = QVBoxLayout(grp_clean)
 
@@ -514,7 +503,6 @@ class ScanCleanOcrDialog(QDialog):
 
         right_layout.addWidget(grp_clean)
 
-        # 2. OCR・反映方法グループ
         grp_ocr = QGroupBox("2. Windows標準OCR ＆ ページ反映オプション")
         ocr_layout = QVBoxLayout(grp_ocr)
 
@@ -562,7 +550,6 @@ class ScanCleanOcrDialog(QDialog):
         right_layout.addWidget(grp_ocr)
         right_layout.addStretch()
 
-        # 下部実行ボタン
         btn_row = QHBoxLayout()
         self.btn_cancel = QPushButton("キャンセル")
         self.btn_cancel.clicked.connect(self._on_cancel_button_clicked)
@@ -644,8 +631,6 @@ class ScanCleanOcrDialog(QDialog):
             self._test_cancel_event.set()
         if self._batch_cancel_event is not None:
             self._batch_cancel_event.set()
-        # 実行中のOCRテストを中止した場合はテスト用UIも初期状態へ戻す。
-        # (ワーカーの cancelled emit は遅延するため、ここで先に表示を戻す)
         self._test_cancel_event = None
         if getattr(self, "btn_test_ocr", None) is not None:
             self.btn_test_ocr.setText("🔍 このページでOCRをテスト実行して認識文字を確認")
@@ -663,6 +648,7 @@ class ScanCleanOcrDialog(QDialog):
 
     def closeEvent(self, event):
         self._cancel_running_tasks()
+        self._close_progress_dialog_safely()
         super().closeEvent(event)
 
     def _load_source_page_image(self):
@@ -807,13 +793,13 @@ class ScanCleanOcrDialog(QDialog):
             fix_numeric=self.chk_fix_num.isChecked(),
             cancel_event=self._test_cancel_event,
         )
-        worker.signals.finished.connect(self._on_test_ocr_finished)
+        worker.signals.finished.connect(
+            self._on_test_ocr_finished, Qt.ConnectionType.QueuedConnection
+        )
         self._active_worker_ref = worker
         QThreadPool.globalInstance().start(worker)
 
     def _on_test_ocr_finished(self, chunks: list, err_msg: str, cancelled: bool = False):
-        # NOTE: 古いワーカーの遅延シグナルが新しいテスト実行の状態を壊さないよう、
-        # 現在のワーカー以外からの emit は無視する。
         active = getattr(self, "_active_worker_ref", None)
         if active is not None and self.sender() is not getattr(active, "signals", None):
             return
@@ -857,6 +843,8 @@ class ScanCleanOcrDialog(QDialog):
             return
 
         self._cancel_running_tasks()
+        self._close_progress_dialog_safely()
+
         action_mode = self.combo_action_mode.currentData()
         scope = self.combo_scope.currentData()
         self._pending_need_ocr = action_mode in ("both", "ocr_only")
@@ -881,20 +869,21 @@ class ScanCleanOcrDialog(QDialog):
         self.btn_apply.setEnabled(False)
 
         progress_max = max(2, len(target_indices) + 1)
-        self._progress_dlg = QProgressDialog(
+        dlg = QProgressDialog(
             "スキャン色抜き・Windows標準OCRを実行中...",
             "中止",
             0,
             progress_max,
             self,
         )
-        self._progress_dlg.setWindowTitle("処理中")
-        self._progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        self._progress_dlg.setMinimumDuration(0)
-        self._progress_dlg.setAutoClose(False)
-        self._progress_dlg.setAutoReset(False)
-        self._progress_dlg.canceled.connect(self._on_batch_canceled)
-        self._progress_dlg.show()
+        dlg.setWindowTitle("処理中")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.canceled.connect(self._on_batch_canceled)
+        self._progress_dlg = dlg
+        dlg.show()
 
         worker = _BatchApplyWorker(
             source_pdf_bytes=source_pdf_bytes,
@@ -907,28 +896,39 @@ class ScanCleanOcrDialog(QDialog):
             render_dpi=self._render_dpi,
             cancel_event=self._batch_cancel_event,
         )
-        worker.signals.progress.connect(self._on_batch_progress)
-        worker.signals.finished.connect(self._on_batch_finished)
-        self._active_worker_ref = worker
+        worker.signals.progress.connect(
+            self._on_batch_progress, Qt.ConnectionType.QueuedConnection
+        )
+        worker.signals.finished.connect(
+            self._on_batch_finished, Qt.ConnectionType.QueuedConnection
+        )
+        self._active_batch_worker_ref = worker
         QThreadPool.globalInstance().start(worker)
 
     def _on_batch_progress(self, step_i: int, label_text: str):
-        dlg = self._progress_dlg
-        if dlg is None or getattr(self, "_is_canceled_or_closed", False):
+        active_batch = getattr(self, "_active_batch_worker_ref", None)
+        if active_batch is not None and self.sender() is not getattr(active_batch, "signals", None):
+            return
+        if getattr(self, "_is_canceled_or_closed", False):
+            return
+        dlg = getattr(self, "_progress_dlg", None)
+        if dlg is None:
             return
         try:
             dlg.setLabelText(label_text)
-            if self._progress_dlg is not None:
+            dlg = getattr(self, "_progress_dlg", None)
+            if dlg is not None and not getattr(self, "_is_canceled_or_closed", False):
                 dlg.setValue(min(step_i, max(0, dlg.maximum() - 1)))
-        except RuntimeError:
+        except (RuntimeError, AttributeError):
             pass
 
     def _on_batch_canceled(self):
+        self._is_canceled_or_closed = True
         if self._batch_cancel_event is not None:
             self._batch_cancel_event.set()
 
     def _close_progress_dialog_safely(self):
-        dlg = self._progress_dlg
+        dlg = getattr(self, "_progress_dlg", None)
         self._progress_dlg = None
         if dlg is not None:
             try:
@@ -936,9 +936,10 @@ class ScanCleanOcrDialog(QDialog):
             except Exception:
                 pass
             try:
+                dlg.hide()
                 dlg.close()
                 dlg.deleteLater()
-            except RuntimeError:
+            except (RuntimeError, AttributeError):
                 pass
 
     def _on_batch_finished(
@@ -948,6 +949,13 @@ class ScanCleanOcrDialog(QDialog):
         total_ocr_words: int,
         err_msg: str,
     ):
+        active_batch = getattr(self, "_active_batch_worker_ref", None)
+        if active_batch is not None and self.sender() is not getattr(active_batch, "signals", None):
+            if after_doc is not None:
+                with FITZ_LOCK:
+                    after_doc.close()
+            return
+        self._active_batch_worker_ref = None
         self._batch_cancel_event = None
         self.btn_apply.setEnabled(True)
         self._close_progress_dialog_safely()

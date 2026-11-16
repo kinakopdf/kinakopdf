@@ -661,6 +661,7 @@ class FullscreenSpreadReader(QWidget):
             was_encrypted = bool(
                 getattr(self.doc, "is_encrypted", False)
                 or getattr(self.doc, "needs_pass", False)
+                or (getattr(self.doc, "metadata", None) or {}).get("encryption")
             )
             if self.viewer is not None:
                 was_encrypted = was_encrypted or bool(

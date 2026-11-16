@@ -118,6 +118,7 @@ def extract_number_from_text(text: Any) -> Optional[float]:
     )
     normalized = re.sub(r"[▲△－ー−﹣]", "-", normalized)
     cleaned = normalized.replace(",", "").replace(" ", "")
+    cleaned = re.sub(r"([+-])[¥￥$]+", r"\1", cleaned)
 
     match = re.search(r"(?<![0-9A-Za-z])[+-]?(?:\d+\.?\d*|\.\d+)", cleaned)
     if not match:
@@ -417,13 +418,74 @@ def get_crop_outside_rects(mediabox: fitz.Rect, cropbox: fitz.Rect) -> List[fitz
 # Windows ファイル関連付け（既定のアプリ登録）ヘルパー
 # ==========================================
 
+def get_app_icon_path(prefer_ico: bool = False) -> Optional[str]:
+    """きなこPDFのアプリアイコン (.ico / .png) のパスを返す"""
+    bases = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(meipass))
+    if getattr(sys, "frozen", False):
+        bases.append(Path(sys.executable).resolve().parent)
+    bases.append(Path(__file__).resolve().parent.parent)
+
+    names = (
+        ("kinako_pdf.ico", "kinako_pdf.png")
+        if prefer_ico
+        else ("kinako_pdf.png", "kinako_pdf.ico")
+    )
+    for base in bases:
+        for sub in ("assets", ""):
+            for fname in names:
+                cand = (base / sub / fname) if sub else (base / fname)
+                if cand.is_file():
+                    return str(cand.resolve())
+    return None
+
+
+def _resolve_main_entry_script(project_root: Path) -> str:
+    """プロジェクトルート内のメイン起動スクリプト (.pyw / .py) を自動検出する"""
+    main_mod = sys.modules.get("__main__")
+    main_file = getattr(main_mod, "__file__", None) if main_mod is not None else None
+    if main_file:
+        cand = Path(main_file).resolve()
+        if (
+            cand.is_file()
+            and cand.parent == project_root.resolve()
+            and "patch" not in cand.name.lower()
+            and cand.suffix.lower() in (".pyw", ".py")
+        ):
+            return str(cand)
+
+    preferred = [
+        "secure_local_pdf_editor.pyw",
+        "secure_local_pdf_editor.py",
+        "kinako_pdf.pyw",
+        "kinako_pdf.py",
+        "kinakopdf.pyw",
+        "kinakopdf.py",
+    ]
+    for name in preferred:
+        cand = project_root / name
+        if cand.is_file():
+            return str(cand.resolve())
+
+    for ext in ("*.pyw", "*.py"):
+        for cand in sorted(project_root.glob(ext)):
+            if cand.is_file() and "patch" not in cand.name.lower():
+                return str(cand.resolve())
+
+    return str((project_root / "secure_local_pdf_editor.pyw").resolve())
+
+
 def build_windows_open_command(main_script_path: Optional[str] = None) -> Tuple[str, str]:
     """WindowsでPDFをダブルクリックした際に実行されるコマンドライン文字列を生成する"""
+    ico_path = get_app_icon_path(prefer_ico=True) if "get_app_icon_path" in globals() else None
     if getattr(sys, "frozen", False):
         exe_path = os.path.abspath(sys.executable)
         if not os.path.isfile(exe_path):
             raise FileNotFoundError(f"実行ファイルが見つかりません: {exe_path}")
-        return f'"{exe_path}" "%1"', f'"{exe_path}",0'
+        icon_spec = f'"{ico_path}"' if (ico_path and ico_path.lower().endswith(".ico")) else f'"{exe_path}",0'
+        return f'"{exe_path}" "%1"', icon_spec
 
     py_exe = os.path.abspath(sys.executable)
     py_dir = os.path.dirname(py_exe)
@@ -432,17 +494,17 @@ def build_windows_open_command(main_script_path: Optional[str] = None) -> Tuple[
         py_exe = pythonw_candidate
 
     if main_script_path is None:
-        script_path = str(Path(__file__).resolve().parent.parent / "secure_local_pdf_editor.py")
+        project_root = Path(__file__).resolve().parent.parent
+        script_path = _resolve_main_entry_script(project_root)
     else:
         script_path = os.path.abspath(main_script_path)
-    # 存在しないスクリプトを指すコマンドをレジストリに書き込まない (audit #14)。
-    # build_windows_open_command は register_as_windows_pdf_handler より先に
-    # 呼ばれるため、ここで失敗すればレジストリは一切書き込まれない。
+
     if not os.path.isfile(script_path):
         raise FileNotFoundError(
             f"既定のアプリとして登録するスクリプトが見つかりません: {script_path}"
         )
-    return f'"{py_exe}" "{script_path}" "%1"', f'"{py_exe}",0'
+    icon_spec = f'"{ico_path}"' if (ico_path and ico_path.lower().endswith(".ico")) else f'"{py_exe}",0'
+    return f'"{py_exe}" "{script_path}" "%1"', icon_spec
 
 
 def register_as_windows_pdf_handler(main_script_path: Optional[str] = None) -> str:
@@ -486,6 +548,7 @@ def register_as_windows_pdf_handler(main_script_path: Optional[str] = None) -> s
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{prog_key_path}\\Application") as app_key:
         winreg.SetValueEx(app_key, "ApplicationName", 0, winreg.REG_SZ, APP_NAME)
         winreg.SetValueEx(app_key, "ApplicationDescription", 0, winreg.REG_SZ, APP_NAME)
+        winreg.SetValueEx(app_key, "ApplicationIcon", 0, winreg.REG_SZ, icon_spec)
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{prog_key_path}\\DefaultIcon") as icon_key:
         winreg.SetValueEx(icon_key, "", 0, winreg.REG_SZ, icon_spec)

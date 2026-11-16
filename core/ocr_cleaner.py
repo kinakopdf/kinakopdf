@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
-追加ライブラリ不要（PyQt6 + PyMuPDF + Windows標準PowerShell OCRのみ）の
-スキャン用紙カラー除去（黄・赤・青の網掛け消去）・網点ノイズ除去・OCRエンジン
-"""
+"""スキャン用紙カラー除去・網点ノイズ除去・Windows標準OCRエンジン"""
 import json
-import math
 import os
 import re
 import shutil
@@ -17,7 +13,7 @@ import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import fitz
-from PyQt6.QtCore import QPoint, QRectF, Qt
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QColor, QImage, QPainter, QTransform
 
 from core import logger
@@ -30,16 +26,15 @@ from core.geometry import (
     view_point_to_raw_pdf_from_geom,
 )
 
-# OCR透明テキスト識別用の内部カラー（画面上はrender_mode=3で完全透明）
-OCR_TEXT_MARKER_RGB: Tuple[float, float, float] = (1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0)
-OCR_TEXT_MARKER_SRGB_INT: int = 0x010101
+OCR_TEXT_MARKER_RGB: Tuple[float, float, float] = (2.0 / 255.0, 2.0 / 255.0, 2.0 / 255.0)
+OCR_TEXT_MARKER_SRGB_INT: int = 0x020202
+OCR_TEXT_MARKER_SRGB_INTS = frozenset({0x010101, 0x020202, 0x030303})
 
 _ACTIVE_OCR_PROCS_LOCK = threading.Lock()
 _ACTIVE_OCR_PROCS: set = set()
 
 
 def terminate_all_active_ocr_processes() -> int:
-    """アプリ終了時などに実行中のPowerShell OCR子プロセスを即座に終了させる"""
     with _ACTIVE_OCR_PROCS_LOCK:
         procs = list(_ACTIVE_OCR_PROCS)
         _ACTIVE_OCR_PROCS.clear()
@@ -55,7 +50,6 @@ def terminate_all_active_ocr_processes() -> int:
 
 
 def cleanup_stale_ocr_temp_dirs(max_age_sec: float = 300.0) -> int:
-    """一時ディレクトリ内に残存した古い secure_pdf_ocr_* フォルダを安全に掃除する"""
     tmp_root = tempfile.gettempdir()
     if not tmp_root or not os.path.isdir(tmp_root):
         return 0
@@ -66,8 +60,7 @@ def cleanup_stale_ocr_temp_dirs(max_age_sec: float = 300.0) -> int:
             if not entry.is_dir() or not entry.name.startswith("secure_pdf_ocr_"):
                 continue
             try:
-                mtime = entry.stat().st_mtime
-                if max_age_sec <= 0.0 or (now - mtime) >= max_age_sec:
+                if max_age_sec <= 0.0 or (now - entry.stat().st_mtime) >= max_age_sec:
                     shutil.rmtree(entry.path, ignore_errors=True)
                     if not os.path.exists(entry.path):
                         removed_count += 1
@@ -79,7 +72,6 @@ def cleanup_stale_ocr_temp_dirs(max_age_sec: float = 300.0) -> int:
 
 
 def cleanup_bytecode_cache(root_dir: Optional[str] = None) -> int:
-    """指定ディレクトリ配下の __pycache__ および .pyc ファイルを削除する"""
     base = os.path.abspath(root_dir or os.path.join(os.path.dirname(__file__), ".."))
     if not os.path.isdir(base):
         return 0
@@ -105,7 +97,6 @@ def cleanup_bytecode_cache(root_dir: Optional[str] = None) -> int:
 def render_page_to_qimage(
     page: fitz.Page, dpi: int = 250, max_pixels: int = MAX_RENDER_PIXELS
 ) -> QImage:
-    """指定ページを指定DPI（大判時はmax_pixels上限で自動クランプ）のQImage(Format_RGB32)としてレンダリングする"""
     base_scale = max(72.0, float(dpi)) / 72.0
     with FITZ_LOCK:
         r = page.rect
@@ -113,28 +104,20 @@ def render_page_to_qimage(
             r.width, r.height, base_scale, base_scale, max_pixels=max_pixels
         )
         pix = page.get_pixmap(
-            matrix=fitz.Matrix(sx, sy),
-            colorspace=fitz.csRGB,
-            alpha=False,
+            matrix=fitz.Matrix(sx, sy), colorspace=fitz.csRGB, alpha=False
         )
         qimg = QImage(
-            pix.samples,
-            pix.width,
-            pix.height,
-            pix.stride,
-            QImage.Format.Format_RGB888,
+            pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888
         ).copy()
     return qimg.convertToFormat(QImage.Format.Format_RGB32)
 
 
 def _gray_bytes_to_rgb32_qimage(gray_bytes: bytes, w: int, h: int) -> QImage:
-    """長さ w*h のグレースケールbytesをストライド問題のないFormat_RGB32のQImageに変換する"""
     g_img = QImage(gray_bytes, w, h, w, QImage.Format.Format_Grayscale8)
     return g_img.convertToFormat(QImage.Format.Format_RGB32)
 
 
 def _rgb32_qimage_to_gray_bytes(img_rgb32: QImage) -> bytes:
-    """Format_RGB32のQImageから1チャンネル分のbytes(長さ w*h)を高速抽出する"""
     w = img_rgb32.width()
     h = img_rgb32.height()
     bits = img_rgb32.constBits()
@@ -151,32 +134,19 @@ def clean_scanned_qimage(
     binarize: bool = True,
     keep_dark_color_text: bool = True,
 ) -> QImage:
-    """
-    スキャン画像から有彩色（セゾンの黄色、JCBの赤・青など）と薄い網点（点々）を消去し、
-    文字だけを鮮明に残したQImage(Format_RGB32)を返す。
-    Qt6のC++ SIMD合成(QPainter)とbytes.translateのみを使用し、純粋Pythonループ無しで高速処理する。
-    """
     if src_img.isNull() or src_img.width() <= 0 or src_img.height() <= 0:
         return src_img
 
     img32 = src_img.convertToFormat(QImage.Format.Format_RGB32)
-    w = img32.width()
-    h = img32.height()
-
+    w, h = img32.width(), img32.height()
     bits = img32.constBits()
     bits.setsize(w * h * 4)
     raw = bytes(bits)
 
-    # BGRA順 (Little Endian Format_RGB32)
-    b_bytes = raw[0::4]
-    g_bytes = raw[1::4]
-    r_bytes = raw[2::4]
+    r_img = _gray_bytes_to_rgb32_qimage(raw[2::4], w, h)
+    g_img = _gray_bytes_to_rgb32_qimage(raw[1::4], w, h)
+    b_img = _gray_bytes_to_rgb32_qimage(raw[0::4], w, h)
 
-    r_img = _gray_bytes_to_rgb32_qimage(r_bytes, w, h)
-    g_img = _gray_bytes_to_rgb32_qimage(g_bytes, w, h)
-    b_img = _gray_bytes_to_rgb32_qimage(b_bytes, w, h)
-
-    # 1. max(R, G, B) と min(R, G, B) を QPainter の Lighten / Darken で一括算出
     max_img = r_img.copy()
     p_max = QPainter(max_img)
     p_max.setCompositionMode(QPainter.CompositionMode.CompositionMode_Lighten)
@@ -191,7 +161,6 @@ def clean_scanned_qimage(
     p_min.drawImage(0, 0, b_img)
     p_min.end()
 
-    # 2. 色差 Chroma = max(R, G, B) - min(R, G, B) を算出
     chroma_img = max_img.copy()
     p_diff = QPainter(chroma_img)
     p_diff.setCompositionMode(QPainter.CompositionMode.CompositionMode_Difference)
@@ -199,23 +168,22 @@ def clean_scanned_qimage(
     p_diff.end()
 
     chroma_bytes = _rgb32_qimage_to_gray_bytes(chroma_img)
-
-    # 3. 有彩色を白(255)へ飛ばす量を計算
     strength = max(0.0, float(color_drop_strength))
     chroma_lut = bytes(
         0 if c <= 16 else min(255, int(round((c - 16) * strength * 1.85)))
         for c in range(256)
     )
-    boosted_chroma = chroma_bytes.translate(chroma_lut)
-    boosted_chroma_img = _gray_bytes_to_rgb32_qimage(boosted_chroma, w, h)
+    boosted_chroma_img = _gray_bytes_to_rgb32_qimage(
+        chroma_bytes.translate(chroma_lut), w, h
+    )
 
     if keep_dark_color_text:
         max_bytes = _rgb32_qimage_to_gray_bytes(max_img)
         min_bytes = _rgb32_qimage_to_gray_bytes(min_img)
         dark_mask_lut = bytes(0 if m < 150 else 255 for m in range(256))
-        bright_mask = max_bytes.translate(dark_mask_lut)
-        bright_mask_img = _gray_bytes_to_rgb32_qimage(bright_mask, w, h)
-
+        bright_mask_img = _gray_bytes_to_rgb32_qimage(
+            max_bytes.translate(dark_mask_lut), w, h
+        )
         p_mask = QPainter(boosted_chroma_img)
         p_mask.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
         p_mask.drawImage(0, 0, bright_mask_img)
@@ -238,7 +206,6 @@ def clean_scanned_qimage(
         p_add.end()
         gray_after_color = _rgb32_qimage_to_gray_bytes(work_img)
 
-    # 4. 照明ムラ・紙の地色補正 + コントラスト強調 / 二値化
     w_th = max(80, min(250, int(white_threshold)))
     b_th = max(20, min(w_th - 10, int(black_threshold)))
 
@@ -254,45 +221,30 @@ def clean_scanned_qimage(
                 if v <= b_th // 2
                 else max(
                     0,
-                    min(
-                        255,
-                        int(round((v - b_th * 0.4) * 255.0 / (w_th - b_th * 0.4))),
-                    ),
+                    min(255, int(round((v - b_th * 0.4) * 255.0 / (w_th - b_th * 0.4)))),
                 )
             )
             for v in range(256)
         )
 
-    toned_bytes = gray_after_color.translate(tone_lut)
-    result_img = _gray_bytes_to_rgb32_qimage(toned_bytes, w, h)
-
-    # 5. うっすら残った点々（孤立ドット・網点・地紋）の除去
+    result_img = _gray_bytes_to_rgb32_qimage(gray_after_color.translate(tone_lut), w, h)
     if despeckle_level >= 1:
         result_img = _despeckle_isolated_dots(result_img, w, h, level=despeckle_level)
-
     return result_img
 
 
 def _despeckle_isolated_dots(img_rgb32: QImage, w: int, h: int, level: int = 1) -> QImage:
-    """
-    8近傍の白ピクセル数をQPainterのシフト加算で高速カウントし、
-    文字の線や句読点を傷つけずに1〜3pxの孤立した点々（網点・地紋）だけを白(255)で消去する。
-    """
     cur_img = img_rgb32
     radii = [1] if level == 1 else [1, 2, 1]
-    # NOTE: 全パスで閾値224を使う。192では1px細線のピクセルも
-    # 白隣接6個 (6*32=192) で消去対象となり、レベル2が細線・句読点を消していた。
-    thresholds = [224] * len(radii)
     bit_lut = bytes(32 if v >= 190 else 0 for v in range(256))
+    erase_mask_lut = bytes(255 if v >= 224 else 0 for v in range(256))
 
-    for radius, count_th in zip(radii, thresholds):
+    for radius in radii:
         cur_bytes = _rgb32_qimage_to_gray_bytes(cur_img)
-        white_bit_bytes = cur_bytes.translate(bit_lut)
-        white_bit_img = _gray_bytes_to_rgb32_qimage(white_bit_bytes, w, h)
+        white_bit_img = _gray_bytes_to_rgb32_qimage(cur_bytes.translate(bit_lut), w, h)
 
         accum_img = QImage(w, h, QImage.Format.Format_RGB32)
         accum_img.fill(QColor(0, 0, 0))
-
         offsets = [
             (-radius, -radius), (0, -radius), (radius, -radius),
             (-radius, 0),                     (radius, 0),
@@ -305,10 +257,9 @@ def _despeckle_isolated_dots(img_rgb32: QImage, w: int, h: int, level: int = 1) 
         p_acc.end()
 
         accum_bytes = _rgb32_qimage_to_gray_bytes(accum_img)
-        erase_mask_lut = bytes(255 if v >= count_th else 0 for v in range(256))
-        erase_mask_bytes = accum_bytes.translate(erase_mask_lut)
-        erase_mask_img = _gray_bytes_to_rgb32_qimage(erase_mask_bytes, w, h)
-
+        erase_mask_img = _gray_bytes_to_rgb32_qimage(
+            accum_bytes.translate(erase_mask_lut), w, h
+        )
         next_img = cur_img.copy()
         p_clean = QPainter(next_img)
         p_clean.setCompositionMode(QPainter.CompositionMode.CompositionMode_Lighten)
@@ -318,10 +269,6 @@ def _despeckle_isolated_dots(img_rgb32: QImage, w: int, h: int, level: int = 1) 
 
     return cur_img
 
-
-# ==============================================================================
-# Windows標準OCR (Windows.Media.Ocr via PowerShell) 実行＆チャンク構築
-# ==============================================================================
 
 _POWERSHELL_BATCH_OCR_SCRIPT = r"""
 param(
@@ -350,7 +297,7 @@ Function Await($WinRtTask, $ResultType) {
 [Windows.Globalization.Language, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
 
 $engine = $null
-foreach ($tag in @("ja-JP", "ja")) {
+foreach ($tag in @("ja-JP", "ja", "en-US", "en")) {
     try {
         $lang = New-Object Windows.Globalization.Language($tag)
         if ([Windows.Media.Ocr.OcrEngine]::IsLanguageSupported($lang)) {
@@ -363,7 +310,7 @@ if ($null -eq $engine) {
     $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
 }
 if ($null -eq $engine) {
-    throw "Windows標準OCRエンジンを初期化できませんでした。Windowsの言語設定に『光学式文字認識(日本語)』がインストールされているか確認してください。"
+    throw "Windows標準OCRエンジンを初期化できませんでした。"
 }
 
 $manifestRaw = [System.IO.File]::ReadAllText($ManifestJsonPath, [System.Text.Encoding]::UTF8)
@@ -410,9 +357,7 @@ foreach ($imgPath in $imagePaths) {
     $idx += 1
 }
 
-$payload = @{
-    pages = $pagesResult.ToArray()
-}
+$payload = @{ pages = $pagesResult.ToArray() }
 $json = ConvertTo-Json -InputObject $payload -Depth 8 -Compress
 [System.IO.File]::WriteAllText($OutJsonPath, $json, [System.Text.Encoding]::UTF8)
 """
@@ -423,21 +368,12 @@ def _is_ascii_word(s: str) -> bool:
 
 
 def _normalize_numeric_ocr_misreads(text: str) -> str:
-    """
-    金額・日付・番号などの数値列の中で起きやすい典型的なOCR誤認識
-    (例: '12,34O' -> '12,340', '¥1O,OOO' -> '¥10,000', '¥I,200' -> '¥1,200') を文脈補正する
-    """
     if not text:
         return text
     s = unicodedata.normalize("NFKC", text)
     for _ in range(4):
         prev = s
         s = re.sub(r"(?<=[0-9,¥￥+-])[Oo](?=[0-9OoIl|,円%)]|$)", "0", s)
-        # NOTE: 2番目の文字クラスはハイフンをエスケープすること。
-        # [¥￥+-▲△(] のままでは "+-▲" が文字範囲となりほぼ全ASCIIに一致し、
-        # "hello" -> "he110" のように通常の英単語まで破壊する。
-        # さらに文頭(^)の I/l は、後続に数字を含む数値列の場合にのみ 1 へ補正する
-        # ("lollipop" の先頭 l を 1 にしないため)。
         s = re.sub(r"(?:^|(?<=[¥￥+\-▲△(]))[Il|](?=[0-9OoIl|,]*[0-9][0-9OoIl|,]*)", "1", s)
         s = re.sub(r"(?<=[0-9,])[Il|](?=[0-9OoIl|,円%)]|$)", "1", s)
         if s == prev:
@@ -445,12 +381,116 @@ def _normalize_numeric_ocr_misreads(text: str) -> str:
     return s
 
 
+# 日本語OCRが小数点「.」を「、」「。」「・」等と認識した文字をすべて「.」へ変換するマップ
+_STRICT_NUMERIC_CHAR_MAP = str.maketrans({
+    "O": "0", "o": "0", "Q": "0", "D": "0", "〇": "0", "○": "0", "ロ": "0", "口": "0",
+    "I": "1", "l": "1", "|": "1", "!": "1", "i": "1", "j": "1", "丨": "1", "｜": "1",
+    "Z": "2", "z": "2", "乙": "2",
+    "S": "5", "s": "5",
+    "G": "6", "b": "6",
+    "T": "7", "Y": "7", "フ": "7", "ワ": "7",
+    "B": "8", "&": "8",
+    "g": "9", "q": "9",
+    "ー": "-", "―": "-", "‐": "-", "–": "-", "—": "-", "−": "-", "﹣": "-",
+    "、": ".", "。": ".", "．": ".", "・": ".", "･": ".", "·": ".", "•": ".", "∙": ".", "⋅": ".", "‚": ".", "､": ".", "｡": ".",
+    "，": ",",
+    "￥": "¥",
+})
+
+_DOT_LIKE_CHARS = frozenset({
+    ".", "．", "、", "。", "・", "･", "·", "•", "∙", "⋅", "‚", "､", "｡", ",", "，"
+})
+
+
+def normalize_strict_numeric_text(text: str, allow_standalone_dot: bool = False) -> str:
+    """
+    範囲OCR「🔢 数字特化」用の数値・小数正規化フィルタ。
+    「、」「。」「・」等をすべて小数点「.」へ変換し、3桁区切り以外のカンマも小数点へ復元する。
+    """
+    if not text:
+        return ""
+    raw_strip = str(text).strip()
+    if allow_standalone_dot and raw_strip in _DOT_LIKE_CHARS:
+        return "." if raw_strip not in (",", "，") else ","
+
+    s = unicodedata.normalize("NFKC", raw_strip)
+    if not s:
+        return ""
+    if allow_standalone_dot and s in _DOT_LIKE_CHARS:
+        return "." if s not in (",", "，") else ","
+
+    s = s.translate(_STRICT_NUMERIC_CHAR_MAP)
+    s = re.sub(r"[^0-9,.\+\-¥\$%\(\)▲△/: ]+", "", s)
+    s = re.sub(r"\s*\.\s*", ".", s)
+    s = re.sub(r"\s*,\s*", ",", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"(?<=[0-9,.\+\-¥\$▲△/:])\s+(?=[0-9,.%\)])", "", s)
+
+    # 0,125 や 12,5 のように3桁区切りではないカンマを小数点「.」へ変換
+    s = re.sub(r"(?<!\d)0,(?=\d)", "0.", s)
+    s = re.sub(r"(?<=\d),(?=\d{1,2}(?!\d))", ".", s)
+    s = re.sub(r"(?<=\d),(?=\d{4,}(?!\d))", ".", s)
+    s = re.sub(r"\.{2,}", ".", s)
+
+    if not any(ch.isdigit() for ch in s):
+        if allow_standalone_dot and s in (".", ","):
+            return s
+        return ""
+    return s
+
+
+def _group_words_into_visual_rows(words: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """
+    ページ内のWord群を垂直方向の重なりに基づいて行ごとに束ね、各行内をX座標（左→右）順に整列する。
+    これにより、下端にある小さな「、」や「.」が別バンドや別行に飛ばされるのを完全に防ぐ。
+    """
+    valid = [w for w in words if str(w.get("t", "")).strip() and float(w.get("w", 0)) > 0]
+    if not valid:
+        return []
+
+    # まず高さが大きい通常の文字から先に行の基準を作り、小さな点（、や.）を後から吸着させる
+    tall_sorted = sorted(valid, key=lambda w: (-float(w["h"]), float(w["y"]), float(w["x"])))
+    rows: List[Dict[str, Any]] = []
+
+    for w in tall_sorted:
+        wy0 = float(w["y"])
+        wy1 = wy0 + float(w["h"])
+        wcy = (wy0 + wy1) * 0.5
+        wh = max(2.0, float(w["h"]))
+
+        best_row = None
+        for r in rows:
+            ry0, ry1 = r["y0"], r["y1"]
+            rcy = (ry0 + ry1) * 0.5
+            rh = max(4.0, ry1 - ry0)
+            overlap = min(ry1, wy1) - max(ry0, wy0)
+            # 垂直範囲が重なっているか、行の下端付近（小数点・読点の位置）にある場合は同じ行とみなす
+            if overlap >= -max(2.0, min(wh, rh) * 0.35) or abs(wcy - rcy) <= rh * 0.65:
+                best_row = r
+                break
+
+        if best_row is not None:
+            best_row["words"].append(w)
+            best_row["y0"] = min(best_row["y0"], wy0)
+            best_row["y1"] = max(best_row["y1"], wy1)
+        else:
+            rows.append({"y0": wy0, "y1": wy1, "words": [w]})
+
+    rows.sort(key=lambda r: (r["y0"] + r["y1"]) * 0.5)
+    result_rows: List[List[Dict[str, Any]]] = []
+    for r in rows:
+        rw = r["words"]
+        rw.sort(key=lambda w: float(w["x"]))
+        result_rows.append(rw)
+    return result_rows
+
+
 def _merge_ocr_line_words_into_chunks(
-    words: List[Dict[str, Any]], fix_numeric: bool = True
+    words: List[Dict[str, Any]], fix_numeric: bool = True, numeric_only: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Windows.Media.Ocr が1文字単位で分割した日本語のWord群を、
-    不要な空白を除去しつつ「店名」「日付」「金額」などの意味のある列チャンクへ結合する。
+    行内のWord群をX座標順に走査してチャンクへ結合する。
+    「、」「。」「.」などの小数点候補が数字の隣にある場合は確実に連結する。
     """
     if not words:
         return []
@@ -459,18 +499,13 @@ def _merge_ocr_line_words_into_chunks(
     if not valid_words:
         return []
 
-    avg_h = sum(float(w["h"]) for w in valid_words) / len(valid_words)
-    # NOTE: 結合前に (yバンド, x) で整列する。OCRの返却順は x 順とは限らず、
-    # 未整列のままでは "B(x=100) A(x=10)" が "BA" になってしまう。
-    # yバンド = y // avg_h (同一行の y ばらつきを吸収し、行またぎを分離する)。
-    band_h = max(avg_h, 1.0)
-    valid_words.sort(key=lambda w: (int(float(w["y"]) // band_h), float(w["x"])))
-    # 結合可能な水平ギャップの上限。数値の継続は文字高の約0.35倍まで、
-    # それ以外は約0.5倍までとし、離れた金額列 (例: 18px / 高さ24) の誤結合を防ぐ。
-    num_gap_cap = max(2.0, avg_h * 0.35)
+    # 同一行内のWordは必ずX座標（左から右）の順に並べる（Y座標によるバンド分割は小点を末尾に飛ばすため行わない）
+    valid_words.sort(key=lambda w: float(w["x"]))
+    avg_h = max(4.0, sum(float(w["h"]) for w in valid_words) / len(valid_words))
+    num_gap_cap = max(2.5, avg_h * 0.38)
     text_gap_cap = max(4.0, avg_h * 0.5)
 
-    chunks: List[Dict[str, Any]] = []
+    raw_groups: List[Dict[str, Any]] = []
     cur_texts: List[str] = []
     x0 = y0 = x1 = y1 = 0.0
 
@@ -488,19 +523,32 @@ def _merge_ocr_line_words_into_chunks(
 
         gap_x = wx0 - x1
         vert_overlap = min(y1, wy1) - max(y0, wy0)
-
         prev_str = cur_texts[-1]
+
+        is_dot_adjacent = (
+            t in _DOT_LIKE_CHARS
+            or prev_str in _DOT_LIKE_CHARS
+            or prev_str[-1] in _DOT_LIKE_CHARS
+            or t[0] in _DOT_LIKE_CHARS
+        )
         is_num_continuation = (
-            (prev_str[-1] in "0123456789,.$¥￥+-▲△(" and t[0] in "0123456789,.%円)")
+            is_dot_adjacent
+            or (prev_str[-1] in "0123456789,.$¥￥+-▲△(" and t[0] in "0123456789,.%円)")
             or (prev_str[-1].isdigit() and t[0].isdigit())
         )
-        effective_max_gap = num_gap_cap if is_num_continuation else text_gap_cap
 
-        # NOTE: 負の gap_x (重なったボックス) では結合しない。
-        # 垂直方向の重なりが無い (= 別行) 場合も結合しない。
-        if 0.0 <= gap_x <= effective_max_gap and vert_overlap >= 0.0:
+        if is_dot_adjacent:
+            effective_max_gap = max(8.0, avg_h * 0.95)
+        elif is_num_continuation:
+            effective_max_gap = num_gap_cap
+        else:
+            effective_max_gap = text_gap_cap
+
+        if -3.0 <= gap_x <= effective_max_gap and (vert_overlap >= -avg_h * 0.45 or is_dot_adjacent):
             if (
-                _is_ascii_word(prev_str)
+                not numeric_only
+                and not is_dot_adjacent
+                and _is_ascii_word(prev_str)
                 and _is_ascii_word(t)
                 and not is_num_continuation
                 and gap_x > avg_h * 0.18
@@ -513,18 +561,65 @@ def _merge_ocr_line_words_into_chunks(
             x1 = max(x1, wx1)
             y1 = max(y1, wy1)
         else:
-            joined = "".join(cur_texts)
-            if fix_numeric:
-                joined = _normalize_numeric_ocr_misreads(joined)
-            chunks.append({"text": joined, "bbox": (x0, y0, x1, y1)})
+            raw_groups.append({"text": "".join(cur_texts), "bbox": (x0, y0, x1, y1)})
             cur_texts = [t]
             x0, y0, x1, y1 = wx0, wy0, wx1, wy1
 
     if cur_texts:
-        joined = "".join(cur_texts)
-        if fix_numeric:
+        raw_groups.append({"text": "".join(cur_texts), "bbox": (x0, y0, x1, y1)})
+
+    # 単独の「、」「.」グループが数字グループの間に挟まっている場合は前後の数字と結合する
+    if len(raw_groups) >= 2:
+        stitched: List[Dict[str, Any]] = []
+        i = 0
+        while i < len(raw_groups):
+            cur_g = raw_groups[i]
+            cur_t = cur_g["text"].strip()
+            if (
+                cur_t in _DOT_LIKE_CHARS
+                and stitched
+                and any(c.isdigit() for c in stitched[-1]["text"])
+            ):
+                prev_g = stitched[-1]
+                dot_ch = "." if (numeric_only or cur_t not in (",", "，")) else ","
+                if i + 1 < len(raw_groups) and any(c.isdigit() for c in raw_groups[i + 1]["text"]):
+                    next_g = raw_groups[i + 1]
+                    stitched[-1] = {
+                        "text": prev_g["text"] + dot_ch + next_g["text"],
+                        "bbox": (
+                            min(prev_g["bbox"][0], cur_g["bbox"][0], next_g["bbox"][0]),
+                            min(prev_g["bbox"][1], cur_g["bbox"][1], next_g["bbox"][1]),
+                            max(prev_g["bbox"][2], cur_g["bbox"][2], next_g["bbox"][2]),
+                            max(prev_g["bbox"][3], cur_g["bbox"][3], next_g["bbox"][3]),
+                        ),
+                    }
+                    i += 2
+                    continue
+                else:
+                    stitched[-1] = {
+                        "text": prev_g["text"] + dot_ch,
+                        "bbox": (
+                            min(prev_g["bbox"][0], cur_g["bbox"][0]),
+                            min(prev_g["bbox"][1], cur_g["bbox"][1]),
+                            max(prev_g["bbox"][2], cur_g["bbox"][2]),
+                            max(prev_g["bbox"][3], cur_g["bbox"][3]),
+                        ),
+                    }
+                    i += 1
+                    continue
+            stitched.append(cur_g)
+            i += 1
+        raw_groups = stitched
+
+    chunks: List[Dict[str, Any]] = []
+    for grp in raw_groups:
+        joined = grp["text"]
+        if numeric_only:
+            joined = normalize_strict_numeric_text(joined, allow_standalone_dot=True)
+        elif fix_numeric:
             joined = _normalize_numeric_ocr_misreads(joined)
-        chunks.append({"text": joined, "bbox": (x0, y0, x1, y1)})
+        if joined:
+            chunks.append({"text": joined, "bbox": grp["bbox"]})
 
     return chunks
 
@@ -534,18 +629,11 @@ def run_windows_ocr_batch_on_qimages(
     fix_numeric: bool = True,
     cancel_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[int], None]] = None,
+    numeric_only: bool = False,
 ) -> List[List[Dict[str, Any]]]:
-    """
-    複数のQImageに対して1回のPowerShellプロセス起動でWindows標準OCRを一括実行し、
-    ページごとのチャンクリストの配列を返す。
-    """
     if sys.platform != "win32":
         raise RuntimeError("Windows標準OCRはWindows環境専用です。")
-
-    if not qimages:
-        return []
-
-    if cancel_event is not None and cancel_event.is_set():
+    if not qimages or (cancel_event is not None and cancel_event.is_set()):
         return []
 
     temp_dir = tempfile.mkdtemp(prefix="secure_pdf_ocr_")
@@ -567,32 +655,18 @@ def run_windows_ocr_batch_on_qimages(
 
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(img_paths, f, ensure_ascii=False)
-
         with open(ps1_path, "w", encoding="utf-8-sig") as f:
             f.write(_POWERSHELL_BATCH_OCR_SCRIPT)
 
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         cmd = [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            ps1_path,
-            "-ManifestJsonPath",
-            manifest_path,
-            "-OutJsonPath",
-            json_path,
+            "powershell.exe", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-File", ps1_path,
+            "-ManifestJsonPath", manifest_path, "-OutJsonPath", json_path,
         ]
         proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creation_flags,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", creationflags=creation_flags,
         )
         with _ACTIVE_OCR_PROCS_LOCK:
             _ACTIVE_OCR_PROCS.add(proc)
@@ -607,8 +681,7 @@ def run_windows_ocr_batch_on_qimages(
                 stdout_lines.append(s_line)
                 if s_line.startswith("@@OCR_PAGE_DONE@@:") and progress_callback is not None:
                     try:
-                        done_idx = int(s_line.split(":", 1)[1])
-                        progress_callback(done_idx)
+                        progress_callback(int(s_line.split(":", 1)[1]))
                     except Exception:
                         pass
 
@@ -639,7 +712,6 @@ def run_windows_ocr_batch_on_qimages(
 
         with open(json_path, "r", encoding="utf-8-sig") as f:
             raw_json = f.read().strip()
-
         if not raw_json:
             return [[] for _ in qimages]
 
@@ -656,14 +728,24 @@ def run_windows_ocr_batch_on_qimages(
             lines = page_obj.get("lines") or []
             if isinstance(lines, dict):
                 lines = [lines]
-            page_chunks: List[Dict[str, Any]] = []
+
+            # ページ内の全Wordを収集し、垂直重なりで行ごとに再グループ化してからX順結合する
+            all_page_words: List[Dict[str, Any]] = []
             for line_obj in lines:
                 if not isinstance(line_obj, dict):
                     continue
                 words = line_obj.get("words") or []
                 if isinstance(words, dict):
                     words = [words]
-                page_chunks.extend(_merge_ocr_line_words_into_chunks(words, fix_numeric=fix_numeric))
+                all_page_words.extend(words)
+
+            page_chunks: List[Dict[str, Any]] = []
+            for visual_row_words in _group_words_into_visual_rows(all_page_words):
+                page_chunks.extend(
+                    _merge_ocr_line_words_into_chunks(
+                        visual_row_words, fix_numeric=fix_numeric, numeric_only=numeric_only
+                    )
+                )
             results_per_page.append(page_chunks)
 
         while len(results_per_page) < len(qimages):
@@ -690,15 +772,12 @@ def run_windows_ocr_on_qimage(
     qimg: QImage,
     fix_numeric: bool = True,
     cancel_event: Optional[threading.Event] = None,
+    numeric_only: bool = False,
 ) -> List[Dict[str, Any]]:
-    """
-    単一のQImageに対してWindows標準OCRを実行し、
-    [{"text": str, "bbox": (x0, y0, x1, y1)}, ...] (画像ピクセル座標) のリストを返す。
-    """
     if qimg.isNull() or qimg.width() <= 0 or qimg.height() <= 0:
         return []
     batch_res = run_windows_ocr_batch_on_qimages(
-        [qimg], fix_numeric=fix_numeric, cancel_event=cancel_event
+        [qimg], fix_numeric=fix_numeric, cancel_event=cancel_event, numeric_only=numeric_only
     )
     return batch_res[0] if batch_res else []
 
@@ -711,12 +790,6 @@ def apply_cleaned_image_and_ocr_to_page(
     ocr_img_size: Tuple[int, int],
     apply_cleaned_visual: bool = True,
 ) -> None:
-    """
-    指定したPDFページに、元のページの回転角(rotation)とトリミング枠(CropBox)を維持したまま
-    1) 色抜き・点々除去済みの画像 (apply_cleaned_visual=True の場合)
-    2) Windows標準OCRで抽出した透明テキスト (ocr_chunks が指定された場合)
-    を反映する。
-    """
     from PyQt6.QtCore import QBuffer, QIODevice
 
     with FITZ_LOCK:
@@ -739,7 +812,6 @@ def apply_cleaned_image_and_ocr_to_page(
                     img_to_insert = cleaned_qimg.transformed(
                         tf, Qt.TransformationMode.SmoothTransformation
                     )
-
                 buf = QBuffer()
                 buf.open(QIODevice.OpenModeFlag.WriteOnly)
                 img_to_insert.save(buf, "PNG")
@@ -755,8 +827,31 @@ def apply_cleaned_image_and_ocr_to_page(
                     )
                 except TypeError:
                     page.apply_redactions()
-
                 page.insert_image(saved_crop, stream=png_bytes)
+
+            if ocr_chunks and not apply_cleaned_visual:
+                try:
+                    raw_d = page.get_text("rawdict")
+                    old_ocr_rects = []
+                    for blk in raw_d.get("blocks", []):
+                        if blk.get("type") != 0:
+                            continue
+                        for ln in blk.get("lines", []):
+                            for sp in ln.get("spans", []):
+                                if sp.get("color") in OCR_TEXT_MARKER_SRGB_INTS:
+                                    old_ocr_rects.append(fitz.Rect(sp.get("bbox", (0, 0, 0, 0))))
+                    if old_ocr_rects:
+                        for rr in old_ocr_rects:
+                            page.add_redact_annot(rr, fill=False)
+                        img_none = getattr(fitz, "PDF_REDACT_IMAGE_NONE", 0)
+                        gfx_none = getattr(fitz, "PDF_REDACT_LINE_ART_NONE", 0)
+                        txt_rem = getattr(fitz, "PDF_REDACT_TEXT_REMOVE", 0)
+                        try:
+                            page.apply_redactions(images=img_none, graphics=gfx_none, text=txt_rem)
+                        except TypeError:
+                            page.apply_redactions(images=img_none)
+                except Exception:
+                    logger.debug("Failed to clear previous OCR text layer", exc_info=True)
 
             if ocr_chunks:
                 img_w = max(1.0, float(ocr_img_size[0]))
@@ -790,14 +885,12 @@ def apply_cleaned_image_and_ocr_to_page(
 
                     box_w = max(2.0, vx1 - vx0)
                     box_h = max(4.0, vy1 - vy0)
-
                     est_fs = max(4.5, min(72.0, box_h * 0.88))
                     if fitz_font is not None:
                         try:
                             unit_w = fitz_font.text_length(text_str, fontsize=1.0)
                             if unit_w > 0.1:
-                                width_fs = box_w / unit_w
-                                est_fs = max(4.0, min(est_fs * 1.15, width_fs))
+                                est_fs = max(4.0, min(est_fs * 1.15, box_w / unit_w))
                         except Exception:
                             pass
 
@@ -809,14 +902,9 @@ def apply_cleaned_image_and_ocr_to_page(
                     if JAPANESE_FONT:
                         try:
                             page.insert_text(
-                                raw_baseline_pt,
-                                text_str,
-                                fontsize=est_fs,
-                                color=OCR_TEXT_MARKER_RGB,
-                                rotate=saved_rot,
-                                fontfile=JAPANESE_FONT,
-                                fontname=font_alias,
-                                render_mode=3,
+                                raw_baseline_pt, text_str, fontsize=est_fs,
+                                color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
+                                fontfile=JAPANESE_FONT, fontname=font_alias, render_mode=3,
                             )
                             inserted = True
                         except Exception:
@@ -824,13 +912,9 @@ def apply_cleaned_image_and_ocr_to_page(
                     if not inserted:
                         try:
                             page.insert_text(
-                                raw_baseline_pt,
-                                text_str,
-                                fontsize=est_fs,
-                                color=OCR_TEXT_MARKER_RGB,
-                                rotate=saved_rot,
-                                fontname="japan",
-                                render_mode=3,
+                                raw_baseline_pt, text_str, fontsize=est_fs,
+                                color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
+                                fontname="japan", render_mode=3,
                             )
                         except Exception:
                             logger.debug("Failed to insert OCR text chunk", exc_info=True)

@@ -15,7 +15,7 @@ import sys
 import traceback
 
 from PyQt6.QtCore import QEvent, Qt, QTimer
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtGui import QGuiApplication, QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 # 後方互換性のための主要シンボル再エクスポート
@@ -30,6 +30,7 @@ from core.commands import (  # noqa: F401
     RemoveAnnotationCommand,
     RemoveMultipleAnnotationsCommand,
     ReorderPagesCommand,
+    ReplacePageAnnotationsCommand,
     ReplacePagesContentCommand,
     RotatePageCommand,
     RotatePagesCommand,
@@ -46,6 +47,7 @@ from core.geometry import (  # noqa: F401
     extract_number_from_text,
     format_number_value,
     format_pt,
+    get_app_icon_path,
     get_crop_outside_rects,
     get_effective_cropbox,
     raw_pdf_to_view_point,
@@ -126,8 +128,20 @@ def main():
     except Exception:
         pass
 
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "KinakoPDF.SecureLocalPDFEditor.1"
+            )
+        except Exception:
+            pass
+
     app = PDFEditorApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    icon_path = get_app_icon_path(prefer_ico=(sys.platform == "win32"))
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
 
     window = MainWindow()
     window.show()

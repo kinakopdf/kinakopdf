@@ -93,6 +93,9 @@ class MainWindow(QMainWindow):
         MainWindow._open_windows.append(self)
 
         self.setWindowTitle(APP_NAME)
+        app_inst = QApplication.instance()
+        if app_inst is not None and not app_inst.windowIcon().isNull():
+            self.setWindowIcon(app_inst.windowIcon())
         self._initial_positioned = False
         self._active_reader = None
         self._active_reader_closed_handler = None
@@ -123,7 +126,7 @@ class MainWindow(QMainWindow):
         self._apply_initial_geometry()
 
         self.statusBar().showMessage(
-            "PDFを開いてください（Ctrl+Fで文字検索 / Ctrl+クリックで表内の数字を合計 / ホイールでページ送り）"
+            "PDFを開いてください（Ctrl+Fで文字検索 / Ctrl+クリック・ドラッグで表内の数字を合計 / ホイールでページ送り）"
         )
 
     def _get_titlebar_margin(self):
@@ -228,6 +231,9 @@ class MainWindow(QMainWindow):
         act_print = self.add_action(top_toolbar, "🖨 印刷", self.print_file)
         act_print.setShortcut(QKeySequence.StandardKey.Print)
         act_print.setToolTip("現在編集中のPDFを印刷します (Ctrl+P)")
+
+        act_excel = self.add_action(top_toolbar, "📊 Excel出力", self.export_to_excel)
+        act_excel.setToolTip("PDF内の表や文字データを追加ライブラリなしでExcel(.xlsx)に変換して保存します")
 
         self.add_action(top_toolbar, "🗔 新規ウィンドウ", self.spawn_new_window)
 
@@ -424,7 +430,7 @@ class MainWindow(QMainWindow):
         edit_toolbar.addSeparator()
 
         self.lbl_calc_sum = QLabel(" 🧮 合計: 0 (0個) ")
-        self.lbl_calc_sum.setToolTip("Ctrlキーを押しながらPDF内の数字をクリックすると足し算します")
+        self.lbl_calc_sum.setToolTip("Ctrlキーを押しながらPDF内の数字をクリック、またはドラッグで範囲選択すると合計します")
         self.lbl_calc_sum.setStyleSheet(
             "background-color: #fff8e6; color: #b25000; border: 1px solid #f0b464; "
             "border-radius: 4px; font-weight: bold; padding: 3px 8px; margin-left: 4px;"
@@ -494,11 +500,19 @@ class MainWindow(QMainWindow):
             msg = (
                 f"Windowsに「{APP_NAME}」をPDF対応アプリとして登録しました！\n\n"
                 f"【実行コマンド】\n{open_cmd}\n\n"
-                "続けて以下の手順でデフォルト設定を完了してください：\n"
-                "1. 任意のPDFファイルを右クリック →「プログラムから開く」→「別のプログラムを選択」をクリック\n"
-                f"2. 一覧から「{APP_NAME}」を選択し、「常に使う」をクリック"
+                "続けて Windows の「既定のアプリ」画面を開きますか？\n"
+                "（開いた画面の検索欄に「.pdf」と入力し、現在のアプリをクリックして\n"
+                f"「{APP_NAME}」→「既定値に設定」を選ぶと完了します）"
             )
-            QMessageBox.information(self, "既定のPDFソフトへの登録完了", msg)
+            reply = QMessageBox.question(
+                self,
+                "既定のPDFソフトへの登録完了",
+                msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes and sys.platform == "win32":
+                os.startfile("ms-settings:defaultapps")
         except Exception as e:
             QMessageBox.warning(self, "登録エラー", f"Windowsへの関連付け登録に失敗しました。\n{e}")
 
@@ -813,7 +827,8 @@ class MainWindow(QMainWindow):
             with FITZ_LOCK:
                 disk_doc = fitz.open(stream=raw_bytes, filetype="pdf")
                 needs_pass = disk_doc.needs_pass
-            self._last_opened_was_encrypted = bool(needs_pass)
+                is_enc_doc = PDFDocumentManager._is_encrypted_document(disk_doc)
+            self._last_opened_was_encrypted = bool(needs_pass or is_enc_doc)
             if needs_pass:
                 password, ok = QInputDialog.getText(
                     self,
@@ -883,7 +898,11 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = filepath
         self.viewer.current_pdf = doc
-        self.viewer.current_pdf_was_encrypted = bool(getattr(self, "_last_opened_was_encrypted", False))
+        self.viewer.current_pdf_was_encrypted = bool(
+            getattr(self, "_last_opened_was_encrypted", False)
+            or PDFDocumentManager._is_encrypted_document(doc)
+        )
+        self.viewer._encryption_strip_approved = False
         self.viewer.reset_history()
         self.page_manager.clear_thumbnail_cache()
 
@@ -900,8 +919,15 @@ class MainWindow(QMainWindow):
         A saved copy is always unencrypted, so when the opened PDF had
         password protection the user must confirm the strip first.
         """
-        if not getattr(self.viewer, "current_pdf_was_encrypted", False):
+        doc = self.viewer.current_pdf
+        is_enc = bool(
+            getattr(self.viewer, "current_pdf_was_encrypted", False)
+            or (doc is not None and PDFDocumentManager._is_encrypted_document(doc))
+        )
+        if not is_enc:
             return True, False
+        if getattr(self.viewer, "_encryption_strip_approved", False):
+            return True, True
         reply = QMessageBox.question(
             self,
             "パスワード保護解除の確認",
@@ -967,7 +993,9 @@ class MainWindow(QMainWindow):
         self.save_to_path(filepath, allow_strip_encryption=allow_strip)
 
     def print_file(self):
-        """現在開いているPDF（未保存の注釈・墨消し・テキスト編集を含む）をプリンターで印刷する"""
+        """
+        高精細（HD）リアルタイム印刷プレビューとプリンター設定を統合した印刷ダイアログを開く。
+        """
         doc = self.viewer.current_pdf
         if not doc or len(doc) == 0:
             QMessageBox.information(self, "印刷", "印刷するPDFが開かれていません。")
@@ -975,76 +1003,393 @@ class MainWindow(QMainWindow):
 
         self.viewer.cancel_active_interaction()
 
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        if self.viewer.current_file:
-            printer.setDocName(Path(self.viewer.current_file).name)
-        else:
-            printer.setDocName(APP_NAME)
+        import math
+        import re
+        import unicodedata
+        from PyQt6.QtGui import QBrush, QColor, QPageSize, QPen, QPixmap
+        from PyQt6.QtPrintSupport import QPrinterInfo
+        from PyQt6.QtWidgets import (
+            QCheckBox,
+            QFormLayout,
+            QGraphicsPixmapItem,
+            QGraphicsRectItem,
+            QGraphicsScene,
+            QGroupBox,
+            QHBoxLayout,
+            QSpinBox,
+            QVBoxLayout,
+            QWidget,
+        )
 
-        dialog = QPrintDialog(printer, self)
-        dialog.setWindowTitle("PDFの印刷")
-        dialog.setOption(QPrintDialog.PrintDialogOption.PrintToFile, True)
-        dialog.setOption(QPrintDialog.PrintDialogOption.PrintPageRange, True)
-        dialog.setOption(QPrintDialog.PrintDialogOption.PrintCurrentPage, True)
-        dialog.setOption(QPrintDialog.PrintDialogOption.PrintCollateCopies, True)
-        dialog.setMinMax(1, len(doc))
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        work_doc = None
-        painter = QPainter()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            print_range = printer.printRange()
-            if print_range == QPrinter.PrintRange.PageRange:
-                from_p = max(1, printer.fromPage())
-                to_p = min(len(doc), printer.toPage())
-                if to_p < from_p:
-                    from_p, to_p = to_p, from_p
-                target_orig_indices = list(range(from_p - 1, to_p))
-            elif print_range == QPrinter.PrintRange.CurrentPage:
-                target_orig_indices = [self.viewer.current_page_idx]
-            else:
-                target_orig_indices = list(range(len(doc)))
-
-            if not target_orig_indices:
-                return
-
+            all_indices = list(range(len(doc)))
             work_doc = PDFDocumentManager.extract_pages_as_doc(
                 doc,
-                target_orig_indices,
+                all_indices,
                 self.viewer.page_annotations,
             )
-            page_indices = list(range(len(work_doc)))
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "印刷準備エラー", f"印刷用データの準備に失敗しました。\n{e}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
 
-            first_page = work_doc[page_indices[0]]
-            if first_page.rect.width > first_page.rect.height:
-                printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+        total_doc_pages = len(work_doc)
+        if total_doc_pages == 0:
+            work_doc.close()
+            return
+
+        cur_idx = max(0, min(self.viewer.current_page_idx, total_doc_pages - 1))
+        doc_title = (
+            Path(self.viewer.current_file).name if self.viewer.current_file else APP_NAME
+        )
+
+        avail_printers = QPrinterInfo.availablePrinters()
+        default_pinfo = QPrinterInfo.defaultPrinter()
+        default_pname = default_pinfo.printerName() if not default_pinfo.isNull() else ""
+
+        class _HDPreviewCanvas(QGraphicsView):
+            """マウスホイール拡大縮小・ドラッグ移動に対応した高精細プレビューキャンバス"""
+
+            def __init__(self, scene, parent=None):
+                super().__init__(scene, parent)
+                self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                self.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+                self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+                self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+                self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+                self.setStyleSheet(
+                    "QGraphicsView { background-color: #525659; border: 1px solid #b0b5bd; border-radius: 6px; }"
+                )
+                self.auto_fit_mode = "page"
+
+            def wheelEvent(self, event):
+                angle = event.angleDelta().y()
+                cur_scale = self.transform().m11()
+                if angle > 0 and cur_scale < 16.0:
+                    self.auto_fit_mode = "manual"
+                    self.scale(1.22, 1.22)
+                elif angle < 0 and cur_scale > 0.08:
+                    self.auto_fit_mode = "manual"
+                    self.scale(1.0 / 1.22, 1.0 / 1.22)
+                event.accept()
+
+            def resizeEvent(self, event):
+                super().resizeEvent(event)
+                if self.auto_fit_mode == "page":
+                    self.fit_whole_scene()
+                elif self.auto_fit_mode == "width":
+                    self.fit_scene_width()
+
+            def fit_whole_scene(self):
+                sr = self.scene().sceneRect()
+                if not sr.isEmpty():
+                    self.auto_fit_mode = "page"
+                    self.fitInView(sr.adjusted(-24, -24, 24, 24), Qt.AspectRatioMode.KeepAspectRatio)
+
+            def fit_scene_width(self):
+                sr = self.scene().sceneRect()
+                if not sr.isEmpty() and self.viewport().width() > 20:
+                    self.auto_fit_mode = "width"
+                    self.resetTransform()
+                    target_w = max(100.0, float(self.viewport().width() - 40))
+                    s = target_w / max(1.0, sr.width())
+                    self.scale(s, s)
+                    self.centerOn(sr.center().x(), sr.top() + (self.viewport().height() / (2.0 * s)))
+
+        dlg = QDialog(self)
+        dlg.setWindowFlags(
+            dlg.windowFlags()
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        dlg.setWindowTitle(f"🖨 印刷（高精細プレビュー） - {doc_title}")
+        dlg.resize(1260, 860)
+        dlg.setStyleSheet(
+            "QDialog { background-color: #f4f5f7; color: #1a1a1a; }"
+            "QGroupBox { font-weight: bold; border: 1px solid #c8ccd4; border-radius: 6px; "
+            "  margin-top: 8px; padding-top: 10px; background-color: #ffffff; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
+            "QLabel { color: #1a1a1a; }"
+            "QComboBox, QSpinBox, QLineEdit { background-color: #ffffff; color: #111111; "
+            "  border: 1px solid #b0b5bd; border-radius: 4px; padding: 4px 6px; }"
+            "QPushButton { background-color: #ffffff; color: #1a1a1a; border: 1px solid #a0a5ad; "
+            "  border-radius: 5px; padding: 5px 10px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #e9eef5; }"
+        )
+
+        root_layout = QHBoxLayout(dlg)
+        root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(12)
+
+        # 左パネル：プリンター＆印刷設定
+        left_panel = QWidget(dlg)
+        left_panel.setFixedWidth(360)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+
+        grp_printer = QGroupBox("1. プリンターと部数", left_panel)
+        form_printer = QFormLayout(grp_printer)
+        form_printer.setSpacing(8)
+
+        combo_printer = QComboBox(grp_printer)
+        default_combo_idx = 0
+        for idx_p, p_info in enumerate(avail_printers):
+            p_name = p_info.printerName()
+            combo_printer.addItem(f"🖨 {p_name}", p_name)
+            if p_name == default_pname:
+                default_combo_idx = idx_p
+        combo_printer.addItem("📄 PDFファイルとして保存...", "__SAVE_AS_PDF__")
+        combo_printer.setCurrentIndex(default_combo_idx)
+        form_printer.addRow("プリンター:", combo_printer)
+
+        spin_copies = QSpinBox(grp_printer)
+        spin_copies.setRange(1, 999)
+        spin_copies.setValue(1)
+        spin_copies.setSuffix(" 部")
+        form_printer.addRow("部数:", spin_copies)
+
+        chk_collate = QCheckBox("部単位で印刷する", grp_printer)
+        chk_collate.setChecked(True)
+        form_printer.addRow("", chk_collate)
+        left_layout.addWidget(grp_printer)
+
+        grp_range = QGroupBox("2. 印刷するページ", left_panel)
+        form_range = QFormLayout(grp_range)
+        form_range.setSpacing(8)
+
+        combo_scope = QComboBox(grp_range)
+        combo_scope.addItem(f"すべてのページ (全 {total_doc_pages} ページ)", "all")
+        combo_scope.addItem(f"現在のページのみ ({cur_idx + 1} ページ目)", "current")
+        combo_scope.addItem("ページ番号を指定...", "custom")
+        form_range.addRow("範囲:", combo_scope)
+
+        edit_custom_pages = QLineEdit(grp_range)
+        edit_custom_pages.setPlaceholderText(f"例: 1-3, 5 （1〜{total_doc_pages}）")
+        edit_custom_pages.setText(f"1-{total_doc_pages}" if total_doc_pages > 1 else "1")
+        edit_custom_pages.setEnabled(False)
+        form_range.addRow("ページ指定:", edit_custom_pages)
+        left_layout.addWidget(grp_range)
+
+        grp_layout = QGroupBox("3. レイアウト・用紙設定", left_panel)
+        form_layout = QFormLayout(grp_layout)
+        form_layout.setSpacing(8)
+
+        combo_orient = QComboBox(grp_layout)
+        combo_orient.addItem("自動（ページの縦横に合わせる）", "auto")
+        combo_orient.addItem("縦向き (Portrait)", "portrait")
+        combo_orient.addItem("横向き (Landscape)", "landscape")
+        form_layout.addRow("用紙の向き:", combo_orient)
+
+        combo_paper = QComboBox(grp_layout)
+        paper_specs = [
+            ("A4 (210 × 297 mm)", QPageSize.PageSizeId.A4),
+            ("A3 (297 × 420 mm)", QPageSize.PageSizeId.A3),
+            ("B5 (182 × 257 mm)", QPageSize.PageSizeId.B5),
+            ("JIS B4 (257 × 364 mm)", getattr(QPageSize.PageSizeId, "JisB4", QPageSize.PageSizeId.B4)),
+            ("A5 (148 × 210 mm)", QPageSize.PageSizeId.A5),
+            ("レター (Letter)", QPageSize.PageSizeId.Letter),
+        ]
+        for label_str, ps_id in paper_specs:
+            combo_paper.addItem(label_str, ps_id)
+        form_layout.addRow("用紙サイズ:", combo_paper)
+
+        combo_color = QComboBox(grp_layout)
+        combo_color.addItem("カラー", "color")
+        combo_color.addItem("白黒（グレースケール）", "grayscale")
+        form_layout.addRow("カラーモード:", combo_color)
+
+        combo_duplex = QComboBox(grp_layout)
+        combo_duplex.addItem("片面印刷", QPrinter.DuplexMode.DuplexNone)
+        combo_duplex.addItem("両面印刷（長辺とじ）", QPrinter.DuplexMode.DuplexLongSide)
+        combo_duplex.addItem("両面印刷（短辺とじ）", QPrinter.DuplexMode.DuplexShortSide)
+        form_layout.addRow("両面印刷:", combo_duplex)
+
+        combo_scale = QComboBox(grp_layout)
+        combo_scale.addItem("用紙に合わせる（余白あり・推奨）", "fit_margin")
+        combo_scale.addItem("用紙いっぱいに合わせる（フチなし相当）", "fit_full")
+        combo_scale.addItem("実際のサイズ (100%等倍)", "actual")
+        form_layout.addRow("拡大・縮小:", combo_scale)
+
+        left_layout.addWidget(grp_layout)
+        left_layout.addStretch()
+
+        btn_sys_dlg = QPushButton("⚙ システム印刷ダイアログで開く...", left_panel)
+        btn_sys_dlg.setToolTip("メーカー固有の給紙トレイや詳細ドライバ設定を開く場合に使用します")
+        left_layout.addWidget(btn_sys_dlg)
+
+        action_row = QHBoxLayout()
+        btn_cancel = QPushButton("キャンセル", left_panel)
+        btn_print_now = QPushButton("🖨 印刷する", left_panel)
+        btn_print_now.setDefault(True)
+        btn_print_now.setStyleSheet(
+            "QPushButton { background-color: #1971c2; color: #ffffff; border: 1px solid #145a9e; "
+            "  padding: 9px 18px; font-size: 14px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1864ab; }"
+        )
+        action_row.addWidget(btn_cancel)
+        action_row.addWidget(btn_print_now, stretch=1)
+        left_layout.addLayout(action_row)
+
+        root_layout.addWidget(left_panel)
+
+        # 右パネル：高精細（HD）リアルタイムプレビュー
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+
+        preview_bar = QHBoxLayout()
+        preview_bar.setSpacing(6)
+
+        lbl_preview_title = QLabel("📄 高精細プレビュー", dlg)
+        lbl_preview_title.setStyleSheet("font-weight: bold; font-size: 13px;")
+        preview_bar.addWidget(lbl_preview_title)
+        preview_bar.addSpacing(6)
+
+        btn_prev = QPushButton("◀ 前へ", dlg)
+        lbl_page_status = QLabel(" 1 / 1 ", dlg)
+        lbl_page_status.setStyleSheet("font-weight: bold; padding: 0 4px;")
+        btn_next = QPushButton("次へ ▶", dlg)
+        preview_bar.addWidget(btn_prev)
+        preview_bar.addWidget(lbl_page_status)
+        preview_bar.addWidget(btn_next)
+
+        preview_bar.addSpacing(8)
+
+        btn_zoom_out = QPushButton("🔎－", dlg)
+        btn_zoom_in = QPushButton("🔍＋", dlg)
+        btn_fit_one = QPushButton("📄 1ページ表示", dlg)
+        btn_fit_width = QPushButton("↔ 幅に合わせる", dlg)
+        btn_all_pages = QPushButton("🔲 一覧表示", dlg)
+        preview_bar.addWidget(btn_zoom_out)
+        preview_bar.addWidget(btn_zoom_in)
+        preview_bar.addWidget(btn_fit_one)
+        preview_bar.addWidget(btn_fit_width)
+        preview_bar.addWidget(btn_all_pages)
+        preview_bar.addStretch()
+
+        right_layout.addLayout(preview_bar)
+
+        preview_scene = QGraphicsScene(dlg)
+        preview_view = _HDPreviewCanvas(preview_scene, dlg)
+        right_layout.addWidget(preview_view, stretch=1)
+
+        hint_lbl = QLabel(
+            "💡 ヒント: プレビュー上でマウスホイールを回すと高画質のまま拡大・縮小、ドラッグで移動できます。",
+            dlg,
+        )
+        hint_lbl.setStyleSheet("color: #555; font-size: 11px;")
+        right_layout.addWidget(hint_lbl)
+
+        root_layout.addLayout(right_layout, stretch=1)
+
+        state = {
+            "view_mode": "single",
+            "preview_pos": 0,
+            "target_indices": list(range(total_doc_pages)),
+        }
+
+        def _parse_custom_page_indices(spec_str: str):
+            norm = unicodedata.normalize("NFKC", spec_str or "").strip()
+            if not norm:
+                return list(range(total_doc_pages))
+            norm = re.sub(r"[ー―‐–—−〜~]", "-", norm)
+            norm = re.sub(r"[、，；;]", ",", norm)
+            indices = []
+            seen = set()
+            for part in norm.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if "-" in part:
+                    halves = part.split("-", 1)
+                    try:
+                        start_p = max(1, int(halves[0].strip()))
+                        end_p = min(total_doc_pages, int(halves[1].strip()))
+                        if end_p < start_p:
+                            start_p, end_p = end_p, start_p
+                        for p_num in range(start_p, end_p + 1):
+                            idx0 = p_num - 1
+                            if 0 <= idx0 < total_doc_pages and idx0 not in seen:
+                                seen.add(idx0)
+                                indices.append(idx0)
+                    except ValueError:
+                        continue
+                else:
+                    try:
+                        idx0 = int(part) - 1
+                        if 0 <= idx0 < total_doc_pages and idx0 not in seen:
+                            seen.add(idx0)
+                            indices.append(idx0)
+                    except ValueError:
+                        continue
+            return indices if indices else [cur_idx]
+
+        def _get_selected_page_indices():
+            scope = combo_scope.currentData()
+            if scope == "current":
+                return [cur_idx]
+            if scope == "custom":
+                return _parse_custom_page_indices(edit_custom_pages.text())
+            return list(range(total_doc_pages))
+
+        def _get_paper_size_points(page_idx: int):
+            """選択中の用紙サイズと向きにおける用紙の (幅pt, 高さpt) を返す"""
+            ps_id = combo_paper.currentData() or QPageSize.PageSizeId.A4
+            pt_size = QPageSize(ps_id).size(QPageSize.Unit.Point)
+            pw = max(100.0, float(pt_size.width()))
+            ph = max(100.0, float(pt_size.height()))
+            if pw > ph:
+                pw, ph = ph, pw
+
+            orient_mode = combo_orient.currentData()
+            if orient_mode == "landscape":
+                return ph, pw
+            if orient_mode == "portrait":
+                return pw, ph
+            page_r = work_doc[page_idx].rect
+            if page_r.width > page_r.height:
+                return ph, pw
+            return pw, ph
+
+        def _render_high_res_sheet_pixmap(page_idx: int, render_dpi: int = 260) -> QPixmap:
+            paper_w_pt, paper_h_pt = _get_paper_size_points(page_idx)
+            scale_pt_to_px = render_dpi / 72.0
+            sheet_w_px = max(200, int(round(paper_w_pt * scale_pt_to_px)))
+            sheet_h_px = max(200, int(round(paper_h_pt * scale_pt_to_px)))
+
+            page = work_doc[page_idx]
+            pr = page.rect
+            scale_mode = combo_scale.currentData()
+            margin_pt = 14.0 if scale_mode == "fit_margin" else 0.0
+
+            avail_w_pt = max(20.0, paper_w_pt - margin_pt * 2.0)
+            avail_h_pt = max(20.0, paper_h_pt - margin_pt * 2.0)
+
+            if scale_mode == "actual":
+                draw_w_pt = pr.width
+                draw_h_pt = pr.height
             else:
-                printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+                ratio = min(avail_w_pt / max(1.0, pr.width), avail_h_pt / max(1.0, pr.height))
+                draw_w_pt = pr.width * ratio
+                draw_h_pt = pr.height * ratio
 
-            if not painter.begin(printer):
-                raise RuntimeError("プリンターの描画開始に失敗しました。")
+            draw_w_px = max(1, int(round(draw_w_pt * scale_pt_to_px)))
+            draw_h_px = max(1, int(round(draw_h_pt * scale_pt_to_px)))
+            draw_x_px = int(round((sheet_w_px - draw_w_px) * 0.5))
+            draw_y_px = int(round((sheet_h_px - draw_h_px) * 0.5))
 
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            mat_sx = draw_w_px / max(1.0, pr.width)
+            mat_sy = draw_h_px / max(1.0, pr.height)
 
-            dpi = printer.resolution()
-            render_dpi = max(150, min(600, int(dpi) if dpi > 0 else 300))
-            scale = render_dpi / 72.0
-
-            for i, page_idx in enumerate(page_indices):
-                page = work_doc[page_idx]
-
-                if i > 0:
-                    if page.rect.width > page.rect.height:
-                        printer.setPageOrientation(QPageLayout.Orientation.Landscape)
-                    else:
-                        printer.setPageOrientation(QPageLayout.Orientation.Portrait)
-                    if not printer.newPage():
-                        raise RuntimeError(f"{page_idx + 1}ページ目の改ページ処理に失敗しました。")
-
+            with FITZ_LOCK:
                 pix = page.get_pixmap(
-                    matrix=fitz.Matrix(scale, scale),
+                    matrix=fitz.Matrix(mat_sx, mat_sy),
                     colorspace=fitz.csRGB,
                     alpha=False,
                 )
@@ -1056,44 +1401,538 @@ class MainWindow(QMainWindow):
                     QImage.Format.Format_RGB888,
                 ).copy()
 
-                target_rect = QRectF(painter.viewport())
-                if target_rect.width() <= 0 or target_rect.height() <= 0 or qimg.width() <= 0 or qimg.height() <= 0:
-                    continue
-
-                img_ratio = qimg.width() / qimg.height()
-                rect_ratio = target_rect.width() / target_rect.height()
-
-                if img_ratio > rect_ratio:
-                    draw_w = target_rect.width()
-                    draw_h = draw_w / img_ratio
-                    draw_x = target_rect.left()
-                    draw_y = target_rect.top() + (target_rect.height() - draw_h) / 2.0
-                else:
-                    draw_h = target_rect.height()
-                    draw_w = draw_h * img_ratio
-                    draw_x = target_rect.left() + (target_rect.width() - draw_w) / 2.0
-                    draw_y = target_rect.top()
-
-                painter.drawImage(
-                    QRectF(draw_x, draw_y, draw_w, draw_h),
-                    qimg,
-                    QRectF(0.0, 0.0, float(qimg.width()), float(qimg.height())),
+            if combo_color.currentData() == "grayscale":
+                qimg = (
+                    qimg.convertToFormat(QImage.Format.Format_Grayscale8)
+                    .convertToFormat(QImage.Format.Format_RGB32)
                 )
 
-            painter.end()
-            self.statusBar().showMessage(f"🖨 印刷ジョブを送信しました（全 {len(page_indices)} ページ）")
+            sheet_img = QImage(sheet_w_px, sheet_h_px, QImage.Format.Format_RGB32)
+            sheet_img.fill(QColor(255, 255, 255))
 
-        except Exception as e:
-            if painter.isActive():
-                painter.end()
-            QMessageBox.critical(
-                self,
-                "印刷エラー",
-                f"印刷中にエラーが発生しました。\n{e}",
+            p = QPainter(sheet_img)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            p.drawImage(
+                QRectF(draw_x_px, draw_y_px, draw_w_px, draw_h_px),
+                qimg,
+                QRectF(0.0, 0.0, float(qimg.width()), float(qimg.height())),
             )
+
+            if margin_pt > 0:
+                m_px = margin_pt * scale_pt_to_px
+                pen = QPen(QColor(210, 215, 222), max(1.0, scale_pt_to_px * 0.5), Qt.PenStyle.DashLine)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRect(QRectF(m_px, m_px, sheet_w_px - m_px * 2, sheet_h_px - m_px * 2))
+
+            p.end()
+            return QPixmap.fromImage(sheet_img)
+
+        def _rebuild_preview_scene(reset_fit: bool = False):
+            if getattr(work_doc, "is_closed", False):
+                return
+            indices = _get_selected_page_indices()
+            state["target_indices"] = indices
+            total_sel = len(indices)
+
+            preview_scene.clear()
+            if total_sel == 0:
+                lbl_page_status.setText(" 0 / 0 ")
+                btn_prev.setEnabled(False)
+                btn_next.setEnabled(False)
+                return
+
+            state["preview_pos"] = max(0, min(state["preview_pos"], total_sel - 1))
+            cur_pos = state["preview_pos"]
+
+            if state["view_mode"] == "single":
+                lbl_page_status.setText(
+                    f" {cur_pos + 1} / {total_sel} （元PDF: {indices[cur_pos] + 1}P） "
+                )
+                btn_prev.setEnabled(cur_pos > 0)
+                btn_next.setEnabled(cur_pos < total_sel - 1)
+
+                sheet_pix = _render_high_res_sheet_pixmap(indices[cur_pos], render_dpi=280)
+                pw = float(sheet_pix.width())
+                ph = float(sheet_pix.height())
+
+                shadow = QGraphicsRectItem(QRectF(14.0, 14.0, pw, ph))
+                shadow.setBrush(QBrush(QColor(0, 0, 0, 85)))
+                shadow.setPen(QPen(Qt.PenStyle.NoPen))
+                preview_scene.addItem(shadow)
+
+                pix_item = QGraphicsPixmapItem(sheet_pix)
+                pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+                preview_scene.addItem(pix_item)
+
+                border = QGraphicsRectItem(QRectF(0.0, 0.0, pw, ph))
+                border.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                border.setPen(QPen(QColor(120, 125, 130), 2.0))
+                preview_scene.addItem(border)
+
+                preview_scene.setSceneRect(QRectF(-20.0, -20.0, pw + 50.0, ph + 50.0))
+            else:
+                lbl_page_status.setText(f" 全 {total_sel} ページ一覧 ")
+                btn_prev.setEnabled(False)
+                btn_next.setEnabled(False)
+
+                max_grid_pages = min(total_sel, 24)
+                cols = max(1, min(4, int(math.ceil(math.sqrt(max_grid_pages)))))
+                grid_dpi = 130 if max_grid_pages <= 9 else 96
+
+                cur_x = 0.0
+                cur_y = 0.0
+                row_h = 0.0
+                gap = 48.0
+                max_right = 0.0
+
+                for i in range(max_grid_pages):
+                    p_idx = indices[i]
+                    sheet_pix = _render_high_res_sheet_pixmap(p_idx, render_dpi=grid_dpi)
+                    pw = float(sheet_pix.width())
+                    ph = float(sheet_pix.height())
+
+                    if i > 0 and (i % cols) == 0:
+                        cur_x = 0.0
+                        cur_y += row_h + gap
+                        row_h = 0.0
+
+                    shadow = QGraphicsRectItem(QRectF(cur_x + 8.0, cur_y + 8.0, pw, ph))
+                    shadow.setBrush(QBrush(QColor(0, 0, 0, 80)))
+                    shadow.setPen(QPen(Qt.PenStyle.NoPen))
+                    preview_scene.addItem(shadow)
+
+                    pix_item = QGraphicsPixmapItem(sheet_pix)
+                    pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+                    pix_item.setPos(cur_x, cur_y)
+                    preview_scene.addItem(pix_item)
+
+                    border = QGraphicsRectItem(QRectF(cur_x, cur_y, pw, ph))
+                    border.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                    border.setPen(QPen(QColor(110, 115, 120), 1.5))
+                    preview_scene.addItem(border)
+
+                    cur_x += pw + gap
+                    row_h = max(row_h, ph)
+                    max_right = max(max_right, cur_x - gap)
+
+                total_h = cur_y + row_h
+                preview_scene.setSceneRect(QRectF(-24.0, -24.0, max_right + 48.0, total_h + 48.0))
+
+            if reset_fit or preview_view.auto_fit_mode == "page":
+                preview_view.fit_whole_scene()
+            elif preview_view.auto_fit_mode == "width":
+                preview_view.fit_scene_width()
+
+        def _apply_settings_to_printer(target_printer: QPrinter, first_page_idx: int):
+            ps_id = combo_paper.currentData()
+            if ps_id is not None:
+                target_printer.setPageSize(QPageSize(ps_id))
+
+            orient_mode = combo_orient.currentData()
+            if orient_mode == "portrait":
+                target_printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+            elif orient_mode == "landscape":
+                target_printer.setPageOrientation(QPageLayout.Orientation.Landscape)
+            else:
+                p_ref = work_doc[first_page_idx]
+                target_printer.setPageOrientation(
+                    QPageLayout.Orientation.Landscape
+                    if p_ref.rect.width > p_ref.rect.height
+                    else QPageLayout.Orientation.Portrait
+                )
+
+            is_gray = combo_color.currentData() == "grayscale"
+            target_printer.setColorMode(
+                QPrinter.ColorMode.GrayScale if is_gray else QPrinter.ColorMode.Color
+            )
+            duplex_mode = combo_duplex.currentData()
+            if duplex_mode is not None:
+                target_printer.setDuplex(duplex_mode)
+
+        def _render_pages_to_printer(target_printer: QPrinter, page_indices=None) -> int:
+            indices = page_indices if page_indices is not None else _get_selected_page_indices()
+            if not indices:
+                return 0
+
+            orient_mode = combo_orient.currentData()
+            is_gray = combo_color.currentData() == "grayscale"
+            scale_mode = combo_scale.currentData()
+            target_printer.setFullPage(scale_mode == "fit_full")
+
+            _apply_settings_to_printer(target_printer, indices[0])
+
+            painter = QPainter()
+            if not painter.begin(target_printer):
+                raise RuntimeError("プリンターへの描画開始に失敗しました。")
+
+            try:
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                dpi = target_printer.resolution()
+                render_dpi = max(300, min(600, int(dpi) if dpi > 0 else 360))
+                scale = render_dpi / 72.0
+
+                for i, page_idx in enumerate(indices):
+                    page = work_doc[page_idx]
+                    if i > 0:
+                        if orient_mode == "auto":
+                            target_printer.setPageOrientation(
+                                QPageLayout.Orientation.Landscape
+                                if page.rect.width > page.rect.height
+                                else QPageLayout.Orientation.Portrait
+                            )
+                        if not target_printer.newPage():
+                            raise RuntimeError(f"{page_idx + 1}ページ目の改ページ処理に失敗しました。")
+
+                    with FITZ_LOCK:
+                        pix = page.get_pixmap(
+                            matrix=fitz.Matrix(scale, scale),
+                            colorspace=fitz.csRGB,
+                            alpha=False,
+                        )
+                        qimg = QImage(
+                            pix.samples,
+                            pix.width,
+                            pix.height,
+                            pix.stride,
+                            QImage.Format.Format_RGB888,
+                        ).copy()
+
+                    if is_gray:
+                        qimg = (
+                            qimg.convertToFormat(QImage.Format.Format_Grayscale8)
+                            .convertToFormat(QImage.Format.Format_RGB888)
+                        )
+
+                    target_rect = QRectF(painter.viewport())
+                    if (
+                        target_rect.width() <= 0
+                        or target_rect.height() <= 0
+                        or qimg.width() <= 0
+                        or qimg.height() <= 0
+                    ):
+                        continue
+
+                    if scale_mode == "actual" and dpi > 0:
+                        draw_w = (page.rect.width / 72.0) * dpi
+                        draw_h = (page.rect.height / 72.0) * dpi
+                        draw_x = target_rect.left() + (target_rect.width() - draw_w) / 2.0
+                        draw_y = target_rect.top() + (target_rect.height() - draw_h) / 2.0
+                    else:
+                        img_ratio = qimg.width() / qimg.height()
+                        rect_ratio = target_rect.width() / target_rect.height()
+                        if img_ratio > rect_ratio:
+                            draw_w = target_rect.width()
+                            draw_h = draw_w / img_ratio
+                            draw_x = target_rect.left()
+                            draw_y = target_rect.top() + (target_rect.height() - draw_h) / 2.0
+                        else:
+                            draw_h = target_rect.height()
+                            draw_w = draw_h * img_ratio
+                            draw_x = target_rect.left() + (target_rect.width() - draw_w) / 2.0
+                            draw_y = target_rect.top()
+
+                    painter.drawImage(
+                        QRectF(draw_x, draw_y, draw_w, draw_h),
+                        qimg,
+                        QRectF(0.0, 0.0, float(qimg.width()), float(qimg.height())),
+                    )
+
+                return len(indices)
+            finally:
+                if painter.isActive():
+                    painter.end()
+
+        def _on_setting_changed(*_args):
+            edit_custom_pages.setEnabled(combo_scope.currentData() == "custom")
+            _rebuild_preview_scene(reset_fit=False)
+
+        def _go_prev():
+            if state["preview_pos"] > 0:
+                state["view_mode"] = "single"
+                state["preview_pos"] -= 1
+                _rebuild_preview_scene(reset_fit=False)
+
+        def _go_next():
+            if state["preview_pos"] < len(state["target_indices"]) - 1:
+                state["view_mode"] = "single"
+                state["preview_pos"] += 1
+                _rebuild_preview_scene(reset_fit=False)
+
+        def _zoom_in():
+            if preview_view.transform().m11() < 16.0:
+                preview_view.auto_fit_mode = "manual"
+                preview_view.scale(1.25, 1.25)
+
+        def _zoom_out():
+            if preview_view.transform().m11() > 0.08:
+                preview_view.auto_fit_mode = "manual"
+                preview_view.scale(1.0 / 1.25, 1.0 / 1.25)
+
+        def _set_single_page_fit():
+            state["view_mode"] = "single"
+            preview_view.auto_fit_mode = "page"
+            _rebuild_preview_scene(reset_fit=True)
+
+        def _set_single_page_width():
+            state["view_mode"] = "single"
+            preview_view.auto_fit_mode = "width"
+            _rebuild_preview_scene(reset_fit=False)
+
+        def _set_grid_overview():
+            state["view_mode"] = "grid"
+            preview_view.auto_fit_mode = "page"
+            _rebuild_preview_scene(reset_fit=True)
+
+        def _execute_direct_print():
+            indices = _get_selected_page_indices()
+            if not indices:
+                QMessageBox.warning(dlg, "ページ範囲エラー", "印刷する有効なページが選択されていません。")
+                return
+
+            sel_printer = combo_printer.currentData()
+            job_printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            job_printer.setDocName(doc_title)
+            job_printer.setCopyCount(spin_copies.value())
+            job_printer.setCollateCopies(chk_collate.isChecked())
+
+            if sel_printer == "__SAVE_AS_PDF__":
+                out_path, _ = QFileDialog.getSaveFileName(
+                    dlg, "印刷イメージをPDFとして保存", "", "PDF Files (*.pdf)"
+                )
+                if not out_path:
+                    return
+                if not out_path.lower().endswith(".pdf"):
+                    out_path += ".pdf"
+                job_printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+                job_printer.setOutputFileName(out_path)
+            else:
+                if not sel_printer:
+                    QMessageBox.warning(dlg, "プリンター未選択", "出力先のプリンターが見つかりません。")
+                    return
+                job_printer.setOutputFormat(QPrinter.OutputFormat.NativeFormat)
+                job_printer.setPrinterName(sel_printer)
+
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                count = _render_pages_to_printer(job_printer, indices)
+            except Exception as e:
+                QApplication.restoreOverrideCursor()
+                QMessageBox.critical(dlg, "印刷エラー", f"印刷中にエラーが発生しました。\n{e}")
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+
+            self.statusBar().showMessage(
+                f"🖨 印刷ジョブを送信しました（全 {count} ページ / {spin_copies.value()} 部）"
+            )
+            dlg.accept()
+
+        def _open_system_print_dialog():
+            sys_printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            sys_printer.setDocName(doc_title)
+            sel_printer = combo_printer.currentData()
+            if sel_printer and sel_printer != "__SAVE_AS_PDF__":
+                sys_printer.setPrinterName(sel_printer)
+            sys_printer.setCopyCount(spin_copies.value())
+            sys_printer.setCollateCopies(chk_collate.isChecked())
+
+            sys_dlg = QPrintDialog(sys_printer, dlg)
+            sys_dlg.setWindowTitle("システム印刷ダイアログ")
+            sys_dlg.setOption(QPrintDialog.PrintDialogOption.PrintToFile, True)
+            sys_dlg.setOption(QPrintDialog.PrintDialogOption.PrintPageRange, True)
+            sys_dlg.setOption(QPrintDialog.PrintDialogOption.PrintCurrentPage, True)
+            sys_dlg.setOption(QPrintDialog.PrintDialogOption.PrintCollateCopies, True)
+            sys_dlg.setMinMax(1, total_doc_pages)
+            if sys_dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            p_range = sys_printer.printRange()
+            if p_range == QPrinter.PrintRange.PageRange:
+                from_p = max(1, sys_printer.fromPage())
+                to_p = min(total_doc_pages, sys_printer.toPage())
+                if to_p < from_p:
+                    from_p, to_p = to_p, from_p
+                indices = list(range(from_p - 1, to_p))
+            elif p_range == QPrinter.PrintRange.CurrentPage:
+                indices = [cur_idx]
+            else:
+                indices = _get_selected_page_indices()
+
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                count = _render_pages_to_printer(sys_printer, indices)
+            except Exception as e:
+                QApplication.restoreOverrideCursor()
+                QMessageBox.critical(dlg, "印刷エラー", f"印刷中にエラーが発生しました。\n{e}")
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+
+            self.statusBar().showMessage(f"🖨 印刷ジョブを送信しました（全 {count} ページ）")
+            dlg.accept()
+
+        combo_scope.currentIndexChanged.connect(_on_setting_changed)
+        edit_custom_pages.textChanged.connect(_on_setting_changed)
+        combo_orient.currentIndexChanged.connect(_on_setting_changed)
+        combo_paper.currentIndexChanged.connect(_on_setting_changed)
+        combo_color.currentIndexChanged.connect(_on_setting_changed)
+        combo_scale.currentIndexChanged.connect(_on_setting_changed)
+
+        btn_prev.clicked.connect(_go_prev)
+        btn_next.clicked.connect(_go_next)
+        btn_zoom_in.clicked.connect(_zoom_in)
+        btn_zoom_out.clicked.connect(_zoom_out)
+        btn_fit_one.clicked.connect(_set_single_page_fit)
+        btn_fit_width.clicked.connect(_set_single_page_width)
+        btn_all_pages.clicked.connect(_set_grid_overview)
+
+        btn_sys_dlg.clicked.connect(_open_system_print_dialog)
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_print_now.clicked.connect(_execute_direct_print)
+
+        try:
+            QTimer.singleShot(10, lambda: _rebuild_preview_scene(reset_fit=True))
+            dlg.exec()
         finally:
-            if work_doc is not None:
-                work_doc.close()
+            work_doc.close()
+
+    def export_to_excel(self):
+        """PDF内の表やテキストを追加ライブラリなしで Excel (.xlsx) に変換して保存する"""
+        doc = self.viewer.current_pdf
+        if not doc or len(doc) == 0:
+            QMessageBox.information(self, "Excel出力", "Excelに変換するPDFが開かれていません。先にPDFを開いてください。")
+            return
+
+        self.viewer.cancel_active_interaction()
+
+        from PyQt6.QtWidgets import QCheckBox, QFormLayout, QVBoxLayout
+        from core.excel_exporter import export_pdf_document_to_xlsx
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("📊 Excel (.xlsx) 変換・出力設定")
+        dlg.setMinimumWidth(420)
+        dlg.setStyleSheet(
+            "QDialog { background-color: #f8f9fa; color: #1a1a1a; }"
+            "QLabel, QCheckBox { color: #1a1a1a; background-color: transparent; }"
+            "QComboBox { background-color: #ffffff; color: #111111; border: 1px solid #b0b5bd; border-radius: 4px; padding: 4px; }"
+            "QPushButton { background-color: #ffffff; color: #1a1a1a; border: 1px solid #a0a5ad; border-radius: 4px; padding: 6px 14px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #eef2f7; }"
+        )
+
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        combo_scope = QComboBox(dlg)
+        combo_scope.addItem(f"現在のページのみ ({self.viewer.current_page_idx + 1}ページ目)", "current")
+        if len(doc) > 1:
+            combo_scope.addItem(f"すべてのページ一括 (全 {len(doc)} ページ)", "all")
+        form.addRow("対象ページ:", combo_scope)
+
+        combo_mode = QComboBox(dlg)
+        combo_mode.addItem("自動（表の罫線を優先＋周辺の文字も出力）", "auto")
+        combo_mode.addItem("表（罫線テーブル）のみ抽出", "tables_only")
+        combo_mode.addItem("ページ全体の文字配置を行・列化", "layout")
+        form.addRow("抽出方法:", combo_mode)
+
+        combo_sheet = QComboBox(dlg)
+        combo_sheet.addItem("ページごとにシートを分ける（推奨）", True)
+        combo_sheet.addItem("1つのシートに縦につなげて出力", False)
+        if len(doc) <= 1:
+            combo_sheet.setEnabled(False)
+        form.addRow("シート構成:", combo_sheet)
+
+        chk_num = QCheckBox("金額・数字をExcelの数値セルとして出力（SUM計算可能）", dlg)
+        chk_num.setChecked(True)
+        form.addRow("", chk_num)
+
+        layout.addLayout(form)
+
+        info_lbl = QLabel(
+            "※スキャンした画像PDFの場合は、先に「🎯 範囲OCR」または「🧼 スキャン色抜き・OCR」で文字認識するとExcelへ出力できます。"
+        )
+        info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("color: #555; font-size: 11px; margin-top: 6px;")
+        layout.addWidget(info_lbl)
+
+        from PyQt6.QtWidgets import QHBoxLayout
+        btn_row = QHBoxLayout()
+        btn_cancel = QPushButton("キャンセル", dlg)
+        btn_cancel.clicked.connect(dlg.reject)
+        btn_ok = QPushButton("📊 保存先を選んでExcel出力", dlg)
+        btn_ok.setDefault(True)
+        btn_ok.setStyleSheet(
+            "QPushButton { background-color: #1f6f43; color: #ffffff; border: 1px solid #165231; }"
+            "QPushButton:hover { background-color: #288a54; }"
+        )
+        btn_ok.clicked.connect(dlg.accept)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_ok)
+        layout.addLayout(btn_row)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        default_stem = Path(self.viewer.current_file).stem if self.viewer.current_file else "kinako_export"
+        default_dir = str(Path(self.viewer.current_file).parent) if self.viewer.current_file else ""
+        default_out = str(Path(default_dir) / f"{default_stem}.xlsx") if default_dir else f"{default_stem}.xlsx"
+
+        out_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Excelファイル (.xlsx) として保存",
+            default_out,
+            "Excel Workbook (*.xlsx)",
+        )
+        if not out_path:
+            return
+        if not out_path.lower().endswith(".xlsx"):
+            out_path += ".xlsx"
+
+        indices = list(range(len(doc))) if combo_scope.currentData() == "all" else [self.viewer.current_page_idx]
+        extract_mode = combo_mode.currentData() or "auto"
+        split_sheets = bool(combo_sheet.currentData())
+        convert_numbers = chk_num.isChecked()
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            sheet_cnt, row_cnt = export_pdf_document_to_xlsx(
+                doc=doc,
+                page_indices=indices,
+                output_path=out_path,
+                page_annotations=self.viewer.page_annotations,
+                mode=extract_mode,
+                split_sheets=split_sheets,
+                convert_numbers=convert_numbers,
+            )
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Excel出力エラー", f"Excelファイルの作成に失敗しました。\n{e}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self.statusBar().showMessage(f"📊 Excel出力完了: {out_path} ({sheet_cnt}シート / {row_cnt}行)")
+        reply = QMessageBox.question(
+            self,
+            "Excel出力完了",
+            f"Excelファイルを保存しました！\n\n"
+            f"保存先: {out_path}\n"
+            f"出力内容: {sheet_cnt} シート / 合計 {row_cnt} 行\n\n"
+            "今すぐこのExcelファイルを開きますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                if sys.platform == "win32":
+                    os.startfile(out_path)
+                else:
+                    import subprocess as _sp
+                    _sp.Popen(["open" if sys.platform == "darwin" else "xdg-open", out_path])
+            except Exception as open_err:
+                QMessageBox.warning(self, "起動エラー", f"Excelファイルを開けませんでした。\n{open_err}")
 
     def save_to_path(self, filepath, allow_strip_encryption=False):
         doc = self.viewer.current_pdf
@@ -1126,6 +1965,8 @@ class MainWindow(QMainWindow):
 
             self.viewer.current_file = filepath
             self.viewer.current_pdf_was_encrypted = False
+            if allow_strip_encryption:
+                self.viewer._encryption_strip_approved = True
             self.viewer.history.mark_saved()
             self._add_recent_file(filepath)
 
@@ -1284,6 +2125,7 @@ class MainWindow(QMainWindow):
                 elif has_edited:
                     self.viewer.render_page(fit_view=False, rebuild_base=True)
             if has_edited:
+                self.viewer.notify_pages_updated(None)
                 self.update_window_title()
         self._active_reader = None
         self._active_reader_closed_handler = None

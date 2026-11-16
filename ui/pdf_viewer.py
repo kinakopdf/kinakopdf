@@ -76,6 +76,7 @@ from core.geometry import (
     DEFAULT_COLOR,
     DRAW_WIDTH,
     FITZ_LOCK,
+    RGBTuple,
     JAPANESE_FONT,
     MAX_DRAW_WIDTH,
     MAX_DYNAMIC_PDF_SCALE,
@@ -236,6 +237,9 @@ class PDFViewer(QGraphicsView):
         self.hover_highlight_item = None
         self.calc_highlight_group = None
         self.calc_selected_items = []
+        self._calc_dragging = False
+        self._calc_drag_start_pos = QPointF()
+        self._calc_drag_rect_item = None
         self.search_highlight_group = None
         self.search_results = []
         self.current_search_idx = -1
@@ -311,6 +315,12 @@ class PDFViewer(QGraphicsView):
             self.drag_rect_item = None
         self.drag_start_pos = None
         self.drawing = False
+
+        if self._calc_drag_rect_item is not None:
+            if self._calc_drag_rect_item.scene() is self.scene:
+                self.scene.removeItem(self._calc_drag_rect_item)
+            self._calc_drag_rect_item = None
+        self._calc_dragging = False
 
         if self._dragging_text_item is not None and self._text_drag_moved:
             self._dragging_text_item.setPos(self._text_drag_start_item_pos)
@@ -445,7 +455,7 @@ class PDFViewer(QGraphicsView):
                 center = fitz.Point((raw_r.x0 + raw_r.x1) / 2.0, (raw_r.y0 + raw_r.y1) / 2.0)
                 if not effective_crop.contains(center):
                     continue
-                if any(er.contains(center) for er in erased_rects):
+                if is_rect_substantially_erased(raw_r, erased_rects):
                     continue
                 clipped_r = raw_r & effective_crop
                 if not clipped_r.is_empty:
@@ -495,7 +505,7 @@ class PDFViewer(QGraphicsView):
 
                         raw_r = view_rect_to_raw_rect(page, vr)
                         center = fitz.Point((raw_r.x0 + raw_r.x1) / 2.0, (raw_r.y0 + raw_r.y1) / 2.0)
-                        if effective_crop.contains(center) and not any(er.contains(center) for er in erased_rects):
+                        if effective_crop.contains(center) and not is_rect_substantially_erased(raw_r, erased_rects):
                             clipped_r = raw_r & effective_crop
                             if not clipped_r.is_empty and not any(
                                 existing.intersects(clipped_r) for existing in page_matches_raw
@@ -519,6 +529,11 @@ class PDFViewer(QGraphicsView):
                     if not clipped_bbox.is_empty:
                         page_matches_raw.append(clipped_bbox)
 
+            def _view_sort_key(r_raw):
+                vr_sort = raw_rect_to_view_rect(page, r_raw)
+                return (round(vr_sort.y0 / 4.0), round(vr_sort.x0, 1))
+
+            page_matches_raw.sort(key=_view_sort_key)
             for r in page_matches_raw:
                 results.append({
                     "page_idx": p_idx,
@@ -681,13 +696,38 @@ class PDFViewer(QGraphicsView):
 
             if kind == "ann":
                 ann_idx = item_id[2]
-                if not (0 <= ann_idx < len(ann_list)):
+                ann = ann_list[ann_idx] if (0 <= ann_idx < len(ann_list)) else None
+                if (
+                    ann is None
+                    or ann.get("type") != "text"
+                    or (
+                        entry.get("ann_pos") is not None
+                        and tuple(ann.get("pos", ())) != tuple(entry["ann_pos"])
+                        and ann.get("text", "") != entry.get("raw_text", "")
+                    )
+                ):
+                    relocated_idx = None
+                    target_pos = entry.get("ann_pos")
+                    target_txt = entry.get("raw_text", "")
+                    for cand_idx, cand in enumerate(ann_list):
+                        if cand.get("type") != "text":
+                            continue
+                        if target_pos is not None and tuple(cand.get("pos", ())) == tuple(target_pos) and cand.get("text", "") == target_txt:
+                            relocated_idx = cand_idx
+                            break
+                    if relocated_idx is None and target_pos is not None:
+                        for cand_idx, cand in enumerate(ann_list):
+                            if cand.get("type") == "text" and tuple(cand.get("pos", ())) == tuple(target_pos):
+                                relocated_idx = cand_idx
+                                break
+                    if relocated_idx is None:
+                        changed = True
+                        continue
+                    ann_idx = relocated_idx
+                    ann = ann_list[ann_idx]
+                    entry = dict(entry)
+                    entry["id"] = ("ann", p_idx, ann_idx)
                     changed = True
-                    continue
-                ann = ann_list[ann_idx]
-                if ann.get("type") != "text":
-                    changed = True
-                    continue
                 later_erases = get_later_user_erase_rects(ann_list, ann_idx, ann)
                 bbox = estimate_text_bbox_in_pdf(ann)
                 if not effective_crop.intersects(bbox):
@@ -702,15 +742,18 @@ class PDFViewer(QGraphicsView):
                     changed = True
                     continue
                 new_rect = (bbox.x0, bbox.y0, bbox.x1, bbox.y1)
+                new_pos = tuple(ann.get("pos", ()))
                 if (
                     entry["value"] != val
                     or entry["raw_text"] != raw_text
                     or entry["raw_rect"] != new_rect
+                    or entry.get("ann_pos") != new_pos
                 ):
                     entry = dict(entry)
                     entry["value"] = val
                     entry["raw_text"] = raw_text
                     entry["raw_rect"] = new_rect
+                    entry["ann_pos"] = new_pos
                     changed = True
                 updated_items.append(entry)
 
@@ -799,6 +842,7 @@ class PDFViewer(QGraphicsView):
                     "value": val,
                     "raw_text": raw_text,
                     "raw_rect": (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+                    "ann_pos": tuple(ann.get("pos", ())),
                 })
                 self._update_calc_highlight_items()
                 self.calcSelectionChanged.emit()
@@ -835,6 +879,120 @@ class PDFViewer(QGraphicsView):
             return True
 
         return False
+
+    @staticmethod
+    def _rect_matches_calc_selection(item_rect: fitz.Rect, sel_rect: fitz.Rect) -> bool:
+        ir = fitz.Rect(item_rect)
+        ir.normalize()
+        if not ir.intersects(sel_rect):
+            return False
+        center = fitz.Point((ir.x0 + ir.x1) * 0.5, (ir.y0 + ir.y1) * 0.5)
+        if sel_rect.contains(center):
+            return True
+        inter = ir & sel_rect
+        item_area = max(1e-4, ir.width * ir.height)
+        return (inter.width * inter.height) >= item_area * 0.35
+
+    def _select_calc_items_in_scene_rect(self, scene_rect: QRectF) -> int:
+        if not self.current_pdf or scene_rect is None or scene_rect.isEmpty():
+            return 0
+
+        p0 = self.scene_to_pdf(scene_rect.topLeft())
+        p1 = self.scene_to_pdf(scene_rect.bottomRight())
+        target_raw_rect = fitz.Rect(p0.x, p0.y, p1.x, p1.y)
+        target_raw_rect.normalize()
+        if target_raw_rect.is_empty:
+            return 0
+
+        with FITZ_LOCK:
+            page = self.current_pdf[self.current_page_idx]
+            effective_crop = get_effective_cropbox(page)
+
+        existing_ids = {entry["id"] for entry in self.calc_selected_items}
+        candidates = []
+
+        ann_list = self.current_annotations
+        for ann_idx, ann in enumerate(ann_list):
+            if ann.get("type") != "text":
+                continue
+            later_erases = get_later_user_erase_rects(ann_list, ann_idx, ann)
+            bbox = estimate_text_bbox_in_pdf(ann)
+            if not effective_crop.intersects(bbox):
+                continue
+            if is_rect_substantially_erased(bbox, later_erases):
+                continue
+            if not self._rect_matches_calc_selection(bbox, target_raw_rect):
+                continue
+            raw_text = ann.get("text", "")
+            val = extract_number_from_text(raw_text)
+            if val is None:
+                continue
+            item_id = ("ann", self.current_page_idx, ann_idx)
+            if item_id in existing_ids:
+                continue
+            existing_ids.add(item_id)
+            sx, sy = self.pdf_to_scene(fitz.Point(bbox.x0, bbox.y0))
+            candidates.append(
+                (
+                    round(sy / 4.0),
+                    sx,
+                    {
+                        "id": item_id,
+                        "page_idx": self.current_page_idx,
+                        "value": val,
+                        "raw_text": raw_text,
+                        "raw_rect": (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+                        "ann_pos": tuple(ann.get("pos", ())),
+                    },
+                )
+            )
+
+        erased_rects = collect_all_erased_raw_rects(ann_list)
+        for tok in self._get_page_pdf_text_tokens():
+            r = fitz.Rect(tok["raw_rect"])
+            r.normalize()
+            center = fitz.Point((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5)
+            if not effective_crop.contains(center):
+                continue
+            if is_rect_substantially_erased(r, erased_rects):
+                continue
+            if not self._rect_matches_calc_selection(r, target_raw_rect):
+                continue
+            raw_text = tok.get("text", "")
+            val = extract_number_from_text(raw_text)
+            if val is None:
+                continue
+            rect_key = tuple(round(v, 2) for v in tok["raw_rect"])
+            item_id = ("pdf", self.current_page_idx, rect_key, raw_text)
+            if item_id in existing_ids:
+                continue
+            existing_ids.add(item_id)
+            sx, sy = self.pdf_to_scene(fitz.Point(r.x0, r.y0))
+            candidates.append(
+                (
+                    round(sy / 4.0),
+                    sx,
+                    {
+                        "id": item_id,
+                        "page_idx": self.current_page_idx,
+                        "value": val,
+                        "raw_text": raw_text,
+                        "raw_rect": tok["raw_rect"],
+                    },
+                )
+            )
+
+        if not candidates:
+            self._show_status_message("選択範囲内に新しく集計できる数字が見つかりませんでした")
+            return 0
+
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        for _, _, entry in candidates:
+            self.calc_selected_items.append(entry)
+
+        self._update_calc_highlight_items()
+        self.calcSelectionChanged.emit()
+        return len(candidates)
 
     def load_pdf(self, doc, page_idx=0, fit_view=True):
         self.cancel_active_interaction()
@@ -1869,6 +2027,8 @@ class PDFViewer(QGraphicsView):
         self.current_path_item = None
         self.current_stroke = []
         self.drag_rect_item = None
+        self._calc_dragging = False
+        self._calc_drag_rect_item = None
         self.text_guide_group = None
         self.hover_highlight_item = None
         self.calc_highlight_group = None
@@ -2406,7 +2566,7 @@ class PDFViewer(QGraphicsView):
             self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
 
     def wheelEvent(self, event):
-        if self.drawing or self._dragging_text_ann_idx is not None:
+        if self.drawing or self._calc_dragging or self._dragging_text_ann_idx is not None:
             event.accept()
             return
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -2499,7 +2659,20 @@ class PDFViewer(QGraphicsView):
             event.button() == Qt.MouseButton.LeftButton
             and (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         ):
-            self._toggle_calc_item_at_scene_pos(raw_pos)
+            if self.drawing or self._dragging_text_ann_idx is not None:
+                event.accept()
+                return
+            pos = self._clamp_to_scene(raw_pos)
+            self._clear_interactive_guides()
+            self._calc_dragging = True
+            self._calc_drag_start_pos = pos
+            self._calc_drag_rect_item = QGraphicsRectItem(QRectF(pos, pos))
+            self._calc_drag_rect_item.setPen(
+                QPen(QColor(230, 105, 0, 240), 2.0, Qt.PenStyle.DashLine)
+            )
+            self._calc_drag_rect_item.setBrush(QBrush(QColor(255, 165, 0, 45)))
+            self._calc_drag_rect_item.setZValue(1050)
+            self.scene.addItem(self._calc_drag_rect_item)
             event.accept()
             return
 
@@ -2736,6 +2909,13 @@ class PDFViewer(QGraphicsView):
         raw_pos = self.mapToScene(event.position().toPoint())
         self._last_hover_scene_pos = raw_pos
 
+        if self._calc_dragging and self._calc_drag_rect_item is not None:
+            clamped_pos = self._clamp_to_scene(raw_pos)
+            rect = QRectF(self._calc_drag_start_pos, clamped_pos).normalized()
+            self._calc_drag_rect_item.setRect(rect)
+            event.accept()
+            return
+
         if (
             self._dragging_text_ann_idx is not None
             and self._dragging_text_item is not None
@@ -2783,6 +2963,23 @@ class PDFViewer(QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._calc_dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._calc_dragging = False
+            start_pos = self._calc_drag_start_pos
+            rect = QRectF()
+            if self._calc_drag_rect_item is not None:
+                rect = self._calc_drag_rect_item.rect()
+                if self._calc_drag_rect_item.scene() is self.scene:
+                    self.scene.removeItem(self._calc_drag_rect_item)
+                self._calc_drag_rect_item = None
+
+            if rect.width() < 5.0 and rect.height() < 5.0:
+                self._toggle_calc_item_at_scene_pos(start_pos)
+            else:
+                self._select_calc_items_in_scene_rect(rect)
+            event.accept()
+            return
+
         if self._panning and (
             event.button() == self._pan_button
             or self._pan_button is None

@@ -103,6 +103,7 @@ class AddAnnotationCommand(BaseCommand):
             logger.debug("AddAnnotationCommand.undo: annotation not found; no-op")
         else:
             ann_list.pop(found_idx)
+            adjust_updated_after_on_remove(ann_list, found_idx)
         page_changed = viewer.current_page_idx != self.page_idx
         rebuild = page_changed or annotation_affects_base_pdf_text(self.annotation)
         _set_current_page_safe(viewer, self.page_idx)
@@ -139,6 +140,7 @@ class RemoveAnnotationCommand(BaseCommand):
             after = copy.deepcopy(self._before_annotations)
             if 0 <= ann_idx < len(after):
                 del after[ann_idx]
+                adjust_updated_after_on_remove(after, ann_idx)
             self._after_annotations = after
         else:
             self._after_annotations = None
@@ -195,6 +197,7 @@ class RemoveMultipleAnnotationsCommand(BaseCommand):
             for idx, _ in reversed(self.removed_pairs):
                 if 0 <= idx < len(after):
                     del after[idx]
+                    adjust_updated_after_on_remove(after, idx)
             self._after_annotations = after
         else:
             self._after_annotations = None

@@ -83,6 +83,32 @@ class PDFDocumentManager:
         return char_bboxes
 
     @classmethod
+    def _erase_scan_image_pixels_keeping_line_art(cls, page, view_rects):
+        """
+        スキャン画像上のOCRテキストを編集した際、ベクターの表罫線（LINE_ART）は消さずに
+        背景スキャン画像上の元文字ピクセルだけを白塗り消去して文字の重なりを防ぐ。
+        """
+        if not view_rects:
+            return
+        page_bound = page.rect
+        for vr in view_rects:
+            padded = fitz.Rect(vr.x0 - 1.2, vr.y0 - 1.0, vr.x1 + 1.2, vr.y1 + 1.0) & page_bound
+            if not padded.is_empty:
+                page.add_redact_annot(padded, fill=(1, 1, 1))
+
+        img_pixels = getattr(fitz, "PDF_REDACT_IMAGE_PIXELS", 2)
+        gfx_none = getattr(fitz, "PDF_REDACT_LINE_ART_NONE", 0)
+        text_opt = getattr(fitz, "PDF_REDACT_TEXT_REMOVE", 0)
+        try:
+            page.apply_redactions(
+                images=img_pixels,
+                graphics=gfx_none,
+                text=text_opt,
+            )
+        except TypeError:
+            page.apply_redactions(images=img_pixels)
+
+    @classmethod
     def apply_text_only_redactions_to_page(cls, page, raw_rects):
         if not raw_rects:
             return
@@ -91,25 +117,39 @@ class PDFDocumentManager:
         if not view_rects:
             return
 
-        # OCR透明テキスト(0x010101)が含まれる領域は背景のスキャン文字ピクセルも白塗りで消去する
+        # OCR透明テキスト(0x010101〜0x030303)またはスキャン画像上の透明テキスト領域は
+        # ベクター罫線を維持したまま背景のスキャン文字ピクセルも白塗り消去して重なりを防ぐ
         try:
-            from core.ocr_cleaner import OCR_TEXT_MARKER_SRGB_INT
+            from core.ocr_cleaner import OCR_TEXT_MARKER_SRGB_INTS
             ocr_pixel_erase_rects = []
+            has_page_images = bool(page.get_images())
             raw_dict_check = page.get_text("rawdict")
+            image_rects = []
+            if has_page_images:
+                for blk in raw_dict_check.get("blocks", []):
+                    if blk.get("type") == 1:
+                        image_rects.append(fitz.Rect(blk.get("bbox", (0, 0, 0, 0))))
+
             for blk in raw_dict_check.get("blocks", []):
                 if blk.get("type") != 0:
                     continue
                 for ln in blk.get("lines", []):
                     for sp in ln.get("spans", []):
-                        if sp.get("color") == OCR_TEXT_MARKER_SRGB_INT:
-                            sp_rect = fitz.Rect(sp.get("bbox", (0, 0, 0, 0)))
+                        sp_color = sp.get("color")
+                        sp_rect = fitz.Rect(sp.get("bbox", (0, 0, 0, 0)))
+                        is_ocr_marker = sp_color in OCR_TEXT_MARKER_SRGB_INTS
+                        is_scan_overlay_text = (
+                            has_page_images
+                            and sp_color in (0, 0x010101, 0x020202, 0x030303)
+                            and any(ir.intersects(sp_rect) for ir in image_rects)
+                        )
+                        if is_ocr_marker or is_scan_overlay_text:
                             for vr in view_rects:
                                 if sp_rect.intersects(vr):
                                     ocr_pixel_erase_rects.append(vr)
+                                    ocr_pixel_erase_rects.append(sp_rect)
             if ocr_pixel_erase_rects:
-                cls._apply_redaction_view_rects_to_page(
-                    page, ocr_pixel_erase_rects, fill_color=(1, 1, 1)
-                )
+                cls._erase_scan_image_pixels_keeping_line_art(page, ocr_pixel_erase_rects)
         except Exception:
             logger.debug("Optional OCR pixel redaction check skipped", exc_info=True)
 
@@ -253,7 +293,6 @@ class PDFDocumentManager:
                     page, page_idx, ann_list, saved_rot, saved_crop, crop_outside_raw, verify
                 )
             finally:
-                # 途中で例外が発生しても回転・クロップを必ず復旧する (audit #3)。
                 try:
                     if page.rotation != saved_rot:
                         page.set_rotation(saved_rot)
@@ -267,11 +306,6 @@ class PDFDocumentManager:
 
     @staticmethod
     def _validate_annotations_for_bake(ann_list, page_idx):
-        """焼き込み前に注釈辞書の必須キーを検証し、ページを変更する前に明確な例外を出す (audit #2)。
-
-        highlight は rect、text は text/pos、draw は points が必須。
-        不足・不正な場合は ValueError を送出する（半端に焼き込まれた状態を作らない）。
-        """
         for pos, ann in enumerate(ann_list):
             if not isinstance(ann, dict):
                 raise ValueError(
@@ -312,6 +346,22 @@ class PDFDocumentManager:
                 if "points" not in ann:
                     raise ValueError(
                         f"Page {page_idx + 1}: draw annotation #{pos} is missing required 'points'"
+                    )
+            elif ann_type in ("box_erase", "text_redact"):
+                if "rect" not in ann:
+                    raise ValueError(
+                        f"Page {page_idx + 1}: {ann_type} annotation #{pos} is missing required 'rect'"
+                    )
+                try:
+                    fitz.Rect(ann["rect"])
+                except Exception as exc:
+                    raise ValueError(
+                        f"Page {page_idx + 1}: {ann_type} annotation #{pos} has invalid 'rect': {ann['rect']!r}"
+                    ) from exc
+            elif ann_type == "erase":
+                if "points" not in ann:
+                    raise ValueError(
+                        f"Page {page_idx + 1}: erase annotation #{pos} is missing required 'points'"
                     )
 
     @classmethod
@@ -485,8 +535,6 @@ class PDFDocumentManager:
                         mapped_annots[new_idx] = copy.deepcopy(page_annotations[old_idx])
 
             if mapped_annots:
-                # 焼き込み失敗は呼び出し側に伝播させる（audit #2）。
-                # 部分的に焼き込まれたドキュメントを黙って返さない。
                 try:
                     cls.bake_annotations_to_doc(sub_doc, mapped_annots, verify=False)
                 except Exception:
@@ -598,15 +646,6 @@ class PDFDocumentManager:
 
     @staticmethod
     def _is_encrypted_document(doc):
-        """暗号化された PDF かどうかを判定する (audit #7)。
-
-        判定には is_encrypted（未認証の暗号化文書で True）と metadata の
-        encryption 項目（認証後も残る）を使う。needs_pass はここでは絶対に
-        読まないこと：PyMuPDF 2.1 で認証済みの暗号化文書に対して needs_pass
-        を読むと、その後の insert_pdf によるコピーが壊れる（内容ストリームの
-        復号に失敗しテキストが消える）ことが実測で確認されている。
-        metadata は未認証の暗号化ドキュメントでは None になる場合がある。
-        """
         try:
             if getattr(doc, "is_encrypted", False):
                 return True
@@ -649,7 +688,9 @@ class PDFDocumentManager:
                 cls.bake_annotations_to_doc(work_doc, page_annotations, verify=True)
 
                 try:
-                    work_doc.set_metadata({})
+                    orig_meta = work_doc.metadata or {}
+                    producer_val = orig_meta.get("producer") or f"PyMuPDF {fitz.__doc__ or ''}".strip()
+                    work_doc.set_metadata({"producer": producer_val})
                 except Exception:
                     logger.debug("Optional PDF operation skipped", exc_info=True)
                 if hasattr(work_doc, "del_xml_metadata"):

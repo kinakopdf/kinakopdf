@@ -736,12 +736,11 @@ class TestAuditFixes2026(unittest.TestCase):
 
         cmd, icon = build_windows_open_command()
         self.assertIn("secure_local_pdf_editor.py", cmd)
-        self.assertNotIn(".pyw", cmd)
-        script_path = os.path.join(
-            str(Path(__file__).resolve().parent.parent),
-            "secure_local_pdf_editor.py",
-        )
-        self.assertTrue(os.path.isfile(script_path))
+        root_dir = Path(__file__).resolve().parent.parent
+        has_entry = (root_dir / "secure_local_pdf_editor.pyw").is_file() or (
+            root_dir / "secure_local_pdf_editor.py"
+        ).is_file()
+        self.assertTrue(has_entry)
         with self.assertRaises(FileNotFoundError):
             build_windows_open_command("/nonexistent/definitely_missing.py")
 
@@ -828,6 +827,156 @@ class TestUiAuditFixes2026(unittest.TestCase):
         self.assertEqual(len(viewer.page_annotations[0]), 1)
         viewer.undo()
         self.assertEqual(viewer.page_annotations[0], before)
+
+    def test_patch_20261116_redo_updated_after_and_currency_negatives(self):
+        from core.commands import RemoveAnnotationCommand, RemoveMultipleAnnotationsCommand
+        from core.pdf_engine import PDFDocumentManager
+
+        # 1) ▲¥1,200 / -¥1,200 / △￥500 のマイナス数値抽出検証
+        self.assertEqual(extract_number_from_text("▲¥1,200"), -1200.0)
+        self.assertEqual(extract_number_from_text("-¥1,200"), -1200.0)
+        self.assertEqual(extract_number_from_text("△￥500"), -500.0)
+        self.assertEqual(extract_number_from_text("(¥3,400)"), -3400.0)
+
+        # 2) RemoveAnnotationCommand の Delete -> Undo -> Redo での updated_after 補正検証
+        before = [
+            {"type": "highlight", "rect": (10.0, 10.0, 50.0, 20.0)},
+            {"type": "erase", "points": [(20.0, 50.0), (80.0, 50.0)]},
+            {"type": "text", "text": "KEEP", "pos": (25.0, 45.0), "fontsize": 12.0, "updated_after": 2},
+        ]
+        viewer = _AuditFakeViewer(_audit_make_doc(), {0: copy.deepcopy(before)})
+        cmd = RemoveAnnotationCommand(0, 0, before[0], before_annotations=before)
+        cmd.redo(viewer)
+        self.assertEqual(viewer.page_annotations[0][1]["updated_after"], 1)
+        cmd.undo(viewer)
+        self.assertEqual(viewer.page_annotations[0][2]["updated_after"], 2)
+        cmd.redo(viewer)
+        self.assertEqual(viewer.page_annotations[0][1]["updated_after"], 1)
+
+        # 3) PDF保存時に producer 表記が消去されず残ることの検証
+        with tempfile.TemporaryDirectory() as tmp:
+            out_pdf = os.path.join(tmp, "producer_check.pdf")
+            doc = _audit_make_doc()
+            _, err = PDFDocumentManager.save_safely(doc, {}, out_pdf, None)
+            self.assertIsNone(err)
+            saved = fitz.open(out_pdf)
+            self.assertTrue(bool((saved.metadata or {}).get("producer")))
+            saved.close()
+            doc.close()
+
+
+    def test_patch_20261116_regressions(self):
+        from core.commands import RemoveAnnotationCommand
+        from core.pdf_engine import PDFDocumentManager
+
+        # 1) 通貨記号つきマイナス表記の数値抽出検証
+        self.assertEqual(extract_number_from_text("▲¥1,200"), -1200.0)
+        self.assertEqual(extract_number_from_text("-¥1,200"), -1200.0)
+        self.assertEqual(extract_number_from_text("△￥500"), -500.0)
+        self.assertEqual(extract_number_from_text("(¥3,400)"), -3400.0)
+
+        # 2) RemoveAnnotationCommand の Delete -> Undo -> Redo 時の updated_after 補正検証
+        before = [
+            {"type": "highlight", "rect": (10.0, 10.0, 50.0, 20.0)},
+            {"type": "erase", "points": [(20.0, 50.0), (80.0, 50.0)]},
+            {"type": "text", "text": "KEEP", "pos": (25.0, 45.0), "fontsize": 12.0, "updated_after": 2},
+        ]
+        doc_tmp = self._track(_audit_make_doc())
+        viewer = _AuditFakeViewer(doc_tmp, {0: copy.deepcopy(before)})
+        cmd = RemoveAnnotationCommand(0, 0, before[0], before_annotations=before)
+        cmd.redo(viewer)
+        self.assertEqual(viewer.page_annotations[0][1]["updated_after"], 1)
+        cmd.undo(viewer)
+        self.assertEqual(viewer.page_annotations[0][2]["updated_after"], 2)
+        cmd.redo(viewer)
+        self.assertEqual(viewer.page_annotations[0][1]["updated_after"], 1)
+
+        # 3) PDF保存時の producer メタデータ保持検証
+        with tempfile.TemporaryDirectory() as tmp:
+            out_pdf = os.path.join(tmp, "producer_check.pdf")
+            doc_save = self._track(_audit_make_doc())
+            _, err = PDFDocumentManager.save_safely(doc_save, {}, out_pdf, None)
+            self.assertIsNone(err)
+            saved = fitz.open(out_pdf)
+            try:
+                self.assertTrue(bool((saved.metadata or {}).get("producer")))
+            finally:
+                saved.close()
+
+
+    def test_excel_xlsx_exporter_no_external_deps(self):
+        import zipfile
+        import xml.etree.ElementTree as ET
+        from core.excel_exporter import export_pdf_document_to_xlsx, parse_excel_numeric_cell
+
+        self.assertEqual(parse_excel_numeric_cell("¥12,340"), (12340.0, False))
+        self.assertEqual(parse_excel_numeric_cell("▲1,500"), (-1500.0, False))
+        self.assertEqual(parse_excel_numeric_cell("12.5%"), (0.125, True))
+        self.assertIsNone(parse_excel_numeric_cell("00123"))
+        self.assertIsNone(parse_excel_numeric_cell("2026/11/16"))
+
+        doc = fitz.open()
+        p0 = doc.new_page(width=400, height=300)
+        p0.insert_text(fitz.Point(40, 50), "品目", fontsize=12)
+        p0.insert_text(fitz.Point(180, 50), "金額", fontsize=12)
+        p0.insert_text(fitz.Point(40, 80), "事務用品", fontsize=12)
+        p0.insert_text(fitz.Point(180, 80), "¥3,500", fontsize=12)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_xlsx = os.path.join(tmp, "test_out.xlsx")
+            sheets_cnt, rows_cnt = export_pdf_document_to_xlsx(doc, [0], out_xlsx)
+            self.assertEqual(sheets_cnt, 1)
+            self.assertGreaterEqual(rows_cnt, 2)
+            self.assertTrue(zipfile.is_zipfile(out_xlsx))
+            with zipfile.ZipFile(out_xlsx, "r") as zf:
+                names = set(zf.namelist())
+                self.assertIn("[Content_Types].xml", names)
+                self.assertIn("xl/workbook.xml", names)
+                self.assertIn("xl/worksheets/sheet1.xml", names)
+                self.assertIn("xl/sharedStrings.xml", names)
+                ET.fromstring(zf.read("xl/worksheets/sheet1.xml"))
+                ET.fromstring(zf.read("xl/sharedStrings.xml"))
+        doc.close()
+
+
+    def test_excel_kana_long_vowel_order(self):
+        from core.excel_exporter import extract_page_rows_for_excel
+
+        doc = fitz.open()
+        page = doc.new_page(width=300, height=200)
+        # 枠線と「ゲーム」を描画してExcel抽出時に「ゲムー」へ逆転しないことを検証
+        page.draw_rect(fitz.Rect(30, 30, 120, 60))
+        page.draw_rect(fitz.Rect(120, 30, 220, 60))
+        page.insert_text(fitz.Point(40, 50), "ゲーム", fontsize=12, fontname="japan")
+        page.insert_text(fitz.Point(130, 50), "3400", fontsize=12, fontname="japan")
+
+        rows = extract_page_rows_for_excel(page, mode="auto")
+        joined_all = " ".join(" ".join(r) for r in rows)
+        self.assertIn("ゲーム", joined_all)
+        self.assertNotIn("ゲムー", joined_all)
+        doc.close()
+
+
+    def test_calc_drag_rect_bulk_selection(self):
+        from PyQt6.QtCore import QRectF
+
+        doc = self._track(fitz.open())
+        page = doc.new_page(width=400, height=300)
+        page.insert_text(fitz.Point(60, 60), "2,200", fontsize=12)
+        page.insert_text(fitz.Point(60, 90), "3,400", fontsize=12)
+        page.insert_text(fitz.Point(60, 120), "5,900", fontsize=12)
+        page.insert_text(fitz.Point(250, 90), "99,999", fontsize=12)
+
+        viewer = self.window.viewer
+        viewer.load_pdf(doc, 0, fit_view=False)
+        viewer.clear_calc_selection()
+
+        x0, y0 = viewer.pdf_to_scene(fitz.Point(50, 40))
+        x1, y1 = viewer.pdf_to_scene(fitz.Point(120, 135))
+        added = viewer._select_calc_items_in_scene_rect(QRectF(x0, y0, x1 - x0, y1 - y0))
+        self.assertEqual(added, 3)
+        self.assertAlmostEqual(sum(i["value"] for i in viewer.calc_selected_items), 11500.0)
+
 
 if __name__ == "__main__":
     unittest.main()
