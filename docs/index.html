@@ -5,39 +5,51 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>きなこPDF | 無料・完全ローカル PDFエディタ</title>
 <meta name="description" content="きなこPDFは無料で使える、完全ローカルのPDF編集ソフト。クラウドへのアップロードなし。墨消し・OCR・見開きリーダー・表の電卓つき。">
-<!-- 下書き（2026-11-14作成、2026-11-15更新）。公開前チェックリストは README-draft.md を参照。
-サイト名は2026-11-15に「きなこPDF」で決定。
-ダウンロードURL・アフィリエイト枠はプレースホルダーのまま。仮リンクでの公開はしないこと。 -->
 <style>
-body{font-family:sans-serif;line-height:1.8;margin:0;color:#222}
-header,section,footer{max-width:760px;margin:0 auto;padding:24px 20px}
-header{background:#fdf6e3;text-align:center}
-.btn{display:inline-block;background:#c0392b;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;margin:12px 0}
-.note{background:#f6f6f6;border-left:4px solid #c0392b;padding:12px 16px}
-.slot{border:2px dashed #999;padding:16px;margin:16px 0;color:#555}
-h2{border-bottom:2px solid #eee;padding-bottom:6px}
+:root{--cream:#fdf6e3;--ink:#3a3129;--muted:#7a6f63;--red:#c0392b;--soft:#fffaf0;--line:#f0e2c8}
+*{box-sizing:border-box}
+body{font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;line-height:1.9;margin:0;color:var(--ink);background:#fffdf7}
+header,section,footer{max-width:780px;margin:0 auto;padding:28px 22px}
+header{background:linear-gradient(180deg,#fdf6e3,#fffaf0);text-align:center;border-bottom:3px solid var(--line)}
+header img.icon{width:120px;height:120px;border-radius:28px;box-shadow:0 4px 16px rgba(0,0,0,.15)}
+h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em}
+.tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px}
+.btn{display:inline-block;background:var(--red);color:#fff;padding:15px 34px;border-radius:999px;text-decoration:none;font-weight:bold;margin:14px 0 6px;box-shadow:0 3px 10px rgba(192,57,43,.35)}
+.btn:hover{opacity:.9}
+h2{font-size:1.25em;border:none;margin:0 0 10px;padding-left:12px;border-left:6px solid var(--red)}
+.card{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:18px 0}
+.note{background:#f6f6f6;border-left:4px solid var(--red);padding:12px 16px;border-radius:0 12px 12px 0}
+.slot{border:2px dashed #bbb;padding:16px;margin:16px 0;color:#555;border-radius:12px;background:#fff}
+ul{padding-left:1.2em}
+li{margin:8px 0}
+small{color:var(--muted)}
+footer{text-align:center;color:var(--muted);border-top:1px solid var(--line)}
+a{color:var(--red)}
+.story{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;margin:18px 0}
+.story p{margin:10px 0}
+.pill{display:inline-block;background:#fbeee8;color:var(--red);border-radius:999px;padding:2px 12px;font-size:.85em;font-weight:bold;margin-right:6px}
 </style>
 </head>
 <body>
 <header>
+<img class="icon" src="assets/kinako_pdf.png" alt="きなこPDFのアイコン">
 <h1>きなこPDF</h1>
-<p>無料・完全ローカル PDFエディタ</p>
+<p class="tagline">無料・完全ローカル PDFエディタ</p>
 <p>安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。</p>
-<!-- TODO: ダウンロード先を差し替える。GitHub Releases の公開URLか Googleドライブ公開リンク。
-きなこの仮リンク（48時間で切れる）は使わないこと。 -->
 <a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.0/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
 <p><small>v1.0.0 公開中。ダウンロードしてダブルクリックするだけで起動します。<br>
 exe 版は GitHub Actions で自動ビルドしています。2026-11-16にWindowsでの起動を確認しました。</small></p>
 </header>
 
 <section>
+<div class="story">
 <h2>なぜ作ったのか</h2>
 <p>今は、個人情報の流出のニュースがあとを絶ちません。便利なAIに書類をアップロードすれば、面倒な作業は一瞬で片付きます。でも、その書類の中には名前や住所、金額など、大切な個人情報が入っています。</p>
 <p>きなこPDFは、そんな不安から生まれました。<strong>AIにアップロードする前に、自分のパソコンの中で個人情報を消しておくためのソフト</strong>です。墨消しで名前や住所を物理的に消してからアップロードすれば、大切な情報を外に出さずにすみます。</p>
 <p>作ったのは、プロの会社ではなく個人です。だからこそ「自分の大切な書類を、自分で守れる道具」を目指しました。派手な機能はありませんが、安心して使えることをいちばんに考えています。</p>
-</section>
+</div>
 
-<section>
+<div class="card">
 <h2>安心して使える理由</h2>
 <ul>
 <li><strong>完全ローカル</strong> — PDFの処理はすべて自分のパソコンの中で行います。クラウドへのアップロードは一切ありません。</li>
@@ -45,30 +57,35 @@ exe 版は GitHub Actions で自動ビルドしています。2026-11-16にWindo
 <li><strong>使う部品は2つだけ</strong> — 画面を作る PyQt6 と、PDFを扱う PyMuPDF。この2つだけを、極限まで絞って使っています。部品が少なければ、余計なものが混ざる心配も少なくなります。</li>
 </ul>
 <p><small>個人制作のソフトのため、Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。これは、まだ広く知られていない個人のソフトに出やすいもので、ウイルスということではありません。不安な方は、上の「オープンソース」のソースコードをご確認ください。</small></p>
+</div>
 </section>
 
 <section>
 <h2>できること</h2>
+<div class="card">
 <ul>
-<li><strong>墨消し（物理削除）</strong> — 文字を上から塗りつぶすのではありません。選んだ文字や画像のデータを完全に削除し、復旧できないようにします。だから、保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
-<li><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
-<li><strong>ペン・マーカー・トリミング・回転</strong> — ページの並べ替え・挿入・削除も</li>
-<li><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます</li>
-<li><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、文字を外部のサービスに送ることはありません。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
-<li><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
-<li><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
-<li><strong>文字検索・印刷・最近開いたファイル</strong></li>
+<li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 文字を上から塗りつぶすのではありません。選んだ文字や画像のデータを完全に削除し、復旧できないようにします。だから、保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
+<li><span class="pill">編集</span><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
+<li><span class="pill">編集</span><strong>ペン・マーカー・トリミング・回転</strong> — ページの並べ替え・挿入・削除も</li>
+<li><span class="pill">読む</span><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます</li>
+<li><span class="pill">OCR</span><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、文字を外部のサービスに送ることはありません。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
+<li><span class="pill">計算</span><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
+<li><span class="pill">便利</span><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
+<li><span class="pill">便利</span><strong>文字検索・印刷・最近開いたファイル</strong></li>
 </ul>
+</div>
 </section>
 
 <section>
 <h2>使い方（3ステップ）</h2>
+<div class="card">
 <ol>
 <li>上のボタンから KinakoPDF.exe をダウンロードする</li>
 <li>ダウンロードした exe をダブルクリックする</li>
 <li>PDFを開いて、墨消しや編集をする</li>
 </ol>
 <p><small>ソースコード版を使う場合：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）が必要です。<code>python secure_local_pdf_editor.pyw</code> で起動します。新しいライブラリは追加していません。</small></p>
+</div>
 </section>
 
 <section>
@@ -85,7 +102,6 @@ exe 版は GitHub Actions で自動ビルドしています。2026-11-16にWindo
 <li>OCR（スキャン色抜き・範囲OCR）はWindows専用です。色抜き以外の編集機能はどのOSでも使えます。</li>
 <li>墨消し自体は、文字や画像のデータを完全に削除し、復旧できないようにします。自動の検証は文字層が中心で、画像や図形の残りまでは完全には確認していません。とくに大切な部分は、保存後にご自身でも目でご確認ください。</li>
 <li>パスワード付きPDFを上書き保存すると、暗号化が解除される場合があります。保存時の確認ダイアログをよく読んでから選んでください。</li>
-<li>OCR（スキャン色抜き・範囲OCR）はWindows専用です。色抜き以外の編集機能はどのOSでも使えます。</li>
 </ul>
 </div>
 </section>
