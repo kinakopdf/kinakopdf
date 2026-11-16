@@ -26,9 +26,26 @@ h2{border-bottom:2px solid #eee;padding-bottom:6px}
 <!-- TODO: ダウンロード先を差し替える。GitHub Releases の公開URLか Googleドライブ公開リンク。
 きなこの仮リンク（48時間で切れる）は使わないこと。 -->
 <a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.0/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
-<p><small>ダブルクリックで起動できる exe 版を配布予定です。ソースコード版も同じ場所に置きます。<br>
-exe 版は GitHub Actions で自動ビルドします。初回は手動で試して起動確認してから公開します。</small></p>
+<p><small>v1.0.0 公開中。ダウンロードしてダブルクリックするだけで起動します。<br>
+exe 版は GitHub Actions で自動ビルドしています。2026-11-16にWindowsでの起動を確認しました。</small></p>
 </header>
+
+<section>
+<h2>なぜ作ったのか</h2>
+<p>今は、個人情報の流出のニュースがあとを絶ちません。便利なAIに書類をアップロードすれば、面倒な作業は一瞬で片付きます。でも、その書類の中には名前や住所、金額など、大切な個人情報が入っています。</p>
+<p>きなこPDFは、そんな不安から生まれました。<strong>AIにアップロードする前に、自分のパソコンの中で個人情報を消しておくためのソフト</strong>です。墨消しで名前や住所を物理的に消してからアップロードすれば、大切な情報を外に出さずにすみます。</p>
+<p>作ったのは、プロの会社ではなく個人です。だからこそ「自分の大切な書類を、自分で守れる道具」を目指しました。派手な機能はありませんが、安心して使えることをいちばんに考えています。</p>
+</section>
+
+<section>
+<h2>安心して使える理由</h2>
+<ul>
+<li><strong>完全ローカル</strong> — PDFの処理はすべて自分のパソコンの中で行います。クラウドへのアップロードは一切ありません。</li>
+<li><strong>オープンソース</strong> — ソースコードをすべて公開しています。中身がどうなっているか、誰でも確認できます。</li>
+<li><strong>使う部品は2つだけ</strong> — 画面を作る PyQt6 と、PDFを扱う PyMuPDF。この2つだけを、極限まで絞って使っています。部品が少なければ、余計なものが混ざる心配も少なくなります。</li>
+</ul>
+<p><small>個人制作のソフトのため、Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。これは、まだ広く知られていない個人のソフトに出やすいもので、ウイルスということではありません。不安な方は、上の「オープンソース」のソースコードをご確認ください。</small></p>
+</section>
 
 <section>
 <h2>できること</h2>
@@ -37,7 +54,7 @@ exe 版は GitHub Actions で自動ビルドします。初回は手動で試し
 <li><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
 <li><strong>ペン・マーカー・トリミング・回転</strong> — ページの並べ替え・挿入・削除も</li>
 <li><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます</li>
-<li><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき</li>
+<li><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、文字を外部のサービスに送ることはありません。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
 <li><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
 <li><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
 <li><strong>文字検索・印刷・最近開いたファイル</strong></li>
@@ -47,11 +64,11 @@ exe 版は GitHub Actions で自動ビルドします。初回は手動で試し
 <section>
 <h2>使い方（3ステップ）</h2>
 <ol>
-<li>上のボタンからzipをダウンロードして解凍する</li>
-<li><code>pip install -r requirements.txt</code> を実行する</li>
-<li><code>python secure_local_pdf_editor.pyw</code> で起動する</li>
+<li>上のボタンから KinakoPDF.exe をダウンロードする</li>
+<li>ダウンロードした exe をダブルクリックする</li>
+<li>PDFを開いて、墨消しや編集をする</li>
 </ol>
-<p><small>必要なもの：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）。新しいライブラリは追加していません。</small></p>
+<p><small>ソースコード版を使う場合：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）が必要です。<code>python secure_local_pdf_editor.pyw</code> で起動します。新しいライブラリは追加していません。</small></p>
 </section>
 
 <section>
