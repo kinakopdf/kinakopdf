@@ -364,6 +364,7 @@ class MainWindow(QMainWindow):
         modes = [
             ("✋ 閲覧", "view"),
             ("✂ トリミング", "crop"),
+            ("🗜 折りたたみ", "fold"),
             ("✏ ペン", "draw"),
             ("🖍 マーカー", "highlight"),
             ("🖍✕ マーカー消去", "highlight_erase"),
@@ -380,6 +381,11 @@ class MainWindow(QMainWindow):
             action.setData(mode)
             if mode == "view":
                 action.setChecked(True)
+            elif mode == "fold":
+                action.setToolTip(
+                    "ページの一部の横帯を非表示にして下を詰めて表示します"
+                    "（表示だけ・PDFは変わりません。もう一度押すと解除します）"
+                )
             elif mode == "region_ocr":
                 action.setShortcut(QKeySequence("Ctrl+Alt+O"))
                 action.setToolTip(
@@ -750,6 +756,16 @@ class MainWindow(QMainWindow):
                 break
 
     def set_mode(self, mode):
+        # 折りたたみモードのボタンを押したとき、すでに折りたたみ帯がある
+        # ページでは、ボタンが折りたたみ表示のON/OFF切り替えになる。
+        if mode == "fold" and self.viewer.has_fold_band():
+            self.viewer.clear_fold_band()
+            self.viewer.mode = "view"
+            self._sync_mode_action_checked("view")
+            self.viewer.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self.viewer.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            self.statusBar().showMessage("折りたたみを解除しました")
+            return
         self._sync_mode_action_checked(mode)
         self.viewer.cancel_active_interaction()
         if mode != "draw" and getattr(self.viewer, "pen_eraser_active", False):
@@ -783,6 +799,14 @@ class MainWindow(QMainWindow):
             self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewer.viewport().setCursor(Qt.CursorShape.CrossCursor)
             msg = "トリミングモード：残したい範囲をドラッグして指定します（右ドラッグで画面スクロール）"
+        elif mode == "fold":
+            self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.viewer.viewport().setCursor(Qt.CursorShape.CrossCursor)
+            msg = (
+                "折りたたみモード：非表示にしたい横帯をドラッグで指定します"
+                "（帯の高さ分だけ下が上に詰めて表示されます。PDF自体は変わりません。"
+                "折りたたみ中は、もう一度ボタンを押すと解除します）"
+            )
         elif mode == "box_erase":
             self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewer.viewport().setCursor(Qt.CursorShape.CrossCursor)
