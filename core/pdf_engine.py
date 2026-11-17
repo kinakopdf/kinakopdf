@@ -685,6 +685,13 @@ class PDFDocumentManager:
             with FITZ_LOCK:
                 work_doc = fitz.open()
                 work_doc.insert_pdf(source_doc)
+                # しおり（TOC）は insert_pdf では引き継がれないため明示的に複製する。
+                try:
+                    toc = source_doc.get_toc()
+                    if toc:
+                        work_doc.set_toc(toc)
+                except Exception:
+                    logger.debug("Optional TOC copy skipped", exc_info=True)
                 cls.bake_annotations_to_doc(work_doc, page_annotations, verify=True)
 
                 try:

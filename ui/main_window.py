@@ -19,22 +19,27 @@ from PyQt6.QtGui import (
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGraphicsView,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QStyle,
     QToolBar,
     QToolButton,
+    QVBoxLayout,
 )
 
 from core import (
@@ -77,6 +82,24 @@ from core.geometry import (
 )
 from core.pdf_engine import PDFDocumentManager
 from core.pdf_loader import load_folder_as_merged_document
+from core.trial_tools import (
+    STAMP_PRESETS,
+    add_bookmark,
+    apply_header_footer,
+    apply_stamp_to_doc,
+    apply_toc_to_pdf_bytes,
+    compress_pdf_bytes,
+    delete_bookmark,
+    encrypt_pdf_bytes,
+    fill_form_fields,
+    flatten_form_fields,
+    get_bookmarks,
+    list_form_fields,
+    parse_page_ranges,
+    rename_bookmark,
+    split_pdf_bytes,
+    strip_password_pdf_bytes,
+)
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
 from ui.pdf_viewer import PDFViewer
@@ -469,6 +492,23 @@ class MainWindow(QMainWindow):
         self.btn_clear_sum.clicked.connect(self.viewer.clear_calc_selection)
         self.btn_clear_sum.setEnabled(False)
         edit_toolbar.addWidget(self.btn_clear_sum)
+
+        self.addToolBarBreak()
+
+        # 試作多機能版（feature/trial-multi）の P0 機能
+        trial_toolbar = QToolBar("試作機能ツールバー")
+        trial_toolbar.setMovable(False)
+        self.addToolBar(trial_toolbar)
+        trial_label = QLabel(" 🧪 試作: ")
+        trial_label.setStyleSheet("font-weight: bold; padding-left: 4px;")
+        trial_toolbar.addWidget(trial_label)
+        self.add_action(trial_toolbar, "🔐 パスワード", self.trial_password_dialog)
+        self.add_action(trial_toolbar, "🗜 圧縮して保存", self.trial_compress_dialog)
+        self.add_action(trial_toolbar, "✂ 分割", self.trial_split_dialog)
+        self.add_action(trial_toolbar, "📝 フォーム入力", self.trial_form_dialog)
+        self.add_action(trial_toolbar, "🔴 印鑑・スタンプ", self.trial_stamp_dialog)
+        self.add_action(trial_toolbar, "🔖 しおり", self.trial_bookmark_dialog)
+        self.add_action(trial_toolbar, "🔢 ヘッダー/透かし", self.trial_header_footer_dialog)
 
     def _focus_search_box(self):
         self.edit_search.setFocus()
@@ -1040,6 +1080,497 @@ class MainWindow(QMainWindow):
             return
 
         self.save_to_path(filepath, allow_strip_encryption=allow_strip)
+
+    # ============================================================
+    # 試作多機能版 P0（feature/trial-multi）
+    # ============================================================
+
+    def _trial_require_doc(self):
+        doc = self.viewer.current_pdf
+        if not doc or len(doc) == 0:
+            QMessageBox.information(self, "案内", "PDFが開かれていません。先にPDFを開いてください。")
+            return None
+        return doc
+
+    def _trial_export_bytes(self):
+        """編集中の注釈を焼き込んだ現在の文書をバイト列で取り出す。"""
+        doc = self.viewer.current_pdf
+        data = PDFDocumentManager.extract_pages_as_bytes(
+            doc, list(range(len(doc))), self.viewer.page_annotations)
+        try:
+            toc = doc.get_toc()
+        except Exception:
+            toc = []
+        return apply_toc_to_pdf_bytes(data, toc)
+
+    def _trial_write_bytes(self, data, title, default_name):
+        filepath, _ = QFileDialog.getSaveFileName(self, title, default_name, "PDF Files (*.pdf)")
+        if not filepath:
+            return None
+        if not filepath.lower().endswith(".pdf"):
+            filepath += ".pdf"
+        try:
+            Path(filepath).write_bytes(data)
+        except Exception as e:
+            QMessageBox.critical(self, "保存エラー", f"保存に失敗しました。\n{e}")
+            return None
+        self.statusBar().showMessage(f"保存完了: {filepath}")
+        return filepath
+
+    def _trial_mark_modified_and_refresh(self):
+        self.viewer.history.mark_unsaved()
+        self.viewer.render_page(rebuild_base=True)
+        self.update_window_title()
+
+    def trial_password_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        was_encrypted = bool(
+            getattr(self.viewer, "current_pdf_was_encrypted", False)
+            or PDFDocumentManager._is_encrypted_document(doc)
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle("パスワード設定 / 解除")
+        layout = QFormLayout(dlg)
+        mode_combo = QComboBox(dlg)
+        mode_combo.addItem("パスワードを設定する", "set")
+        if was_encrypted:
+            mode_combo.addItem("パスワードを解除する（保護なしで保存）", "remove")
+        layout.addRow("操作:", mode_combo)
+        pw_edit = QLineEdit(dlg)
+        pw_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        pw_edit.setPlaceholderText("開くときに必要なパスワード")
+        layout.addRow("パスワード:", pw_edit)
+        pw2_edit = QLineEdit(dlg)
+        pw2_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        pw2_edit.setPlaceholderText("確認のためもう一度入力")
+        layout.addRow("パスワード（確認）:", pw2_edit)
+        btns = QPushButton("実行", dlg)
+        layout.addRow(btns)
+        btns.clicked.connect(dlg.accept)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        mode = mode_combo.currentData()
+        try:
+            data = self._trial_export_bytes()
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"PDFの取り出しに失敗しました。\n{e}")
+            return
+        if mode == "remove":
+            reply = QMessageBox.question(
+                self, "確認",
+                "パスワード保護を解除して保存します。よろしいですか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            # 取り出したバイト列は既に暗号化なしの状態。
+            name = Path(self.viewer.current_file or "document.pdf").stem + "_解除.pdf"
+            saved = self._trial_write_bytes(data, "パスワード解除したPDFを保存", name)
+            if saved:
+                QMessageBox.information(self, "完了", f"パスワードを解除して保存しました。\n{saved}")
+            return
+        password = pw_edit.text()
+        if not password:
+            QMessageBox.warning(self, "エラー", "パスワードを入力してください。")
+            return
+        if password != pw2_edit.text():
+            QMessageBox.warning(self, "エラー", "パスワード（確認）が一致しません。")
+            return
+        try:
+            enc = encrypt_pdf_bytes(data, password)
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"パスワード設定に失敗しました。\n{e}")
+            return
+        name = Path(self.viewer.current_file or "document.pdf").stem + "_保護.pdf"
+        saved = self._trial_write_bytes(enc, "パスワード付きPDFを保存", name)
+        if saved:
+            QMessageBox.information(
+                self, "完了",
+                f"パスワード付きで保存しました。\n{saved}\n"
+                "このファイルを開くときはパスワードの入力が必要です。")
+
+    def trial_compress_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("PDF圧縮")
+        layout = QFormLayout(dlg)
+        dim_spin = QSpinBox(dlg)
+        dim_spin.setRange(400, 3000)
+        dim_spin.setSingleStep(100)
+        dim_spin.setValue(1200)
+        dim_spin.setSuffix(" px")
+        layout.addRow("画像の最大辺:", dim_spin)
+        q_spin = QSpinBox(dlg)
+        q_spin.setRange(10, 95)
+        q_spin.setValue(75)
+        layout.addRow("JPEG画質:", q_spin)
+        note = QLabel("画像を縮小・JPEG再圧縮し、不要なデータを除去して保存します。\n"
+                      "元のファイルは変更されません。", dlg)
+        layout.addRow(note)
+        btns = QPushButton("圧縮して保存", dlg)
+        layout.addRow(btns)
+        btns.clicked.connect(dlg.accept)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            data = self._trial_export_bytes()
+            out, stats = compress_pdf_bytes(
+                data, max_image_dim=dim_spin.value(), jpeg_quality=q_spin.value())
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"圧縮に失敗しました。\n{e}")
+            return
+        name = Path(self.viewer.current_file or "document.pdf").stem + "_圧縮.pdf"
+        saved = self._trial_write_bytes(out, "圧縮したPDFを保存", name)
+        if saved:
+            before = stats["original_size"] / 1024
+            after = stats["compressed_size"] / 1024
+            ratio = 100.0 * stats["compressed_size"] / max(1, stats["original_size"])
+            QMessageBox.information(
+                self, "圧縮完了",
+                f"保存しました。\n{saved}\n\n"
+                f"圧縮前: {before:.0f} KB → 圧縮後: {after:.0f} KB（{ratio:.0f}%）\n"
+                f"画像の再圧縮: {stats['images_processed']}件")
+
+    def trial_split_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        total = len(doc)
+        spec, ok = QInputDialog.getText(
+            self, "PDF分割",
+            f"分割するページ範囲を入力してください（全{total}ページ）\n例: 1-3,5",
+            QLineEdit.EchoMode.Normal, "")
+        if not ok or not spec.strip():
+            return
+        try:
+            ranges = parse_page_ranges(spec, total)
+        except ValueError as e:
+            QMessageBox.warning(self, "エラー", str(e))
+            return
+        folder = QFileDialog.getExistingDirectory(self, "分割したPDFの保存先フォルダを選択")
+        if not folder:
+            return
+        try:
+            data = self._trial_export_bytes()
+            parts = split_pdf_bytes(data, ranges)
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"分割に失敗しました。\n{e}")
+            return
+        stem = Path(self.viewer.current_file or "document.pdf").stem
+        saved = []
+        for (start, end), part in zip(ranges, parts):
+            fname = f"{stem}_{start + 1}-{end + 1}.pdf"
+            path = str(Path(folder) / fname)
+            try:
+                Path(path).write_bytes(part)
+                saved.append(path)
+            except Exception as e:
+                QMessageBox.critical(self, "保存エラー", f"{fname} の保存に失敗しました。\n{e}")
+                return
+        QMessageBox.information(
+            self, "分割完了",
+            f"{len(saved)}件のPDFに分割して保存しました。\n" + "\n".join(saved))
+
+    def trial_form_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        fields = list_form_fields(doc)
+        if not fields:
+            QMessageBox.information(self, "案内", "このPDFには入力できるフォーム欄がありません。")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("フォーム入力")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel(f"フォーム欄: {len(fields)}件（同じ名前の欄はまとめて入力されます）"))
+        form = QFormLayout()
+        editors = {}
+        seen = set()
+        for f in fields:
+            name = f["name"]
+            if name in seen:
+                continue
+            seen.add(name)
+            if f["type"] == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+                editor = QCheckBox(dlg)
+                editor.setChecked(bool(f["value"]))
+            else:
+                editor = QLineEdit(dlg)
+                editor.setText("" if f["value"] is None else str(f["value"]))
+            editors[name] = editor
+            form.addRow(f"{name}（{f['type_name']}・p.{f['page']}）:", editor)
+        vbox.addLayout(form)
+        btn_fill = QPushButton("入力を反映する", dlg)
+        btn_flat = QPushButton("フラット化する（フォームを通常の表示に固定）", dlg)
+        vbox.addWidget(btn_fill)
+        vbox.addWidget(btn_flat)
+        result = {}
+
+        def _on_fill():
+            values = {}
+            for name, editor in editors.items():
+                values[name] = editor.isChecked() if isinstance(editor, QCheckBox) else editor.text()
+            result["action"] = "fill"
+            result["values"] = values
+            dlg.accept()
+
+        def _on_flat():
+            result["action"] = "flatten"
+            dlg.accept()
+
+        btn_fill.clicked.connect(_on_fill)
+        btn_flat.clicked.connect(_on_flat)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        if result.get("action") == "fill":
+            res = fill_form_fields(doc, result["values"])
+            self._trial_mark_modified_and_refresh()
+            msg = f"{res['filled']}件の欄に入力しました。"
+            if res["missing"]:
+                msg += f"\n見つからなかった欄: {', '.join(res['missing'])}"
+            QMessageBox.information(self, "完了", msg + "\n保存すると反映されます。")
+        elif result.get("action") == "flatten":
+            reply = QMessageBox.question(
+                self, "確認",
+                "フォーム欄を通常の表示に固定します。\n固定すると後から入力内容を変更できなくなります。続行しますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            res = flatten_form_fields(doc)
+            self._trial_mark_modified_and_refresh()
+            QMessageBox.information(
+                self, "完了", f"{res['flattened']}件の欄を固定しました。\n保存すると反映されます。")
+
+    def trial_stamp_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("印鑑・スタンプ")
+        layout = QFormLayout(dlg)
+        kind_combo = QComboBox(dlg)
+        kind_combo.addItem("丸い印鑑（名字＋日付）", "seal")
+        kind_combo.addItem("角いスタンプ（済・確認など）", "stamp")
+        layout.addRow("種類:", kind_combo)
+        text_edit = QLineEdit(dlg)
+        text_edit.setPlaceholderText("印鑑は名字、スタンプは「済」「確認」など")
+        layout.addRow("文字:", text_edit)
+        preset_combo = QComboBox(dlg)
+        preset_combo.addItem("（プリセットなし）", "")
+        for preset in STAMP_PRESETS:
+            preset_combo.addItem(preset, preset)
+        preset_combo.currentIndexChanged.connect(
+            lambda i: text_edit.setText(preset_combo.currentData() or text_edit.text()))
+        layout.addRow("プリセット:", preset_combo)
+        date_edit = QLineEdit(dlg)
+        date_edit.setPlaceholderText("例: 2026.11.18（印鑑のみ・空欄可）")
+        layout.addRow("日付:", date_edit)
+        page_spin = QSpinBox(dlg)
+        page_spin.setRange(1, len(doc))
+        page_spin.setValue(self.viewer.current_page_idx + 1)
+        layout.addRow("ページ:", page_spin)
+        pos_combo = QComboBox(dlg)
+        for label, key in (("右上", "tr"), ("右下", "br"), ("左上", "tl"),
+                           ("左下", "bl"), ("中央", "center")):
+            pos_combo.addItem(label, key)
+        layout.addRow("位置:", pos_combo)
+        size_spin = QSpinBox(dlg)
+        size_spin.setRange(30, 200)
+        size_spin.setValue(60)
+        size_spin.setSuffix(" pt")
+        layout.addRow("サイズ（直径/幅）:", size_spin)
+        btns = QPushButton("押す", dlg)
+        layout.addRow(btns)
+        btns.clicked.connect(dlg.accept)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        text = text_edit.text().strip()
+        if not text:
+            QMessageBox.warning(self, "エラー", "文字を入力してください。")
+            return
+        page_no = page_spin.value()
+        page = doc[page_no - 1]
+        size = size_spin.value()
+        kind = kind_combo.currentData()
+        if kind == "seal":
+            height = size
+        else:
+            height = max(30, int(size * 0.6))
+        margin = 36
+        pos = pos_combo.currentData()
+        if pos == "tr":
+            x0, y0 = page.rect.width - margin - size, margin
+        elif pos == "br":
+            x0, y0 = page.rect.width - margin - size, page.rect.height - margin - height
+        elif pos == "tl":
+            x0, y0 = margin, margin
+        elif pos == "bl":
+            x0, y0 = margin, page.rect.height - margin - height
+        else:
+            x0 = (page.rect.width - size) / 2.0
+            y0 = (page.rect.height - height) / 2.0
+        try:
+            apply_stamp_to_doc(
+                doc, page_no, kind, fitz.Rect(x0, y0, x0 + size, y0 + height),
+                text=text, date_text=date_edit.text().strip() or None)
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"スタンプを押せませんでした。\n{e}")
+            return
+        self._trial_mark_modified_and_refresh()
+        self.statusBar().showMessage(f"{page_no}ページ目にスタンプを押しました。保存すると反映されます。")
+
+    def trial_bookmark_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("しおり表示・編集")
+        vbox = QVBoxLayout(dlg)
+        lst = QListWidget(dlg)
+        vbox.addWidget(lst)
+
+        def _refresh_list():
+            lst.clear()
+            for i, mark in enumerate(get_bookmarks(doc)):
+                indent = "　" * (mark["level"] - 1)
+                lst.addItem(f"{indent}{mark['title']}  （p.{mark['page']}）")
+
+        _refresh_list()
+        btn_add = QPushButton("追加（現在のページにしおりを作る）", dlg)
+        btn_rename = QPushButton("名前を変更", dlg)
+        btn_delete = QPushButton("削除", dlg)
+        btn_jump = QPushButton("選択したしおりのページへ移動", dlg)
+        for b in (btn_add, btn_rename, btn_delete, btn_jump):
+            vbox.addWidget(b)
+
+        def _selected_index():
+            row = lst.currentRow()
+            if row < 0:
+                QMessageBox.information(dlg, "案内", "一覧からしおりを選択してください。")
+                return None
+            return row
+
+        def _on_add():
+            title, ok = QInputDialog.getText(dlg, "しおり追加", "しおりのタイトル:")
+            if not ok or not title.strip():
+                return
+            try:
+                add_bookmark(doc, title.strip(), self.viewer.current_page_idx + 1)
+            except Exception as e:
+                QMessageBox.warning(dlg, "エラー", str(e))
+                return
+            self._trial_mark_modified_and_refresh()
+            _refresh_list()
+
+        def _on_rename():
+            idx = _selected_index()
+            if idx is None:
+                return
+            old = get_bookmarks(doc)[idx]["title"]
+            title, ok = QInputDialog.getText(dlg, "名前を変更", "新しい名前:", text=old)
+            if not ok or not title.strip():
+                return
+            try:
+                rename_bookmark(doc, idx, title.strip())
+            except Exception as e:
+                QMessageBox.warning(dlg, "エラー", str(e))
+                return
+            self._trial_mark_modified_and_refresh()
+            _refresh_list()
+
+        def _on_delete():
+            idx = _selected_index()
+            if idx is None:
+                return
+            mark = get_bookmarks(doc)[idx]
+            reply = QMessageBox.question(
+                dlg, "確認", f"しおり「{mark['title']}」を削除しますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            delete_bookmark(doc, idx)
+            self._trial_mark_modified_and_refresh()
+            _refresh_list()
+
+        def _on_jump():
+            idx = _selected_index()
+            if idx is None:
+                return
+            page_no = get_bookmarks(doc)[idx]["page"]
+            self.viewer.load_pdf(doc, page_no - 1, fit_view=True)
+            dlg.accept()
+
+        btn_add.clicked.connect(_on_add)
+        btn_rename.clicked.connect(_on_rename)
+        btn_delete.clicked.connect(_on_delete)
+        btn_jump.clicked.connect(_on_jump)
+        dlg.exec()
+
+    def trial_header_footer_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("ヘッダー / フッター・ページ番号・透かし")
+        layout = QFormLayout(dlg)
+        header_edit = QLineEdit(dlg)
+        header_edit.setPlaceholderText("例: きなこPDF（{page}/{total} も使えます）")
+        layout.addRow("ヘッダー:", header_edit)
+        footer_edit = QLineEdit(dlg)
+        footer_edit.setPlaceholderText("例: 社外秘")
+        layout.addRow("フッター:", footer_edit)
+        num_check = QCheckBox("ページ番号を入れる", dlg)
+        layout.addRow(num_check)
+        num_template = QLineEdit(dlg)
+        num_template.setText("{page} / {total}")
+        layout.addRow("ページ番号の形式:", num_template)
+        wm_edit = QLineEdit(dlg)
+        wm_edit.setPlaceholderText("例: DRAFT・社外秘（空欄なら透かしなし）")
+        layout.addRow("透かし文字:", wm_edit)
+        wm_size = QSpinBox(dlg)
+        wm_size.setRange(12, 120)
+        wm_size.setValue(48)
+        layout.addRow("透かしの文字サイズ:", wm_size)
+        wm_rot = QSpinBox(dlg)
+        wm_rot.setRange(-90, 90)
+        wm_rot.setValue(45)
+        wm_rot.setSuffix("°")
+        layout.addRow("透かしの角度:", wm_rot)
+        note = QLabel("全ページに描き込みます。保存するとPDFに反映されます。", dlg)
+        layout.addRow(note)
+        btns = QPushButton("適用する", dlg)
+        layout.addRow(btns)
+        btns.clicked.connect(dlg.accept)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            res = apply_header_footer(
+                doc,
+                header=header_edit.text().strip(),
+                footer=footer_edit.text().strip(),
+                show_page_number=num_check.isChecked(),
+                page_number_template=num_template.text().strip() or "{page} / {total}",
+                watermark=wm_edit.text().strip(),
+                watermark_fontsize=float(wm_size.value()),
+                watermark_rotation=int(wm_rot.value()),
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "エラー", str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"適用に失敗しました。\n{e}")
+            return
+        self._trial_mark_modified_and_refresh()
+        QMessageBox.information(
+            self, "完了", f"{res['pages']}ページに適用しました。\n保存するとPDFに反映されます。")
 
     def print_file(self):
         """
