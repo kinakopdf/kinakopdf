@@ -100,6 +100,15 @@ from core.trial_tools import (
     split_pdf_bytes,
     strip_password_pdf_bytes,
 )
+from ui.accounting_dialogs import (
+    show_compare_dialog,
+    show_cross_search_dialog,
+    show_densho_rename_dialog,
+    show_invoice_dialog,
+    show_pii_dialog,
+    show_signature_dialog,
+    show_voucher_dialog,
+)
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
 from ui.pdf_viewer import PDFViewer
@@ -509,6 +518,21 @@ class MainWindow(QMainWindow):
         self.add_action(trial_toolbar, "🔴 印鑑・スタンプ", self.trial_stamp_dialog)
         self.add_action(trial_toolbar, "🔖 しおり", self.trial_bookmark_dialog)
         self.add_action(trial_toolbar, "🔢 ヘッダー/透かし", self.trial_header_footer_dialog)
+
+        # 試作多機能版（feature/trial-multi）の P1 機能（会計向け）
+        p1_toolbar = QToolBar("会計試作ツールバー")
+        p1_toolbar.setMovable(False)
+        self.addToolBar(p1_toolbar)
+        p1_label = QLabel(" 📒 会計試作: ")
+        p1_label.setStyleSheet("font-weight: bold; padding-left: 4px;")
+        p1_toolbar.addWidget(p1_label)
+        self.add_action(p1_toolbar, "🧾 証憑一覧Excel", self.trial_voucher_dialog)
+        self.add_action(p1_toolbar, "🗂 電帳法リネーム", self.trial_densho_rename_dialog)
+        self.add_action(p1_toolbar, "🔢 インボイス番号", self.trial_invoice_dialog)
+        self.add_action(p1_toolbar, "🔍 複数PDF検索", self.trial_cross_search_dialog)
+        self.add_action(p1_toolbar, "⇄ PDF比較", self.trial_compare_dialog)
+        self.add_action(p1_toolbar, "🙈 個人情報墨消し", self.trial_pii_dialog)
+        self.add_action(p1_toolbar, "✍️ 署名挿入", self.trial_signature_dialog)
 
     def _focus_search_box(self):
         self.edit_search.setFocus()
@@ -1571,6 +1595,31 @@ class MainWindow(QMainWindow):
         self._trial_mark_modified_and_refresh()
         QMessageBox.information(
             self, "完了", f"{res['pages']}ページに適用しました。\n保存するとPDFに反映されます。")
+
+    # 試作多機能版 P1（feature/trial-multi・会計向け）
+    # コア処理は core/accounting_tools.py、ダイアログは ui/accounting_dialogs.py
+    # ============================================================
+
+    def trial_voucher_dialog(self):
+        show_voucher_dialog(self)
+
+    def trial_densho_rename_dialog(self):
+        show_densho_rename_dialog(self)
+
+    def trial_invoice_dialog(self):
+        show_invoice_dialog(self)
+
+    def trial_cross_search_dialog(self):
+        show_cross_search_dialog(self)
+
+    def trial_compare_dialog(self):
+        show_compare_dialog(self)
+
+    def trial_pii_dialog(self):
+        show_pii_dialog(self)
+
+    def trial_signature_dialog(self):
+        show_signature_dialog(self)
 
     def print_file(self):
         """
