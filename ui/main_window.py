@@ -214,7 +214,7 @@ class MainWindow(QMainWindow):
         act_open.setShortcut(QKeySequence.StandardKey.Open)
 
         self.btn_recent_files = QToolButton(self)
-        self.btn_recent_files.setText("🕘 最近開いたファイル")
+        self.btn_recent_files.setText("🕘 最近のファイル")
         self.btn_recent_files.setToolTip("最近開いたPDFファイル（最大5件）から選択して開きます")
         self.btn_recent_files.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.recent_files_menu = QMenu(self)
@@ -235,16 +235,16 @@ class MainWindow(QMainWindow):
         act_excel = self.add_action(top_toolbar, "📊 Excel出力", self.export_to_excel)
         act_excel.setToolTip("PDF内の表や文字データを追加ライブラリなしでExcel(.xlsx)に変換して保存します")
 
-        self.add_action(top_toolbar, "🗔 新規ウィンドウ", self.spawn_new_window)
+        self.add_action(top_toolbar, "🗔 新規", self.spawn_new_window)
 
-        act_read = self.add_action(top_toolbar, "📖 見開き全画面", self.open_fullscreen_reader)
+        act_read = self.add_action(top_toolbar, "📖 見開き", self.open_fullscreen_reader)
         act_read.setShortcut(QKeySequence("F5"))
         act_read.setToolTip("現在のPDFを全画面見開きモードで閲覧します (F5)")
 
-        act_folder = self.add_action(top_toolbar, "📚 フォルダ一括読込", self.open_pdf_folder)
+        act_folder = self.add_action(top_toolbar, "📚 フォルダ読込", self.open_pdf_folder)
         act_folder.setToolTip("フォルダ内の複数PDFをまとめて1つの本として読み込みます")
 
-        act_ocr = self.add_action(top_toolbar, "🧼 スキャン色抜き・OCR", self.open_scan_clean_ocr_dialog)
+        act_ocr = self.add_action(top_toolbar, "🧼 色抜き・OCR", self.open_scan_clean_ocr_dialog)
         act_ocr.setShortcut(QKeySequence("Ctrl+Shift+O"))
         act_ocr.setToolTip("スキャンした明細から黄・赤・青の背景や点々を消し、Windows標準OCRで文字認識します (Ctrl+Shift+O)")
 
@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
 
         self.add_action(top_toolbar, "🔍 拡大", self.viewer.zoom_in)
         self.add_action(top_toolbar, "🔎 縮小", self.viewer.zoom_out)
-        self.add_action(top_toolbar, "画面に合わせる", self.viewer.fit_page)
+        self.add_action(top_toolbar, "全体表示", self.viewer.fit_page)
 
         top_toolbar.addSeparator()
 
@@ -294,8 +294,8 @@ class MainWindow(QMainWindow):
 
         self.edit_search = QLineEdit(self)
         self.edit_search.setPlaceholderText("文字を検索 (Ctrl+F)")
-        self.edit_search.setMinimumWidth(150)
-        self.edit_search.setMaximumWidth(220)
+        self.edit_search.setMinimumWidth(110)
+        self.edit_search.setMaximumWidth(160)
         self.edit_search.returnPressed.connect(self._on_search_return_pressed)
         top_toolbar.addWidget(self.edit_search)
 
@@ -338,7 +338,7 @@ class MainWindow(QMainWindow):
             top_toolbar.addSeparator()
             act_default_app = self.add_action(
                 top_toolbar,
-                "⚙ 既定のPDFに設定",
+                "⚙ 既定アプリに設定",
                 self.setup_as_default_pdf_app,
             )
             act_default_app.setToolTip("Windowsの既定のPDFアプリに登録します")
@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
             ("🖍✕ マーカー消去", "highlight_erase"),
             ("🔲 範囲墨消し", "box_erase"),
             ("🧽 消しゴム", "erase"),
-            ("⌨ テキスト（既存文字編集・追加）", "type"),
+            ("⌨ テキスト編集", "type"),
             ("🧹 テキスト消去", "text_erase"),
             ("🎯 範囲OCR", "region_ocr"),
         ]
