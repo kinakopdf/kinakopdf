@@ -383,7 +383,8 @@ class MainWindow(QMainWindow):
                 action.setChecked(True)
             elif mode == "fold":
                 action.setToolTip(
-                    "ページの一部の横帯を非表示にして下を詰めて表示します"
+                    "折りたたみたい場所を左上から右下にドラッグしてください。"
+                    "横長のドラッグで横帯、縦長のドラッグで縦帯を非表示にして詰めて表示します"
                     "（表示だけ・PDFは変わりません。もう一度押すと解除します）"
                 )
             elif mode == "region_ocr":
@@ -803,7 +804,7 @@ class MainWindow(QMainWindow):
             self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewer.viewport().setCursor(Qt.CursorShape.CrossCursor)
             msg = (
-                "折りたたみモード：非表示にしたい帯をドラッグで指定します"
+                "折りたたみモード：折りたたみたい場所を左上から右下にドラッグしてください"
                 "（横長のドラッグで横帯、縦長のドラッグで縦帯。帯の分だけ詰めて表示されます。"
                 "PDF自体は変わりません。折りたたみ中は、もう一度ボタンを押すと解除します）"
             )
