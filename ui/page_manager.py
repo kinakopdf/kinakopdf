@@ -34,6 +34,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -1074,6 +1075,14 @@ class PageManager(QDockWidget):
     def on_item_clicked(self, item):
         viewer = self.main.viewer
         if not viewer.current_pdf:
+            return
+
+        # Ctrl/Shift クリックは選択だけを変更し、ページ移動はしない。
+        # （修飾キーなしの通常クリックだけがページ移動する）
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        ):
             return
 
         selected_rows = [self.list_widget.row(i) for i in self.list_widget.selectedItems()]

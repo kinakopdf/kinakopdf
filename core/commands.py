@@ -365,6 +365,97 @@ class CropPageCommand(BaseCommand):
         viewer.notify_pages_updated([self.page_idx])
 
 
+class CropPagesCommand(BaseCommand):
+    """複数ページのトリミングを1回の Undo 単位でまとめて行うコマンド。
+
+    entries は (page_idx, old_cropbox, new_cropbox) の一覧。
+    各ページの cropbox をまとめて設定し、描画は最後に1回だけ行う。
+    """
+
+    def __init__(self, entries):
+        super().__init__()
+        self.entries = [
+            (int(page_idx), fitz.Rect(old_cropbox), fitz.Rect(new_cropbox))
+            for page_idx, old_cropbox, new_cropbox in entries
+        ]
+
+    def _apply(self, viewer, use_new):
+        doc = viewer.current_pdf
+        if doc is None:
+            logger.debug("CropPagesCommand: no document; no-op")
+            return []
+        affected = []
+        with FITZ_LOCK:
+            for page_idx, old_cropbox, new_cropbox in self.entries:
+                if not (0 <= page_idx < len(doc)):
+                    logger.debug("CropPagesCommand: page_idx %s out of range; skip", page_idx)
+                    continue
+                doc[page_idx].set_cropbox(new_cropbox if use_new else old_cropbox)
+                affected.append(page_idx)
+        if not affected:
+            return affected
+        _set_current_page_safe(viewer, viewer.current_page_idx)
+        viewer.render_page(fit_view=True, rebuild_base=True)
+        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
+        viewer.notify_pages_updated(affected)
+        return affected
+
+    def undo(self, viewer):
+        self._apply(viewer, False)
+
+    def redo(self, viewer):
+        self._apply(viewer, True)
+
+
+class AddAnnotationsMultiPageCommand(BaseCommand):
+    """同じ注釈を複数ページへ追加するのを1回の Undo 単位で行うコマンド。
+
+    entries は (page_idx, annotation) の一覧。undo では各ページの
+    末尾から同じ注釈を探して削除する。
+    """
+
+    def __init__(self, entries):
+        super().__init__()
+        self.entries = [
+            (int(page_idx), copy.deepcopy(annotation))
+            for page_idx, annotation in entries
+        ]
+
+    def _apply(self, viewer, adding):
+        affected = []
+        for page_idx, annotation in self.entries:
+            ann_list = viewer.page_annotations.setdefault(page_idx, [])
+            if adding:
+                ann_list.append(copy.deepcopy(annotation))
+            else:
+                found_idx = _find_annotation_from_end(ann_list, annotation)
+                if found_idx < 0:
+                    logger.debug(
+                        "AddAnnotationsMultiPageCommand.undo: annotation not found on page %s; skip",
+                        page_idx,
+                    )
+                    continue
+                ann_list.pop(found_idx)
+                adjust_updated_after_on_remove(ann_list, found_idx)
+            affected.append(page_idx)
+        if not affected:
+            return
+        page_changed = viewer.current_page_idx not in affected
+        rebuild = page_changed or any(
+            annotation_affects_base_pdf_text(ann) for _, ann in self.entries
+        )
+        _set_current_page_safe(viewer, viewer.current_page_idx)
+        viewer.render_page(fit_view=False, rebuild_base=rebuild)
+        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
+        viewer.notify_pages_updated(affected)
+
+    def undo(self, viewer):
+        self._apply(viewer, False)
+
+    def redo(self, viewer):
+        self._apply(viewer, True)
+
+
 class RotatePageCommand(BaseCommand):
     def __init__(self, page_idx, old_rotation, new_rotation):
         super().__init__()

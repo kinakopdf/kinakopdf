@@ -111,6 +111,15 @@ class MainWindow(QMainWindow):
 
         self.viewer.pagesUpdated.connect(self.page_manager.update_thumbnails)
         self.viewer.pageSelectionChanged.connect(self.page_manager.sync_selection)
+        self.viewer.batchStatusMessage.connect(self.statusBar().showMessage)
+        self.viewer.selected_pages_provider = (
+            lambda: sorted(
+                {
+                    self.page_manager.list_widget.row(item)
+                    for item in self.page_manager.list_widget.selectedItems()
+                }
+            )
+        )
         self.viewer.statusUpdated.connect(self.update_window_title)
         self.viewer.filesDroppedOnViewer.connect(self.on_files_dropped_on_viewer)
         self.viewer.fontSizeChanged.connect(self._sync_font_spinbox)

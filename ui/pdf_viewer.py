@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QGraphicsTextItem,
     QGraphicsView,
     QMainWindow,
+    QMessageBox,
 )
 
 from core import (
@@ -62,9 +63,19 @@ from core import (
     point_to_segment_distance,
 )
 from ui import rgb_tuple_to_qcolor
+from core.batch_apply import (
+    SCOPE_ALL,
+    SCOPE_CURRENT,
+    SCOPE_SELECTED,
+    format_batch_result,
+    partition_compatible_pages,
+    resolve_target_pages,
+)
 from core.commands import (
     AddAnnotationCommand,
+    AddAnnotationsMultiPageCommand,
     CropPageCommand,
+    CropPagesCommand,
     EditAnnotationCommand,
     HistoryManager,
     RemoveAnnotationCommand,
@@ -181,6 +192,7 @@ class PDFViewer(QGraphicsView):
     calcSelectionChanged = pyqtSignal()
     escapePressed = pyqtSignal()
     searchStatusChanged = pyqtSignal(int, int)
+    batchStatusMessage = pyqtSignal(str)
     _cached_font_family = None
 
     def __init__(self, parent=None):
@@ -277,6 +289,9 @@ class PDFViewer(QGraphicsView):
         self._cached_tokens_key = None
         self._pdf_tokens_cache: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
         self.region_ocr_controller = None
+        # ページ一覧で選択中のページ番号を返すコールバック（MainWindow が設定）。
+        # 未設定の場合は今のページだけが選択対象になる。
+        self.selected_pages_provider = None
 
     @property
     def current_annotations(self):
@@ -2962,6 +2977,160 @@ class PDFViewer(QGraphicsView):
                 self._update_hover_and_text_guide(raw_pos, ctrl_pressed=ctrl_held)
             super().mouseMoveEvent(event)
 
+    # ==========================================
+    # 複数ページへの一括適用（トリミング・範囲墨消し）
+    # ==========================================
+
+    def _selected_page_rows(self):
+        """ページ一覧で選択中のページ番号（0始まり）を返す。"""
+        if self.selected_pages_provider is not None:
+            try:
+                rows = [int(r) for r in self.selected_pages_provider()]
+            except Exception:
+                logger.debug("selected_pages_provider failed", exc_info=True)
+                rows = []
+            return rows
+        return []
+
+    def _page_geometries(self):
+        """全ページの形状 (mediabox x0, y0, x1, y1, 回転角) の一覧を返す。"""
+        geometries = []
+        if not self.current_pdf:
+            return geometries
+        with FITZ_LOCK:
+            for page in self.current_pdf:
+                mb = page.mediabox
+                geometries.append(
+                    (float(mb.x0), float(mb.y0), float(mb.x1), float(mb.y1), int(page.rotation) % 360)
+                )
+        return geometries
+
+    def _ask_batch_scope(self, label, selected_count, page_count):
+        """矩形確定後に適用範囲を選ぶ小さなダイアログを出す。
+
+        戻り値は "current" / "selected" / "all" のいずれか。
+        キャンセルされた場合は None を返す。
+        """
+        msg = QMessageBox(self)
+        msg.setWindowTitle("適用範囲の選択")
+        msg.setText(f"{label}をどのページに適用しますか？")
+        btn_current = msg.addButton("このページだけ", QMessageBox.ButtonRole.AcceptRole)
+        btn_selected = msg.addButton(
+            f"選択中のページ（{selected_count}ページ）",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        btn_all = msg.addButton("すべてのページ", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(btn_selected if selected_count > 1 else btn_current)
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is btn_current:
+            return SCOPE_CURRENT
+        if clicked is btn_selected:
+            return SCOPE_SELECTED
+        if clicked is btn_all:
+            return SCOPE_ALL
+        return None
+
+    def _resolve_batch_targets(self, label):
+        """適用範囲ダイアログを出し、(適用ページ一覧, スキップ一覧) を返す。
+
+        1ページしかない文書ではダイアログを出さず今のページだけを返す。
+        キャンセルされた場合は (None, None) を返す。
+        """
+        doc = self.current_pdf
+        if not doc:
+            return None, None
+        page_count = len(doc)
+        if page_count <= 1:
+            return [self.current_page_idx], []
+        selected_rows = self._selected_page_rows()
+        scope = self._ask_batch_scope(label, len(selected_rows) or 1, page_count)
+        if scope is None:
+            return None, None
+        targets = resolve_target_pages(
+            scope, self.current_page_idx, selected_rows, page_count
+        )
+        geometries = self._page_geometries()
+        applicable, skipped = partition_compatible_pages(
+            geometries, self.current_page_idx, targets
+        )
+        return applicable, skipped
+
+    def _apply_crop_to_pages(self, raw_crop):
+        """トリミング矩形（PDF座標）を選択範囲のページへ適用する。
+
+        戻り値は適用したページ数。キャンセル時は None。
+        """
+        doc = self.current_pdf
+        if not doc:
+            return None
+        applicable, skipped = self._resolve_batch_targets("トリミング")
+        if applicable is None:
+            return None
+        if len(applicable) == 1 and applicable[0] == self.current_page_idx:
+            with FITZ_LOCK:
+                old_cropbox = fitz.Rect(doc[self.current_page_idx].cropbox)
+                doc[self.current_page_idx].set_cropbox(raw_crop)
+            self.history.push(
+                CropPageCommand(self.current_page_idx, old_cropbox, raw_crop)
+            )
+            self.render_page(fit_view=True, rebuild_base=True)
+            self.notify_pages_updated([self.current_page_idx])
+            return 1
+        entries = []
+        with FITZ_LOCK:
+            for idx in applicable:
+                entries.append(
+                    (idx, fitz.Rect(doc[idx].cropbox), fitz.Rect(raw_crop))
+                )
+                doc[idx].set_cropbox(raw_crop)
+        self.history.push(CropPagesCommand(entries))
+        self.render_page(fit_view=True, rebuild_base=True)
+        self.notify_pages_updated(applicable)
+        self.batchStatusMessage.emit(
+            format_batch_result("トリミング", len(applicable), len(skipped))
+        )
+        return len(applicable)
+
+    def _apply_box_erase_to_pages(self, raw_rect):
+        """範囲墨消し矩形（PDF座標）を選択範囲のページへ適用する。
+
+        戻り値は適用したページ数。キャンセル時は None。
+        複数ページへの墨消しは元に戻せない削除のため、適用前に確認する。
+        """
+        applicable, skipped = self._resolve_batch_targets("範囲墨消し")
+        if applicable is None:
+            return None
+        annot = {
+            "type": "box_erase",
+            "rect": (raw_rect.x0, raw_rect.y0, raw_rect.x1, raw_rect.y1),
+        }
+        if len(applicable) == 1 and applicable[0] == self.current_page_idx:
+            self.current_annotations.append(annot)
+            self.history.push(AddAnnotationCommand(self.current_page_idx, annot))
+            self.render_page(fit_view=False, rebuild_base=False)
+            self.notify_pages_updated([self.current_page_idx])
+            return 1
+        reply = QMessageBox.question(
+            self,
+            "確認",
+            f"{len(applicable)}ページに墨消しを適用します。元に戻せません。よろしいですか？",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return None
+        for idx in applicable:
+            self.page_annotations.setdefault(idx, []).append(copy.deepcopy(annot))
+        self.history.push(
+            AddAnnotationsMultiPageCommand([(idx, annot) for idx in applicable])
+        )
+        self.render_page(fit_view=False, rebuild_base=False)
+        self.notify_pages_updated(applicable)
+        self.batchStatusMessage.emit(
+            format_batch_result("範囲墨消し", len(applicable), len(skipped))
+        )
+        return len(applicable)
+
     def mouseReleaseEvent(self, event):
         if self._calc_dragging and event.button() == Qt.MouseButton.LeftButton:
             self._calc_dragging = False
@@ -3051,20 +3220,10 @@ class PDFViewer(QGraphicsView):
                         raw_crop = fitz.Rect(p0.x, p0.y, p1.x, p1.y)
                         raw_crop.normalize()
                         raw_crop &= page.mediabox
-                        old_cropbox = fitz.Rect(page.cropbox)
 
                     if not raw_crop.is_empty and raw_crop.width > 5 and raw_crop.height > 5:
-                        with FITZ_LOCK:
-                            page.set_cropbox(raw_crop)
-                        self.history.push(
-                            CropPageCommand(
-                                self.current_page_idx,
-                                old_cropbox,
-                                raw_crop,
-                            )
-                        )
-                        self.render_page(fit_view=True, rebuild_base=True)
-                        self.notify_pages_updated([self.current_page_idx])
+                        if self._apply_crop_to_pages(raw_crop) is None:
+                            self.render_page(fit_view=False, rebuild_base=False)
                         return
 
                 self.render_page(fit_view=False, rebuild_base=False)
@@ -3131,15 +3290,12 @@ class PDFViewer(QGraphicsView):
                     raw_rect = fitz.Rect(p0.x, p0.y, p1.x, p1.y)
                     raw_rect.normalize()
 
-                    annot = {
-                        "type": "box_erase",
-                        "rect": (raw_rect.x0, raw_rect.y0, raw_rect.x1, raw_rect.y1),
-                    }
-                    self.current_annotations.append(annot)
-                    self.history.push(AddAnnotationCommand(self.current_page_idx, annot))
-
-                self.render_page(fit_view=False, rebuild_base=False)
-                self.notify_pages_updated([self.current_page_idx])
+                    if self._apply_box_erase_to_pages(raw_rect) is None:
+                        self.render_page(fit_view=False, rebuild_base=False)
+                        self.notify_pages_updated([self.current_page_idx])
+                else:
+                    self.render_page(fit_view=False, rebuild_base=False)
+                    self.notify_pages_updated([self.current_page_idx])
 
             elif self.mode in ("draw", "erase") and self.current_path_item is not None:
                 raw_pos = self._clamp_to_scene(self.mapToScene(event.position().toPoint()))
