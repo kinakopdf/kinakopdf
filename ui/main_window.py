@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
 
         modes = [
             ("✋ 閲覧", "view"),
+            ("📋 テキスト選択", "text_select"),
             ("✂ トリミング", "crop"),
             ("🗜 折りたたみ", "fold"),
             ("✏ ペン", "draw"),
@@ -381,6 +382,12 @@ class MainWindow(QMainWindow):
             action.setData(mode)
             if mode == "view":
                 action.setChecked(True)
+            elif mode == "text_select":
+                action.setToolTip(
+                    "ドラッグで文字を選択すると、近くにコピーボタンが表示されます。"
+                    "ボタンを押すと選択中のテキストをコピーしてポップアップが閉じます"
+                    "（Escキー・他の場所のクリックでも閉じます）"
+                )
             elif mode == "fold":
                 action.setToolTip(
                     "折りたたみたい場所を左上から右下にドラッグしてください。"
@@ -497,6 +504,7 @@ class MainWindow(QMainWindow):
         self.edit_search.clear()
         self.viewer.clear_search_results()
         self.viewer.clear_calc_selection()
+        self.viewer.clear_text_selection()
 
     def _on_search_clear_clicked(self):
         self.edit_search.clear()
@@ -778,6 +786,13 @@ class MainWindow(QMainWindow):
             self.viewer.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             self.viewer.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
             msg = "閲覧モード（ホイールでページ送り / Ctrl+ホイールで拡大縮小）"
+        elif mode == "text_select":
+            self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.viewer.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            msg = (
+                "テキスト選択モード：ドラッグで文字を選択すると、近くにコピーボタンが出ます。"
+                "ボタンを押すとコピーして閉じます（Esc・他の場所のクリックで解除）"
+            )
         elif mode == "highlight":
             self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewer.viewport().setCursor(Qt.CursorShape.CrossCursor)
