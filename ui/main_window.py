@@ -803,9 +803,9 @@ class MainWindow(QMainWindow):
             self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.viewer.viewport().setCursor(Qt.CursorShape.CrossCursor)
             msg = (
-                "折りたたみモード：非表示にしたい横帯をドラッグで指定します"
-                "（帯の高さ分だけ下が上に詰めて表示されます。PDF自体は変わりません。"
-                "折りたたみ中は、もう一度ボタンを押すと解除します）"
+                "折りたたみモード：非表示にしたい帯をドラッグで指定します"
+                "（横長のドラッグで横帯、縦長のドラッグで縦帯。帯の分だけ詰めて表示されます。"
+                "PDF自体は変わりません。折りたたみ中は、もう一度ボタンを押すと解除します）"
             )
         elif mode == "box_erase":
             self.viewer.setDragMode(QGraphicsView.DragMode.NoDrag)

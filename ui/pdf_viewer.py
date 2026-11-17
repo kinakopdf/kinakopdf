@@ -84,13 +84,22 @@ from core.commands import (
     RotatePageCommand,
 )
 from core.fold import (
+    FOLD_HORIZONTAL,
+    FOLD_VERTICAL,
+    clamp_fold_band_to_axis,
     clamp_fold_band_to_page,
+    decide_fold_orientation,
+    fold_band_pixel_cols,
     fold_band_pixel_rows,
     fold_display_height,
+    fold_display_width,
+    folded_x_to_view_x,
     folded_y_to_view_y,
     validate_fold_band,
-    view_point_in_band,
-    view_rect_intersects_band,
+    validate_fold_band_axis,
+    view_coord_in_band,
+    view_rect_intersects_band_axis,
+    view_x_to_folded_x,
     view_y_to_folded_y,
 )
 from core.geometry import (
@@ -303,9 +312,10 @@ class PDFViewer(QGraphicsView):
         # ページ一覧で選択中のページ番号を返すコールバック（MainWindow が設定）。
         # 未設定の場合は今のページだけが選択対象になる。
         self.selected_pages_provider = None
-        # 表示だけの折りたたみ帯（ページ番号 -> (y0, y1) 表示座標系）。
+        # 表示だけの折りたたみ帯（ページ番号 -> (向き, a0, a1) 表示座標系）。
+        # 向き "h" は横帯 (y0, y1)、向き "v" は縦帯 (x0, x1)。
         # PDFファイルには一切書き込まない。表示だけの状態。
-        self._fold_bands: Dict[int, Tuple[float, float]] = {}
+        self._fold_bands: Dict[int, Tuple[str, float, float]] = {}
 
     @property
     def current_annotations(self):
@@ -359,12 +369,12 @@ class PDFViewer(QGraphicsView):
             self.region_ocr_controller.cancel_drag()
 
     # ==========================================
-    # 表示だけの折りたたみ（横帯を非表示にして下を詰めて表示）
-    # PDFファイルには一切書き込まない。表示だけの状態。
+    # 表示だけの折りたたみ（帯を非表示にして詰めて表示）
+    # 横帯は上下を詰め、縦帯は左右を詰める。PDFファイルには一切書き込まない。表示だけの状態。
     # ==========================================
 
     def _fold_band_for_page(self, page_idx=None):
-        """指定ページの折りたたみ帯（(y0, y1) 表示座標系）を返す。なければ None。
+        """指定ページの折りたたみ帯（(向き, a0, a1) 表示座標系）を返す。なければ None。
 
         ページ形状が変わって帯が無効になっていたら破棄する。
         """
@@ -372,42 +382,75 @@ class PDFViewer(QGraphicsView):
         band = self._fold_bands.get(idx)
         if band is None or self.page_rect is None:
             return None
-        err = validate_fold_band(
-            self.page_rect.y(), self.page_rect.height(), band[0], band[1]
-        )
+        orientation, a0, a1 = band[0], float(band[1]), float(band[2])
+        if orientation == FOLD_VERTICAL:
+            err = validate_fold_band_axis(
+                self.page_rect.x(), self.page_rect.width(), a0, a1, "幅"
+            )
+        else:
+            err = validate_fold_band(
+                self.page_rect.y(), self.page_rect.height(), a0, a1
+            )
         if err is not None:
             self._fold_bands.pop(idx, None)
             return None
-        return band
+        return (orientation, a0, a1)
 
     def _fold_display_height(self):
         """折りたたみ後の表示上のページ高さ（表示座標系の単位）を返す。"""
         if self.page_rect is None:
             return 0.0
-        return fold_display_height(
-            self.page_rect.height(), self._fold_band_for_page()
-        )
+        band = self._fold_band_for_page()
+        if band is not None and band[0] == FOLD_HORIZONTAL:
+            return fold_display_height(self.page_rect.height(), (band[1], band[2]))
+        return float(self.page_rect.height())
+
+    def _fold_display_width(self):
+        """折りたたみ後の表示上のページ幅（表示座標系の単位）を返す。"""
+        if self.page_rect is None:
+            return 0.0
+        band = self._fold_band_for_page()
+        if band is not None and band[0] == FOLD_VERTICAL:
+            return fold_display_width(self.page_rect.width(), (band[1], band[2]))
+        return float(self.page_rect.width())
+
+    def _display_scale(self):
+        """表示座標系の長さをシーン座標に換算する倍率（= render_scale 相当）。"""
+        display_w = self._fold_display_width()
+        if display_w <= 0 or self.pixmap_width <= 0:
+            return 0.0
+        return self.pixmap_width / display_w
 
     def has_fold_band(self, page_idx=None):
         return self._fold_band_for_page(page_idx) is not None
 
-    def set_fold_band_for_current_page(self, y0, y1):
+    def set_fold_band_for_current_page(self, a0, a1, orientation=FOLD_HORIZONTAL):
         """今のページに折りたたみ帯を設定する。
 
-        成功したら None、無効なら理由の文言を返す。
+        向き "h" の場合は a0=y0, a1=y1（横帯）、向き "v" の場合は
+        a0=x0, a1=x1（縦帯）。成功したら None、無効なら理由の文言を返す。
         設定時は表示を折りたたみ後の状態で描き直す。
         """
         if self.page_rect is None or not self.current_pdf:
             return "ページが開かれていません。"
-        band = clamp_fold_band_to_page(
-            self.page_rect.y(), self.page_rect.height(), y0, y1
-        )
-        err = validate_fold_band(
-            self.page_rect.y(), self.page_rect.height(), band[0], band[1]
-        )
+        if orientation == FOLD_VERTICAL:
+            band = clamp_fold_band_to_axis(
+                self.page_rect.x(), self.page_rect.width(), a0, a1
+            )
+            err = validate_fold_band_axis(
+                self.page_rect.x(), self.page_rect.width(), band[0], band[1], "幅"
+            )
+        else:
+            orientation = FOLD_HORIZONTAL
+            band = clamp_fold_band_to_page(
+                self.page_rect.y(), self.page_rect.height(), a0, a1
+            )
+            err = validate_fold_band(
+                self.page_rect.y(), self.page_rect.height(), band[0], band[1]
+            )
         if err is not None:
             return err
-        self._fold_bands[self.current_page_idx] = band
+        self._fold_bands[self.current_page_idx] = (orientation, band[0], band[1])
         self.render_page(fit_view=False, rebuild_base=True)
         return None
 
@@ -432,8 +475,10 @@ class PDFViewer(QGraphicsView):
             self._page_rotation,
             fitz.Rect(raw_rect),
         )
-        return view_rect_intersects_band(
-            (view_rect.x0, view_rect.y0, view_rect.x1, view_rect.y1), band
+        return view_rect_intersects_band_axis(
+            (view_rect.x0, view_rect.y0, view_rect.x1, view_rect.y1),
+            (band[1], band[2]),
+            band[0],
         )
 
     def _view_point_in_fold(self, raw_point):
@@ -447,7 +492,9 @@ class PDFViewer(QGraphicsView):
             self._page_rotation,
             fitz.Point(raw_point),
         )
-        return view_point_in_band(view_pt.y, band)
+        if band[0] == FOLD_VERTICAL:
+            return view_coord_in_band(view_pt.x, (band[1], band[2]))
+        return view_coord_in_band(view_pt.y, (band[1], band[2]))
 
     def _refresh_hover_from_global_cursor(self):
         vp_pos = self.viewport().mapFromGlobal(QCursor.pos())
@@ -1199,16 +1246,19 @@ class PDFViewer(QGraphicsView):
         ):
             return fitz.Point(0, 0)
 
-        sx = self.page_rect.width() / self.pixmap_width
+        sx = self._fold_display_width() / self.pixmap_width
         sy = self._fold_display_height() / self.pixmap_height
 
         vx = self.page_rect.x() + pos.x() * sx
         vy = self.page_rect.y() + pos.y() * sy
 
-        # 折りたたみ中は、詰めた後の表示 y を元の表示 y に戻す。
+        # 折りたたみ中は、詰めた後の表示座標を元の表示座標に戻す。
         band = self._fold_band_for_page()
         if band is not None:
-            vy = folded_y_to_view_y(vy, band)
+            if band[0] == FOLD_VERTICAL:
+                vx = folded_x_to_view_x(vx, (band[1], band[2]))
+            else:
+                vy = folded_y_to_view_y(vy, (band[1], band[2]))
 
         return view_point_to_raw_pdf_from_geom(
             self._page_crop_rect,
@@ -1233,17 +1283,21 @@ class PDFViewer(QGraphicsView):
             point,
         )
 
-        # 折りたたみ中は、帯より下の表示 y を帯の高さ分だけ上に詰める。
+        # 折りたたみ中は、帯の先の表示座標を帯の分だけ詰める。
         band = self._fold_band_for_page()
+        vx = view_pt.x
         vy = view_pt.y
         if band is not None:
-            vy = view_y_to_folded_y(vy, band)
+            if band[0] == FOLD_VERTICAL:
+                vx = view_x_to_folded_x(vx, (band[1], band[2]))
+            else:
+                vy = view_y_to_folded_y(vy, (band[1], band[2]))
 
-        sx = self.pixmap_width / self.page_rect.width()
+        sx = self.pixmap_width / self._fold_display_width()
         sy = self.pixmap_height / self._fold_display_height()
 
         return (
-            (view_pt.x - self.page_rect.x()) * sx,
+            (vx - self.page_rect.x()) * sx,
             (vy - self.page_rect.y()) * sy,
         )
 
@@ -1256,7 +1310,7 @@ class PDFViewer(QGraphicsView):
             ann_rot = cur_page_rot
         ann_rot = ann_rot % 360
 
-        scale_factor = self.pixmap_width / self.page_rect.width()
+        scale_factor = self._display_scale()
         dy = fontsize * scale_factor * 0.88
         rel_angle_rad = math.radians((cur_page_rot - ann_rot) % 360)
 
@@ -1744,7 +1798,7 @@ class PDFViewer(QGraphicsView):
         if text_item is None or self.page_rect is None or self.page_rect.width() == 0:
             return
 
-        scale_factor = self.pixmap_width / self.page_rect.width()
+        scale_factor = self._display_scale()
         fontsize = float(ann.get("fontsize", self.current_font_size))
 
         poly = text_item.mapToScene(text_item.boundingRect())
@@ -1917,7 +1971,7 @@ class PDFViewer(QGraphicsView):
 
         self._restore_mode_cursor()
 
-        scale_factor = self.pixmap_width / self.page_rect.width()
+        scale_factor = self._display_scale()
 
         if self.mode == "draw":
             if self.pen_eraser_active or shift_pressed:
@@ -2038,7 +2092,9 @@ class PDFViewer(QGraphicsView):
             page.rect.width,
             page.rect.height,
         )
-        self.pixmap_width = max(1, int(round(self.page_rect.width() * self.render_scale)))
+        self.pixmap_width = max(
+            1, int(round(self._fold_display_width() * self.render_scale))
+        )
         # 折りたたみ中は帯の高さ分だけ表示が短くなる。
         self.pixmap_height = max(
             1, int(round(self._fold_display_height() * self.render_scale))
@@ -2092,13 +2148,14 @@ class PDFViewer(QGraphicsView):
 
         target_phys_w, target_phys_h = self._compute_target_physical_size()
 
-        # 折りたたみ中は、表示の高さ（帯を除いた高さ）に対する倍率で
-        # ページ全体を描画し、後で帯の行を切り取って詰める。
+        # 折りたたみ中は、表示の幅・高さ（帯を除いた大きさ）に対する倍率で
+        # ページ全体を描画し、後で帯の行・列を切り取って詰める。
+        display_w = self._fold_display_width()
         display_h = self._fold_display_height()
         exact_scale_x, exact_scale_y = clamp_render_scales(
             self.page_rect.width(),
             self.page_rect.height(),
-            target_phys_w / self.page_rect.width(),
+            target_phys_w / display_w,
             target_phys_h / display_h,
         )
 
@@ -2123,9 +2180,35 @@ class PDFViewer(QGraphicsView):
             ).copy()
 
             band = self._fold_band_for_page()
-            if band is not None:
+            if band is not None and band[0] == FOLD_VERTICAL:
+                left_col, right_col = fold_band_pixel_cols(
+                    self.page_rect.x(), (band[1], band[2]), exact_scale_x
+                )
+                left_col = max(0, min(left_col, pix.width))
+                right_col = max(left_col, min(right_col, pix.width))
+                folded_w = pix.width - (right_col - left_col)
+                if 0 < right_col - left_col < pix.width and folded_w > 0:
+                    folded = QImage(
+                        folded_w, pix.height, QImage.Format.Format_RGB888
+                    )
+                    painter = QPainter(folded)
+                    # 帯より左の部分
+                    painter.drawImage(0, 0, qimg, 0, 0, left_col, pix.height)
+                    # 帯より右の部分を隙間なく左に詰める
+                    painter.drawImage(
+                        left_col,
+                        0,
+                        qimg,
+                        right_col,
+                        0,
+                        pix.width - right_col,
+                        pix.height,
+                    )
+                    painter.end()
+                    qimg = folded
+            elif band is not None:
                 top_row, bottom_row = fold_band_pixel_rows(
-                    self.page_rect.y(), band, exact_scale_y
+                    self.page_rect.y(), (band[1], band[2]), exact_scale_y
                 )
                 top_row = max(0, min(top_row, pix.height))
                 bottom_row = max(top_row, min(bottom_row, pix.height))
@@ -2299,7 +2382,7 @@ class PDFViewer(QGraphicsView):
         if self.page_rect is None or self.page_rect.width() == 0:
             return
 
-        scale_factor = self.pixmap_width / self.page_rect.width()
+        scale_factor = self._display_scale()
         cur_page_rot = self._page_rotation
         ann_list = self.current_annotations
 
@@ -2502,7 +2585,7 @@ class PDFViewer(QGraphicsView):
                 new_base_pos = pdf_token["baseline_pos"]
             else:
                 bx, by = self.pdf_to_scene(fitz.Point(*pdf_token["baseline_pos"]))
-                scale_factor = self.pixmap_width / self.page_rect.width()
+                scale_factor = self._display_scale()
                 dy = new_fontsize * scale_factor * 0.88
                 cur_page_rot = self._page_rotation
                 token_rot = int(pdf_token["rotation"]) % 360
@@ -2589,7 +2672,7 @@ class PDFViewer(QGraphicsView):
                     ) % 360
                     if "baseline_pos" in old_ann:
                         bx, by = self.pdf_to_scene(fitz.Point(*old_ann["baseline_pos"]))
-                        scale_factor = self.pixmap_width / self.page_rect.width()
+                        scale_factor = self._display_scale()
                         dy = new_fontsize * scale_factor * 0.88
                         cur_page_rot = self._page_rotation
                         rel_angle_rad = math.radians((cur_page_rot - ann_rot) % 360)
@@ -3083,7 +3166,7 @@ class PDFViewer(QGraphicsView):
             self.current_path.moveTo(pos)
             self.current_path_item = QGraphicsPathItem(self.current_path)
 
-            scale_factor = self.pixmap_width / self.page_rect.width()
+            scale_factor = self._display_scale()
 
             if self.mode == "draw" and self.pen_eraser_active:
                 width = max(6.0, 10.0 * scale_factor)
@@ -3159,13 +3242,24 @@ class PDFViewer(QGraphicsView):
         ):
             clamped_pos = self._clamp_to_scene(raw_pos)
             if self.mode == "fold":
-                # 折りたたみ帯は横帯なので、プレビューはページ全幅で表示する。
-                rect = QRectF(
-                    0.0,
-                    min(self.drag_start_pos.y(), clamped_pos.y()),
-                    float(self.pixmap_width),
-                    abs(clamped_pos.y() - self.drag_start_pos.y()),
-                )
+                # ドラッグの形で向きを決める。縦長なら縦帯（ページ全高）、
+                # 横長・ほぼ正方形なら横帯（ページ全幅）のプレビューを表示する。
+                drag_w = abs(clamped_pos.x() - self.drag_start_pos.x())
+                drag_h = abs(clamped_pos.y() - self.drag_start_pos.y())
+                if decide_fold_orientation(drag_w, drag_h) == FOLD_VERTICAL:
+                    rect = QRectF(
+                        min(self.drag_start_pos.x(), clamped_pos.x()),
+                        0.0,
+                        drag_w,
+                        float(self.pixmap_height),
+                    )
+                else:
+                    rect = QRectF(
+                        0.0,
+                        min(self.drag_start_pos.y(), clamped_pos.y()),
+                        float(self.pixmap_width),
+                        drag_h,
+                    )
             else:
                 rect = QRectF(self.drag_start_pos, clamped_pos).normalized()
             self.drag_rect_item.setRect(rect)
@@ -3514,7 +3608,7 @@ class PDFViewer(QGraphicsView):
                 rect = self.drag_rect_item.rect()
                 self.drag_rect_item = None
 
-                if rect.height() > 3:
+                if rect.width() > 3 or rect.height() > 3:
                     p0 = self.scene_to_pdf(rect.topLeft())
                     p1 = self.scene_to_pdf(rect.bottomRight())
                     raw_rect = fitz.Rect(p0.x, p0.y, p1.x, p1.y)
@@ -3525,16 +3619,31 @@ class PDFViewer(QGraphicsView):
                         self._page_rotation,
                         raw_rect,
                     )
-                    err = self.set_fold_band_for_current_page(
-                        view_rect.y0, view_rect.y1
+                    # ドラッグの形で向きを決める。縦長なら縦帯、横長・
+                    # ほぼ正方形なら横帯（従来動作）。
+                    orientation = decide_fold_orientation(
+                        view_rect.width, view_rect.height
                     )
+                    if orientation == FOLD_VERTICAL:
+                        err = self.set_fold_band_for_current_page(
+                            view_rect.x0, view_rect.x1, FOLD_VERTICAL
+                        )
+                        band_size = view_rect.x1 - view_rect.x0
+                        band_label = "縦帯"
+                        unit = "幅"
+                    else:
+                        err = self.set_fold_band_for_current_page(
+                            view_rect.y0, view_rect.y1, FOLD_HORIZONTAL
+                        )
+                        band_size = view_rect.y1 - view_rect.y0
+                        band_label = "横帯"
+                        unit = "高さ"
                     if err is not None:
                         self._show_status_message(err)
                         self.render_page(fit_view=False, rebuild_base=False)
                     else:
-                        band_h = view_rect.y1 - view_rect.y0
                         self._show_status_message(
-                            f"折りたたみ表示にしました（{format_pt(band_h)}pt分を非表示）。"
+                            f"折りたたみ表示にしました（{band_label}・{format_pt(band_size)}pt分の{unit}を非表示）。"
                             "解除するにはもう一度「折りたたみ」ボタンを押してください。"
                         )
                 else:
