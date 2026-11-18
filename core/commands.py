@@ -890,3 +890,66 @@ class ReplacePagesContentCommand(BaseCommand):
         viewer.render_page(fit_view=False, rebuild_base=True)
         viewer.pageSelectionChanged.emit(viewer.current_page_idx)
         viewer.notify_pages_updated(self.page_indices)
+
+
+class ReplaceTocCommand(BaseCommand):
+    """しおり（TOC）の変更を Undo/Redo 可能にするコマンド。
+
+    ページ内容は変えず、文書のしおりだけを差し替える。
+    toc は [[階層, タイトル, 1始まりページ], ...] のリスト。
+    """
+
+    def __init__(self, old_toc, new_toc):
+        super().__init__()
+        self.old_toc = [list(e) for e in (old_toc or [])]
+        self.new_toc = [list(e) for e in (new_toc or [])]
+
+    def _apply(self, viewer, toc):
+        doc = viewer.current_pdf
+        if doc is None:
+            return
+        with FITZ_LOCK:
+            doc.set_toc([list(e) for e in toc])
+
+    def redo(self, viewer):
+        self._apply(viewer, self.new_toc)
+
+    def undo(self, viewer):
+        self._apply(viewer, self.old_toc)
+
+
+class FillFormFieldsCommand(BaseCommand):
+    """フォーム入力を Undo/Redo 可能にするコマンド。
+
+    欄の値だけを書き換え、ページ置き換えはしない。insert_pdf でページを
+    差し替えると欄名が変わってしまう（例: 「氏名」→「氏名 [17]」）ため、
+    値のスナップショット方式にする。
+    """
+
+    def __init__(self, doc, values):
+        super().__init__()
+        self.values = {str(k): v for k, v in (values or {}).items()}
+        self.old_values = {}
+        with FITZ_LOCK:
+            for page in doc:
+                for widget in page.widgets() or []:
+                    name = widget.field_name or ""
+                    if name in self.values and name not in self.old_values:
+                        self.old_values[name] = widget.field_value
+
+    def _apply(self, viewer, values):
+        from core.trial_tools import fill_form_fields
+
+        doc = viewer.current_pdf
+        if doc is None:
+            return
+        with FITZ_LOCK:
+            fill_form_fields(doc, values)
+        viewer.render_page(fit_view=False, rebuild_base=True)
+        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
+
+    def redo(self, viewer):
+        self._apply(viewer, self.values)
+
+    def undo(self, viewer):
+        self._apply(viewer, self.old_values)

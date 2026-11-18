@@ -743,11 +743,22 @@ def show_pii_dialog(parent):
                         "保存後は復旧できません。よろしいですか？\n\n" + preview):
             return
         try:
-            res = apply_pii_redactions(doc, selections)
+            # 対象ページだけを一時文書に写し、そこで墨消ししてから
+            # ReplacePagesContentCommand で Undo 可能に適用する（監査 #1）。
+            # 一時文書のページ順に合わせて選択中のページ番号を付け直す。
+            target_pages = sorted({int(c["page"]) for c in selections if c.get("rects")})
+            page_map = {orig: pos + 1 for pos, orig in enumerate(target_pages)}
+            remapped = []
+            for sel in selections:
+                new_sel = dict(sel)
+                new_sel["page"] = page_map[int(sel["page"])]
+                remapped.append(new_sel)
+            res = parent._trial_apply_to_pages(
+                [p - 1 for p in target_pages],
+                lambda tmp: apply_pii_redactions(tmp, remapped))
         except Exception as e:
             QMessageBox.critical(dlg, "エラー", f"墨消しに失敗しました。\n{e}")
             return
-        parent._trial_mark_modified_and_refresh()
         _info(dlg, "完了",
               f"{res['redacted']} 件を墨消ししました（{res['pages']} ページ）。"
               "\n保存すると PDF に反映されます。")
@@ -914,11 +925,12 @@ def show_signature_dialog(parent):
             return
         try:
             image_bytes = Path(path).read_bytes()
-            insert_signature_image(doc, page_spin.value(), image_bytes, target_rect())
+            parent._trial_apply_to_pages(
+                [page_spin.value() - 1],
+                lambda tmp: insert_signature_image(tmp, 1, image_bytes, target_rect()))
         except Exception as e:
             QMessageBox.critical(dlg, "エラー", f"挿入に失敗しました。\n{e}")
             return
-        parent._trial_mark_modified_and_refresh()
         _info(dlg, "完了", f"{page_spin.value()}ページ目に署名画像を挿入しました。")
 
     img_insert_btn.clicked.connect(insert_image)
@@ -929,11 +941,12 @@ def show_signature_dialog(parent):
             return
         try:
             image_bytes = pad.to_png_bytes()
-            insert_signature_image(doc, page_spin.value(), image_bytes, target_rect())
+            parent._trial_apply_to_pages(
+                [page_spin.value() - 1],
+                lambda tmp: insert_signature_image(tmp, 1, image_bytes, target_rect()))
         except Exception as e:
             QMessageBox.critical(dlg, "エラー", f"挿入に失敗しました。\n{e}")
             return
-        parent._trial_mark_modified_and_refresh()
         _info(dlg, "完了", f"{page_spin.value()}ページ目に手書き署名を挿入しました。")
 
     pad_insert_btn.clicked.connect(insert_handwritten)

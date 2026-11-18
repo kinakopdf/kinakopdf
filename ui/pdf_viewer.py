@@ -2480,6 +2480,11 @@ class PDFViewer(QGraphicsView):
         self._schedule_zoom_rerender()
 
     def render_page(self, fit_view=False, rebuild_base=False):
+        # 保留中のズーム再描画タイマーを止める（監査 #6）。
+        # 止めないと fit_view 直後にタイマーが遅れて発火し、同じページを2回描く。
+        if hasattr(self, "_zoom_render_timer"):
+            self._zoom_render_timer.stop()
+
         if not self.current_pdf:
             return
 
@@ -3016,6 +3021,9 @@ class PDFViewer(QGraphicsView):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
+            # ドラッグ中のテキスト移動・描画・範囲選択もキャンセルする
+            # （監査 #5: 呼ばないとドラッグ状態のままマウスを離した時に確定してしまう）。
+            self.cancel_active_interaction()
             if self.search_results:
                 self.clear_search_results()
             self.clear_calc_selection()
@@ -3737,6 +3745,11 @@ class PDFViewer(QGraphicsView):
 
         if self.drawing and event.button() == Qt.MouseButton.LeftButton:
             self.drawing = False
+            # 破線の選択枠はここで必ずシーンから外す（監査 #4）。
+            # 従来は render_page() 頼みだったため、適用ダイアログをキャンセルした
+            # 場合など render_page() が呼ばれない経路で枠が残留した。
+            if self.drag_rect_item is not None and self.drag_rect_item.scene() is self.scene:
+                self.scene.removeItem(self.drag_rect_item)
 
             if self.mode == "crop" and self.drag_rect_item is not None:
                 rect = self.drag_rect_item.rect()

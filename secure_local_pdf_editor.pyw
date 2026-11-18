@@ -12,6 +12,7 @@ Secure Local PDF Editor - メインエントリポイント
 """
 import os
 import sys
+import threading
 import traceback
 
 from PyQt6.QtCore import QEvent, Qt, QTimer
@@ -81,12 +82,25 @@ class PDFEditorApplication(QApplication):
                 win.activateWindow()
                 return
 
-        if MainWindow._open_windows:
-            MainWindow._open_windows[-1].spawn_new_window(filepath=filepath)
+        visible_wins = [w for w in MainWindow._open_windows if w.isVisible()]
+        if visible_wins:
+            visible_wins[-1].spawn_new_window(filepath=filepath)
         else:
             win = MainWindow()
             win.show()
             QTimer.singleShot(50, lambda p=filepath: win.open_file_from_path(p))
+
+
+def _show_error_dialog(message: str):
+    """メインスレッド上で安全にエラーダイアログを表示する"""
+    app = QApplication.instance()
+    if app is not None:
+        active_win = app.activeWindow()
+        QMessageBox.critical(
+            active_win,
+            "エラーが発生しました",
+            f"処理中にエラーが発生しましたが、編集中のデータは維持されています。\n\n{message}",
+        )
 
 
 def _global_exception_hook(exctype, value, tb):
@@ -98,17 +112,31 @@ def _global_exception_hook(exctype, value, tb):
         except Exception:
             pass
     app = QApplication.instance()
-    if app is not None:
-        active_win = app.activeWindow()
-        QMessageBox.critical(
-            active_win,
-            "エラーが発生しました",
-            f"処理中にエラーが発生しましたが、編集中のデータは維持されています。\n\n{value}",
-        )
+    if app is None:
+        return
+    msg_text = str(value)
+    # メインスレッドなら直接表示、サブスレッドならメインスレッドのイベントキューへ送る
+    # （ワーカースレッドから直接 QMessageBox を出すとクラッシュするため）。
+    if threading.current_thread() is threading.main_thread():
+        _show_error_dialog(msg_text)
+    else:
+        QTimer.singleShot(0, app, lambda m=msg_text: _show_error_dialog(m))
+
+
+def _threading_exception_hook(args):
+    """Python 3.8以降のサブスレッド例外用フック"""
+    _global_exception_hook(args.exc_type, args.exc_value, args.exc_traceback)
 
 
 def main():
+    # .pyw実行時に標準出力/エラー出力がNoneになってクラッシュするのを防ぐ
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
     sys.excepthook = _global_exception_hook
+    threading.excepthook = _threading_exception_hook
     try:
         from core.ocr_cleaner import cleanup_stale_ocr_temp_dirs
         cleanup_stale_ocr_temp_dirs(max_age_sec=300.0)

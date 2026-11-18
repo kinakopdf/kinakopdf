@@ -325,6 +325,24 @@ def list_form_fields(doc) -> list:
     return fields
 
 
+def _clear_widget_value(doc, widget) -> None:
+    """欄の値を空にする。PyMuPDF は field_value = "" の代入を無視するため、
+    値（/V）が入っている箇所（ウィジェット自身または親フィールド）を
+    null にしてから update() で見た目を作り直す。Undo で空欄に戻す時に使う。
+    """
+    for target in (widget.xref,):
+        try:
+            doc.xref_set_key(target, "V", "null")
+        except Exception:
+            pass
+    try:
+        _type, ref = doc.xref_get_key(widget.xref, "Parent")
+        parent_xref = int(str(ref).split()[0])
+        doc.xref_set_key(parent_xref, "V", "null")
+    except Exception:
+        pass
+
+
 def fill_form_fields(doc, values: dict) -> dict:
     """values {欄名: 入力値} をフォームに反映する。
 
@@ -344,7 +362,10 @@ def fill_form_fields(doc, values: dict) -> dict:
                         value = value.strip().lower() in ("on", "true", "1", "yes", "チェック")
                     widget.field_value = bool(value)
                 else:
-                    widget.field_value = "" if value is None else str(value)
+                    new_text = "" if value is None else str(value)
+                    if new_text == "":
+                        _clear_widget_value(doc, widget)
+                    widget.field_value = new_text
                 try:
                     widget.update()
                     filled += 1
@@ -506,8 +527,12 @@ def get_bookmarks(doc) -> list:
     ]
 
 
-def set_bookmarks(doc, entries) -> int:
-    """entries [{level, title, page}] をしおりとして設定する。件数を返す。"""
+def normalize_toc_entries(entries, page_count: int) -> list:
+    """entries [{level, title, page}] を set_toc 用の [[階層, タイトル, ページ]] に正規化する。
+
+    純粋関数（文書を変更しない）。先頭は階層1に、以降は直前より1段深いまでに
+    正規化する（削除後に先頭が階層2になる等、set_toc が拒否する形を防ぐ）。
+    """
     toc = []
     prev_level = 0
     for e in entries:
@@ -518,13 +543,17 @@ def set_bookmarks(doc, entries) -> int:
             raise ValueError("しおりのタイトルが空です。")
         if level < 1:
             raise ValueError("しおりの階層は 1 以上で指定してください。")
-        if not (1 <= page <= len(doc)):
+        if not (1 <= page <= page_count):
             raise ValueError(f"しおりのページ番号が範囲外です: {page}")
-        # 先頭は階層1に、以降は直前より1段深いまでに正規化する
-        # （削除後に先頭が階層2になる等、set_toc が拒否する形を防ぐ）。
         level = 1 if prev_level == 0 else min(level, prev_level + 1)
         prev_level = level
         toc.append([level, title, page])
+    return toc
+
+
+def set_bookmarks(doc, entries) -> int:
+    """entries [{level, title, page}] をしおりとして設定する。件数を返す。"""
+    toc = normalize_toc_entries(entries, len(doc))
     doc.set_toc(toc)
     return len(toc)
 

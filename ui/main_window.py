@@ -60,11 +60,14 @@ from ui import (
     sync_color_combo,
 )
 from core.commands import (
+    FillFormFieldsCommand,
     AddAnnotationCommand,
     EditAnnotationCommand,
     RemoveAnnotationCommand,
     RemoveMultipleAnnotationsCommand,
     ReplacePageAnnotationsCommand,
+    ReplacePagesContentCommand,
+    ReplaceTocCommand,
 )
 from core.geometry import (
     APP_NAME,
@@ -84,19 +87,17 @@ from core.pdf_engine import PDFDocumentManager
 from core.pdf_loader import load_folder_as_merged_document
 from core.trial_tools import (
     STAMP_PRESETS,
-    add_bookmark,
     apply_header_footer,
     apply_stamp_to_doc,
     apply_toc_to_pdf_bytes,
     compress_pdf_bytes,
-    delete_bookmark,
     encrypt_pdf_bytes,
     fill_form_fields,
     flatten_form_fields,
     get_bookmarks,
     list_form_fields,
+    normalize_toc_entries,
     parse_page_ranges,
-    rename_bookmark,
     split_pdf_bytes,
     strip_password_pdf_bytes,
 )
@@ -1146,6 +1147,48 @@ class MainWindow(QMainWindow):
         self.viewer.render_page(rebuild_base=True)
         self.update_window_title()
 
+    def _trial_apply_to_pages(self, page_indices, apply_fn):
+        """一時文書に apply_fn を適用し、ReplacePagesContentCommand で Undo 可能にする。
+
+        page_indices は 0始まりの対象ページ一覧。apply_fn は一時文書（対象ページだけを
+        同じ順序で含む fitz.Document）を受け取り、必要なら戻り値を返す。
+        成功時は apply_fn の戻り値を返し、失敗時は例外を送出する（文書は変更されない）。
+
+        試作機能が文書を直接書き換えると、後から別の操作の Undo がその変更を
+        黙って消してしまうため（監査 #1）、必ずこの経路を使うこと。
+        """
+        doc = self.viewer.current_pdf
+        if doc is None:
+            raise ValueError("PDFが開かれていません。")
+        indices = sorted({int(i) for i in page_indices})
+        if not indices:
+            raise ValueError("対象ページがありません。")
+        tmp = fitz.open()
+        try:
+            with FITZ_LOCK:
+                for p_idx in indices:
+                    if not (0 <= p_idx < len(doc)):
+                        raise ValueError(f"ページ番号が範囲外です: {p_idx + 1}")
+                    tmp.insert_pdf(doc, from_page=p_idx, to_page=p_idx)
+            result = apply_fn(tmp)
+            cmd = ReplacePagesContentCommand(
+                doc=doc,
+                page_indices=indices,
+                new_pages_doc=tmp,
+                page_annotations=self.viewer.page_annotations,
+                prev_page_idx=self.viewer.current_page_idx,
+                take_ownership=True,
+            )
+            tmp = None  # 所有権はコマンドへ移る
+            cmd.redo(self.viewer)
+            self.viewer.history.push(cmd)
+            self.update_window_title()
+            return result
+        finally:
+            if tmp is not None:
+                with FITZ_LOCK:
+                    tmp.close()
+
     def trial_password_dialog(self):
         doc = self._trial_require_doc()
         if doc is None:
@@ -1352,8 +1395,19 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         if result.get("action") == "fill":
-            res = fill_form_fields(doc, result["values"])
-            self._trial_mark_modified_and_refresh()
+            values = result["values"]
+            field_names = {f["name"] for f in fields}
+            filled = sum(1 for f in fields if f["name"] in values)
+            missing = [name for name in values if name not in field_names]
+            try:
+                cmd = FillFormFieldsCommand(doc, values)
+                cmd.redo(self.viewer)
+                self.viewer.history.push(cmd)
+                self.update_window_title()
+            except Exception as e:
+                QMessageBox.critical(self, "エラー", f"入力に失敗しました。\n{e}")
+                return
+            res = {"filled": filled, "missing": missing}
             msg = f"{res['filled']}件の欄に入力しました。"
             if res["missing"]:
                 msg += f"\n見つからなかった欄: {', '.join(res['missing'])}"
@@ -1367,8 +1421,16 @@ class MainWindow(QMainWindow):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            res = flatten_form_fields(doc)
-            self._trial_mark_modified_and_refresh()
+            target_pages = sorted({f["page"] - 1 for f in list_form_fields(doc)})
+            if not target_pages:
+                QMessageBox.information(self, "案内", "このPDFには入力できるフォーム欄がありません。")
+                return
+            try:
+                res = self._trial_apply_to_pages(
+                    target_pages, lambda tmp: flatten_form_fields(tmp))
+            except Exception as e:
+                QMessageBox.critical(self, "エラー", f"固定に失敗しました。\n{e}")
+                return
             QMessageBox.information(
                 self, "完了", f"{res['flattened']}件の欄を固定しました。\n保存すると反映されます。")
 
@@ -1420,34 +1482,38 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "エラー", "文字を入力してください。")
             return
         page_no = page_spin.value()
-        page = doc[page_no - 1]
         size = size_spin.value()
         kind = kind_combo.currentData()
-        if kind == "seal":
-            height = size
-        else:
-            height = max(30, int(size * 0.6))
-        margin = 36
+        date_text = date_edit.text().strip() or None
         pos = pos_combo.currentData()
-        if pos == "tr":
-            x0, y0 = page.rect.width - margin - size, margin
-        elif pos == "br":
-            x0, y0 = page.rect.width - margin - size, page.rect.height - margin - height
-        elif pos == "tl":
-            x0, y0 = margin, margin
-        elif pos == "bl":
-            x0, y0 = margin, page.rect.height - margin - height
-        else:
-            x0 = (page.rect.width - size) / 2.0
-            y0 = (page.rect.height - height) / 2.0
+
+        def _apply_stamp(tmp):
+            pg = tmp[0]
+            if kind == "seal":
+                height = size
+            else:
+                height = max(30, int(size * 0.6))
+            margin = 36
+            if pos == "tr":
+                x0, y0 = pg.rect.width - margin - size, margin
+            elif pos == "br":
+                x0, y0 = pg.rect.width - margin - size, pg.rect.height - margin - height
+            elif pos == "tl":
+                x0, y0 = margin, margin
+            elif pos == "bl":
+                x0, y0 = margin, pg.rect.height - margin - height
+            else:
+                x0 = (pg.rect.width - size) / 2.0
+                y0 = (pg.rect.height - height) / 2.0
+            return apply_stamp_to_doc(
+                tmp, 1, kind, fitz.Rect(x0, y0, x0 + size, y0 + height),
+                text=text, date_text=date_text)
+
         try:
-            apply_stamp_to_doc(
-                doc, page_no, kind, fitz.Rect(x0, y0, x0 + size, y0 + height),
-                text=text, date_text=date_edit.text().strip() or None)
+            self._trial_apply_to_pages([page_no - 1], _apply_stamp)
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"スタンプを押せませんでした。\n{e}")
             return
-        self._trial_mark_modified_and_refresh()
         self.statusBar().showMessage(f"{page_no}ページ目にスタンプを押しました。保存すると反映されます。")
 
     def trial_bookmark_dialog(self):
@@ -1481,16 +1547,27 @@ class MainWindow(QMainWindow):
                 return None
             return row
 
+        def _apply_toc_change(new_entries):
+            """しおり一覧の変更を ReplaceTocCommand で Undo 可能に適用する。"""
+            old_toc = [list(e) for e in doc.get_toc()]
+            new_toc = normalize_toc_entries(new_entries, len(doc))
+            cmd = ReplaceTocCommand(old_toc, new_toc)
+            cmd.redo(self.viewer)
+            self.viewer.history.push(cmd)
+            self.update_window_title()
+
         def _on_add():
             title, ok = QInputDialog.getText(dlg, "しおり追加", "しおりのタイトル:")
             if not ok or not title.strip():
                 return
             try:
-                add_bookmark(doc, title.strip(), self.viewer.current_page_idx + 1)
+                entries = get_bookmarks(doc)
+                entries.append({"level": 1, "title": title.strip(),
+                                "page": self.viewer.current_page_idx + 1})
+                _apply_toc_change(entries)
             except Exception as e:
                 QMessageBox.warning(dlg, "エラー", str(e))
                 return
-            self._trial_mark_modified_and_refresh()
             _refresh_list()
 
         def _on_rename():
@@ -1502,11 +1579,12 @@ class MainWindow(QMainWindow):
             if not ok or not title.strip():
                 return
             try:
-                rename_bookmark(doc, idx, title.strip())
+                entries = get_bookmarks(doc)
+                entries[idx]["title"] = title.strip()
+                _apply_toc_change(entries)
             except Exception as e:
                 QMessageBox.warning(dlg, "エラー", str(e))
                 return
-            self._trial_mark_modified_and_refresh()
             _refresh_list()
 
         def _on_delete():
@@ -1520,8 +1598,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            delete_bookmark(doc, idx)
-            self._trial_mark_modified_and_refresh()
+            try:
+                entries = get_bookmarks(doc)
+                del entries[idx]
+                _apply_toc_change(entries)
+            except Exception as e:
+                QMessageBox.warning(dlg, "エラー", str(e))
+                return
             _refresh_list()
 
         def _on_jump():
@@ -1575,16 +1658,26 @@ class MainWindow(QMainWindow):
         btns.clicked.connect(dlg.accept)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
+        header = header_edit.text().strip()
+        footer = footer_edit.text().strip()
+        show_number = num_check.isChecked()
+        number_template = num_template.text().strip() or "{page} / {total}"
+        watermark = wm_edit.text().strip()
+        wm_fontsize = float(wm_size.value())
+        wm_rotation = int(wm_rot.value())
         try:
-            res = apply_header_footer(
-                doc,
-                header=header_edit.text().strip(),
-                footer=footer_edit.text().strip(),
-                show_page_number=num_check.isChecked(),
-                page_number_template=num_template.text().strip() or "{page} / {total}",
-                watermark=wm_edit.text().strip(),
-                watermark_fontsize=float(wm_size.value()),
-                watermark_rotation=int(wm_rot.value()),
+            res = self._trial_apply_to_pages(
+                list(range(len(doc))),
+                lambda tmp: apply_header_footer(
+                    tmp,
+                    header=header,
+                    footer=footer,
+                    show_page_number=show_number,
+                    page_number_template=number_template,
+                    watermark=watermark,
+                    watermark_fontsize=wm_fontsize,
+                    watermark_rotation=wm_rotation,
+                ),
             )
         except ValueError as e:
             QMessageBox.warning(self, "エラー", str(e))
@@ -1592,7 +1685,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"適用に失敗しました。\n{e}")
             return
-        self._trial_mark_modified_and_refresh()
         QMessageBox.information(
             self, "完了", f"{res['pages']}ページに適用しました。\n保存するとPDFに反映されます。")
 

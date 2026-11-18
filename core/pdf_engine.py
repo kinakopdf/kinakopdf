@@ -609,6 +609,13 @@ class PDFDocumentManager:
 
     @staticmethod
     def _atomic_replace_preserving_acl(temp_path: str, target_path: str, backup_path: str) -> None:
+        # 保存先が読み取り専用属性だと Windows の ReplaceFileW が失敗するため、
+        # ユーザーが明示的に上書き保存を選んだ場合は属性を外してから置き換える。
+        if sys.platform == "win32" and os.path.exists(target_path):
+            try:
+                os.chmod(target_path, 0o666)
+            except Exception:
+                logger.debug("Failed to clear read-only attribute before save", exc_info=True)
         if sys.platform == "win32" and os.path.exists(target_path):
             try:
                 import ctypes
@@ -695,9 +702,17 @@ class PDFDocumentManager:
                 cls.bake_annotations_to_doc(work_doc, page_annotations, verify=True)
 
                 try:
-                    orig_meta = work_doc.metadata or {}
+                    # insert_pdf では文書のメタデータは引き継がれないため、
+                    # 元の文書（source_doc）のメタデータをベースに producer だけ更新する。
+                    # set_metadata は渡した辞書で全項目を上書きするため、
+                    # 受け付けるキーのみを抽出してタイトル・作成者などを保持する。
+                    orig_meta = dict(source_doc.metadata or {})
                     producer_val = orig_meta.get("producer") or f"PyMuPDF {fitz.__doc__ or ''}".strip()
-                    work_doc.set_metadata({"producer": producer_val})
+                    orig_meta["producer"] = producer_val
+                    allowed_keys = ("title", "author", "subject", "keywords",
+                                    "creator", "producer", "creationDate", "modDate")
+                    clean_meta = {k: orig_meta[k] for k in allowed_keys if orig_meta.get(k)}
+                    work_doc.set_metadata(clean_meta)
                 except Exception:
                     logger.debug("Optional PDF operation skipped", exc_info=True)
                 if hasattr(work_doc, "del_xml_metadata"):
