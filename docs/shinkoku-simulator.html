@@ -1,10 +1,11 @@
 <!-- 修正版（2026-11-18）：尾張旭市の住民税非課税限度額を公式情報に合わせて修正、現役並み高額療養費の年間上限を168万/111万/53万に修正、売却代金未入力時のフォールバックを廃止して警告表示を追加 -->
+<!-- 追加（2026-11-18）：全国主要都市を追加（東京23区・横浜市・大阪市・京都市・神戸市・福岡市）。東京23区は新宿区の国保・介護保険料を代表値として使用。 -->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>令和8年分 確定申告（特定口座）損得判定＆世帯影響網羅シミュレーター｜名古屋市・尾張旭市</title>
+  <title>令和8年分 確定申告（特定口座）損得判定＆世帯影響網羅シミュレーター｜全国主要都市対応（8都市）</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -34,8 +35,16 @@
         </div>
         <div class="flex items-center gap-2 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700 self-start">
           <span class="text-xs text-slate-300 px-2">自治体:</span>
-          <button type="button" id="hdr-nagoya" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-indigo-600 text-white">名古屋市</button>
-          <button type="button" id="hdr-owariasahi" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition text-slate-300 hover:text-white">尾張旭市</button>
+          <select id="hdr-city" class="rounded-lg bg-indigo-600 text-white px-2.5 py-1.5 text-xs font-semibold outline-none cursor-pointer">
+            <option value="nagoya">名古屋市</option>
+            <option value="owariasahi">尾張旭市</option>
+            <option value="tokyo23">東京23区（新宿区）</option>
+            <option value="yokohama">横浜市</option>
+            <option value="osaka">大阪市</option>
+            <option value="kyoto">京都市</option>
+            <option value="kobe">神戸市</option>
+            <option value="fukuoka">福岡市</option>
+          </select>
         </div>
       </div>
 
@@ -43,7 +52,7 @@
       <nav class="flex flex-wrap gap-2 mt-5" aria-label="メインナビゲーション">
         <button type="button" data-tab="sim" class="tab-btn active px-4 py-2 rounded-lg text-sm font-semibold border border-slate-700 transition">1. 世帯損得シミュレーター</button>
         <button type="button" data-tab="flow" class="tab-btn px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition">2. 影響網羅フローチャート＆マトリクス</button>
-        <button type="button" data-tab="rates" class="tab-btn px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition">3. 名古屋市 vs 尾張旭市 料率・制度比較</button>
+        <button type="button" data-tab="rates" class="tab-btn px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition">3. 自治体別 料率・制度比較（8都市）</button>
       </nav>
     </div>
   </header>
@@ -60,7 +69,7 @@
     <div class="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
       <div class="text-xs sm:text-sm text-amber-900 leading-relaxed">
         <strong class="font-bold">世帯判定のポイント：</strong>
-        各メンバーごとに特定口座の取引を登録でき、<strong>「申告無し」「〇〇のみ申告」「△△のみ申告」「両方申告」</strong>の全組み合わせから世帯ベストを自動判定します。名古屋市（1級地・市民税5%減税）と尾張旭市（2級地）の非課税基準・国保・介護料率に完全対応。
+        各メンバーごとに特定口座の取引を登録でき、<strong>「申告無し」「〇〇のみ申告」「△△のみ申告」「両方申告」</strong>の全組み合わせから世帯ベストを自動判定します。名古屋市・尾張旭市・東京23区（新宿区）・横浜市・大阪市・京都市・神戸市・福岡市の8都市に対応。料率・段階額は令和8年度の各市公式データを使用しています。東京23区は区ごとに料率が異なるため、新宿区の値を代表値として使っています。
       </div>
       <div class="flex flex-wrap gap-1.5 shrink-0">
         <button type="button" data-preset="couple_both" class="px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-900 hover:bg-amber-100 transition">例1: 夫婦ともに特定口座(75歳)</button>
@@ -84,6 +93,12 @@
               <select id="inp-city" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold bg-white focus:ring-2 focus:ring-indigo-500 outline-none">
                 <option value="nagoya">名古屋市</option>
                 <option value="owariasahi">尾張旭市</option>
+                <option value="tokyo23">東京23区（新宿区）</option>
+                <option value="yokohama">横浜市</option>
+                <option value="osaka">大阪市</option>
+                <option value="kyoto">京都市</option>
+                <option value="kobe">神戸市</option>
+                <option value="fukuoka">福岡市</option>
               </select>
             </div>
 
@@ -457,6 +472,104 @@
         </div>
       </div>
 
+
+      <!-- 全国主要都市 比較（令和8年度） -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-base font-bold text-slate-900">全国主要都市 住民税・国民健康保険 比較（令和8年度）</h3>
+          <p class="text-xs text-slate-600 mt-0.5">東京23区は新宿区の値を代表値として使用。均等割は森林環境税1,000円込みの額です。</p>
+        </div>
+        <div class="p-5 overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-3 py-2 font-semibold">都市</th>
+                <th class="px-3 py-2 font-semibold text-right">住民税 均等割</th>
+                <th class="px-3 py-2 font-semibold text-right">住民税 所得割率</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 医療分</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 支援金分</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 介護分</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 子ども分</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="px-3 py-2 font-medium">名古屋市</td><td class="px-3 py-2 text-right">5,300円</td><td class="px-3 py-2 text-right">9.7%（5%減税）</td><td class="px-3 py-2 text-right">8.83% / 50,591円</td><td class="px-3 py-2 text-right">2.58% / 15,784円</td><td class="px-3 py-2 text-right">2.34% / 16,120円</td><td class="px-3 py-2 text-right">0.26% / 1,863円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">尾張旭市</td><td class="px-3 py-2 text-right">5,500円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.80% / 30,200円（平等割22,000円）</td><td class="px-3 py-2 text-right">2.75% / 11,500円（7,600円）</td><td class="px-3 py-2 text-right">2.31% / 11,700円（5,800円）</td><td class="px-3 py-2 text-right">0.29% / 1,260円（750円）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">東京23区（新宿区）</td><td class="px-3 py-2 text-right">5,000円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.51% / 47,600円</td><td class="px-3 py-2 text-right">2.80% / 17,600円</td><td class="px-3 py-2 text-right">2.43% / 17,800円</td><td class="px-3 py-2 text-right">0.27% / 1,873円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">横浜市</td><td class="px-3 py-2 text-right">6,200円</td><td class="px-3 py-2 text-right">10.025%</td><td class="px-3 py-2 text-right">8.33% / 40,870円</td><td class="px-3 py-2 text-right">2.62% / 13,380円</td><td class="px-3 py-2 text-right">2.84% / 16,200円</td><td class="px-3 py-2 text-right">0.34% / 1,770円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">大阪市</td><td class="px-3 py-2 text-right">5,300円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">9.50% / 34,990円（平等割33,908円）</td><td class="px-3 py-2 text-right">3.06% / 11,191円（10,845円）</td><td class="px-3 py-2 text-right">2.60% / 18,682円</td><td class="px-3 py-2 text-right">0.28% / 1,841円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">京都市</td><td class="px-3 py-2 text-right">5,600円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.94% / 30,080円（平等割17,930円）</td><td class="px-3 py-2 text-right">2.66% / 10,360円（6,180円）</td><td class="px-3 py-2 text-right">2.51% / 11,090円（5,370円）</td><td class="px-3 py-2 text-right">0.28% / 1,170円（660円）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">神戸市</td><td class="px-3 py-2 text-right">6,200円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.38% / 33,700円（平等割21,800円）</td><td class="px-3 py-2 text-right">2.97% / 13,510円（8,740円）</td><td class="px-3 py-2 text-right">2.78% / 13,970円（6,880円）</td><td class="px-3 py-2 text-right">0.26% / 1,330円（830円）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">福岡市</td><td class="px-3 py-2 text-right">5,500円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">5.58% / 19,807円（平等割18,664円）</td><td class="px-3 py-2 text-right">3.14% / 10,441円（9,838円）</td><td class="px-3 py-2 text-right">2.61% / 10,160円（7,751円）</td><td class="px-3 py-2 text-right">0.28% / 1,039円（911円）</td></tr>
+            </tbody>
+          </table>
+          <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">国保の賦課限度額は医療分67万円（大阪市のみ66万円）・支援金分26万円・介護分17万円・子ども分3万円。横浜市の所得割率10.025%は神奈川県水源環境保全税0.025%を含みます。申告分離課税の所得割率は名古屋市4.85%、その他5%です（横浜市の県0.025%分が分離課税に適用されるかは未確認）。国保料の端数処理は市により異なります。この試算では名古屋市は10円単位、その他の市は100円単位で切り捨てています。</p>
+        </div>
+      </div>
+
+      <!-- 後期高齢者医療保険料 全国 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-base font-bold text-slate-900">後期高齢者医療保険料（令和8・9年度）全国の広域連合</h3>
+          <p class="text-xs text-slate-600 mt-0.5">賦課限度額は医療分85万円・子ども分2.1万円で全国共通。軽減は全国共通の所得基準で判定します。</p>
+        </div>
+        <div class="p-5 overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-3 py-2 font-semibold">広域連合</th>
+                <th class="px-3 py-2 font-semibold text-right">医療分 均等割</th>
+                <th class="px-3 py-2 font-semibold text-right">医療分 所得割</th>
+                <th class="px-3 py-2 font-semibold text-right">子ども分 均等割</th>
+                <th class="px-3 py-2 font-semibold text-right">子ども分 所得割</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="px-3 py-2 font-medium">愛知県（名古屋市・尾張旭市）</td><td class="px-3 py-2 text-right">56,130円</td><td class="px-3 py-2 text-right">10.48%</td><td class="px-3 py-2 text-right">1,362円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">東京都（東京23区）</td><td class="px-3 py-2 text-right">53,300円</td><td class="px-3 py-2 text-right">9.88%</td><td class="px-3 py-2 text-right">1,300円</td><td class="px-3 py-2 text-right">0.26%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">神奈川県（横浜市）</td><td class="px-3 py-2 text-right">52,531円</td><td class="px-3 py-2 text-right">10.30%</td><td class="px-3 py-2 text-right">1,330円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">大阪府（大阪市）</td><td class="px-3 py-2 text-right">64,931円</td><td class="px-3 py-2 text-right">11.51%</td><td class="px-3 py-2 text-right">1,373円</td><td class="px-3 py-2 text-right">0.24%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">京都府（京都市）</td><td class="px-3 py-2 text-right">59,590円</td><td class="px-3 py-2 text-right">10.15%</td><td class="px-3 py-2 text-right">1,350円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">兵庫県（神戸市）</td><td class="px-3 py-2 text-right">58,427円</td><td class="px-3 py-2 text-right">10.77%</td><td class="px-3 py-2 text-right">1,351円</td><td class="px-3 py-2 text-right">0.24%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">福岡県（福岡市）</td><td class="px-3 py-2 text-right">66,340円</td><td class="px-3 py-2 text-right">11.70%</td><td class="px-3 py-2 text-right">1,339円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+            </tbody>
+          </table>
+          <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">令和8・9年度のみ、医療分の7割軽減が7.2割軽減になる特例があります（子ども分は7割のまま）。京都府での7.2割特例の適用は広域連合資料で直接確認できていませんが、全国措置のため適用としています。東京都独自の所得割軽減はこの試算では反映していません。</p>
+        </div>
+      </div>
+
+      <!-- 介護保険料 全国比較 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-base font-bold text-slate-900">介護保険料（第1号・65歳以上）全国比較（令和8年度）</h3>
+          <p class="text-xs text-slate-600 mt-0.5">東京23区は新宿区の値を代表値として使用。</p>
+        </div>
+        <div class="p-5 overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-3 py-2 font-semibold">都市</th>
+                <th class="px-3 py-2 font-semibold text-right">基準額（年額）</th>
+                <th class="px-3 py-2 font-semibold text-right">段階数</th>
+                <th class="px-3 py-2 font-semibold text-right">世帯非課税・低所得</th>
+                <th class="px-3 py-2 font-semibold text-right">本人課税・上限段階</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="px-3 py-2 font-medium">名古屋市</td><td class="px-3 py-2 text-right">83,403円</td><td class="px-3 py-2 text-right">18段階</td><td class="px-3 py-2 text-right">20,851円</td><td class="px-3 py-2 text-right">258,550円（18段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">尾張旭市</td><td class="px-3 py-2 text-right">65,800円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">15,100円</td><td class="px-3 py-2 text-right">171,200円（15段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">東京23区（新宿区）</td><td class="px-3 py-2 text-right">79,200円</td><td class="px-3 py-2 text-right">18段階</td><td class="px-3 py-2 text-right">19,800円</td><td class="px-3 py-2 text-right">459,360円（18段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">横浜市</td><td class="px-3 py-2 text-right">79,440円</td><td class="px-3 py-2 text-right">19段階</td><td class="px-3 py-2 text-right">15,880円</td><td class="px-3 py-2 text-right">278,040円（19段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">大阪市</td><td class="px-3 py-2 text-right">110,988円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">37,181円</td><td class="px-3 py-2 text-right">332,964円（15段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">京都市</td><td class="px-3 py-2 text-right">85,920円</td><td class="px-3 py-2 text-right">14段階</td><td class="px-3 py-2 text-right">24,487円</td><td class="px-3 py-2 text-right">266,352円（14段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">神戸市</td><td class="px-3 py-2 text-right">78,960円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">18,556円</td><td class="px-3 py-2 text-right">225,036円（15段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">福岡市</td><td class="px-3 py-2 text-right">82,784円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">20,282円</td><td class="px-3 py-2 text-right">223,517円（15段階）</td></tr>
+            </tbody>
+          </table>
+          <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">横浜市の段階判定は保険料算定用所得金額によるため、合計所得金額での試算は目安です。神戸市の第4段階71,064円は神戸市公式資料を引用する資料2件で確認した値です。神戸市の国保には激変緩和措置、横浜市の国保には19歳未満の控除があり、この試算では反映していません。</p>
+        </div>
+      </div>
+
       <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
         <h3 class="text-sm font-bold text-slate-900 mb-2">参照公式情報・根拠リンク</h3>
         <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs text-indigo-700">
@@ -469,6 +582,23 @@
           <li><a href="https://www.aichi-kouiki.jp/iryou/hoken/1001529/1002074.html" target="_blank" rel="noopener" class="hover:underline">愛知県後期高齢者医療広域連合：軽減基準</a></li>
           <li><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1199.htm" target="_blank" rel="noopener" class="hover:underline">国税庁：No.1199 基礎控除（令和8年分改正）</a></li>
           <li><a href="https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html" target="_blank" rel="noopener" class="hover:underline">厚生労働省：高額療養費制度（令和8年8月見直し）</a></li>
+          <li><a href="https://www.city.shinjuku.lg.jp/content/000453186.pdf" target="_blank" rel="noopener" class="hover:underline">新宿区：令和8年度 国民健康保険料の計算方法</a></li>
+          <li><a href="https://www.city.shinjuku.lg.jp/content/000434385.pdf" target="_blank" rel="noopener" class="hover:underline">新宿区：令和7年度税額の算出方法等（住民税）</a></li>
+          <li><a href="https://www.city.yokohama.lg.jp/kurashi/koseki-zei-hoken/zeikin/y-shizei/kojin-shiminzei-kenminzei/tokubetsuchoshu-keisan/zeituuR8.html" target="_blank" rel="noopener" class="hover:underline">横浜市：令和8年度分 個人市民税・県民税の計算方法</a></li>
+          <li><a href="https://www.city.yokohama.lg.jp/kurashi/koseki-zei-hoken/kokuho/hokenryo/04hokenryounituite.html" target="_blank" rel="noopener" class="hover:underline">横浜市：国民健康保険料について</a></li>
+          <li><a href="https://www.city.yokohama.lg.jp/kurashi/koseki-zei-hoken/kouki/hokenryo/hokenryonitsuite.html" target="_blank" rel="noopener" class="hover:underline">横浜市：後期高齢者医療保険料について</a></li>
+          <li><a href="https://www.city.osaka.lg.jp/zaisei/page/0000384109.html" target="_blank" rel="noopener" class="hover:underline">大阪市：市民税・府民税・森林環境税の計算例（令和8年度分）</a></li>
+          <li><a href="https://www.city.osaka.lg.jp/fukushi/page/0000624098.html" target="_blank" rel="noopener" class="hover:underline">大阪市：国民健康保険料の決め方</a></li>
+          <li><a href="https://www.city.kyoto.lg.jp/gyozai/cmsfiles/contents/0000342/342572/R8kazeinoaramashi.pdf" target="_blank" rel="noopener" class="hover:underline">京都市：令和8年度 個人市民税・府民税・森林環境税の課税のあらまし</a></li>
+          <li><a href="https://www.city.kyoto.lg.jp/hokenfukushi/page/0000351038.html" target="_blank" rel="noopener" class="hover:underline">京都市：令和8年度の国民健康保険料について</a></li>
+          <li><a href="https://www.city.kyoto.lg.jp/hokenfukushi/page/0000216940.html" target="_blank" rel="noopener" class="hover:underline">京都市：第1号被保険者（65歳以上）の介護保険料</a></li>
+          <li><a href="https://www.city.kobe.lg.jp/a83576/kurashi/tax/shikenminze/keisan/index.html" target="_blank" rel="noopener" class="hover:underline">神戸市：個人の市県民税・森林環境税の計算方法（令和8年度版）</a></li>
+          <li><a href="https://www.city.kobe.lg.jp/a52828/kurashi/support/kokuho/hokenryo/index.html" target="_blank" rel="noopener" class="hover:underline">神戸市：国民健康保険料について</a></li>
+          <li><a href="https://www.city.kobe.lg.jp/a52670/kurashi/support/kouki/index/genmen.html" target="_blank" rel="noopener" class="hover:underline">神戸市：後期高齢者医療制度（保険料・軽減）</a></li>
+          <li><a href="https://www.city.fukuoka.lg.jp/zaisei/zeisei/life/documents/r8P012-P028.pdf" target="_blank" rel="noopener" class="hover:underline">福岡市：令和8年度 個人市民税・県民税のあらまし</a></li>
+          <li><a href="https://www.city.fukuoka.lg.jp/hofuku/kokuho/hp/seido/06-01.html" target="_blank" rel="noopener" class="hover:underline">福岡市：予算と保険料率の決まり方（国保）</a></li>
+          <li><a href="https://www.city.fukuoka.lg.jp/fukushi/kaigohoken/health/00/03/3-010203.html" target="_blank" rel="noopener" class="hover:underline">福岡市：介護保険料の金額</a></li>
+          <li><a href="https://www.city.suginami.tokyo.jp/s035/news/25052.html" target="_blank" rel="noopener" class="hover:underline">杉並区：後期高齢者医療保険料率等のご案内（東京都広域連合）</a></li>
         </ul>
       </div>
     </section>
@@ -596,56 +726,1113 @@
       return Math.floor((divIncome - over10m) * 0.10 + over10m * 0.05);
     }
 
-    // 名古屋市の5%減税は市民税分(2.24%->2.128%)のみ適用、県民税分(0.56%)は不変 => 2.688% / 1.344%
-    function calcDividendCreditRes(taxableTotal, divIncome, isNagoya) {
+    // ---------- CITY DATA（令和8年度・各市公式確認） ----------
+    // 東京23区は区ごとに国保・介護保険料が異なるため、新宿区の値を代表値として使用。
+    // 神戸市・介護第4段階 71,064円は神戸市公式資料を引用する資料2件で確認。
+    // 京都府の後期高齢者医療 7.2割軽減特例の適用は広域連合資料で直接確認できていないが、全国措置のため適用としている。
+    const CITY_DATA = {
+  "nagoya": {
+    "name": "名古屋市",
+    "resTax": {
+      "incomeRate": 0.097,
+      "separateRate": 0.0485,
+      "kintoYen": 5300,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.02688,
+      "divCreditHalfRate": 0.01344
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0883,
+        "perCapita": 50591,
+        "perHousehold": 0,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0258,
+        "perCapita": 15784,
+        "perHousehold": 0,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0234,
+        "perCapita": 16120,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0026,
+        "perCapita": 1863,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 10,
+      "dependentDeduction": 330000,
+      "dokujiKinto": 2000
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 2,
+          "amount": 20851
+        },
+        {
+          "stage": 3,
+          "amount": 33362
+        },
+        {
+          "stage": 4,
+          "amount": 57132
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 5,
+          "amount": 70893
+        },
+        {
+          "stage": 6,
+          "amount": 83403
+        }
+      ],
+      "taxed": [
+        [
+          800000,
+          7,
+          87574
+        ],
+        [
+          1250000,
+          8,
+          91744
+        ],
+        [
+          2000000,
+          9,
+          104254
+        ],
+        [
+          2900000,
+          10,
+          125105
+        ],
+        [
+          4000000,
+          11,
+          141786
+        ],
+        [
+          5200000,
+          12,
+          158466
+        ],
+        [
+          6200000,
+          13,
+          175147
+        ],
+        [
+          7200000,
+          14,
+          191827
+        ],
+        [
+          8200000,
+          15,
+          208508
+        ],
+        [
+          10000000,
+          16,
+          225189
+        ],
+        [
+          15000000,
+          17,
+          241869
+        ],
+        [
+          null,
+          18,
+          258550
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 56130,
+      "medRate": 0.1048,
+      "medCap": 850000,
+      "kodomoKinto": 1362,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "owariasahi": {
+    "name": "尾張旭市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5500,
+      "kintoBase": 320000,
+      "kintoAdd": 289000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.078,
+        "perCapita": 30200,
+        "perHousehold": 22000,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0275,
+        "perCapita": 11500,
+        "perHousehold": 7600,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0231,
+        "perCapita": 11700,
+        "perHousehold": 5800,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0029,
+        "perCapita": 1260,
+        "perHousehold": 750,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 15100
+        },
+        {
+          "stage": 2,
+          "amount": 26300
+        },
+        {
+          "stage": 3,
+          "amount": 45100
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 59200
+        },
+        {
+          "stage": 5,
+          "amount": 65800
+        }
+      ],
+      "taxed": [
+        [
+          1200000,
+          6,
+          79000
+        ],
+        [
+          2100000,
+          7,
+          85600
+        ],
+        [
+          3200000,
+          8,
+          98800
+        ],
+        [
+          4200000,
+          9,
+          111900
+        ],
+        [
+          5200000,
+          10,
+          125100
+        ],
+        [
+          6200000,
+          11,
+          138300
+        ],
+        [
+          7200000,
+          12,
+          151500
+        ],
+        [
+          8000000,
+          13,
+          158100
+        ],
+        [
+          10000000,
+          14,
+          164700
+        ],
+        [
+          null,
+          15,
+          171200
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 56130,
+      "medRate": 0.1048,
+      "medCap": 850000,
+      "kodomoKinto": 1362,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "tokyo23": {
+    "name": "東京23区（新宿区）",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5000,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0751,
+        "perCapita": 47600,
+        "perHousehold": 0,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.028,
+        "perCapita": 17600,
+        "perHousehold": 0,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0243,
+        "perCapita": 17800,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0027,
+        "perCapita": 1873,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 19800
+        },
+        {
+          "stage": 2,
+          "amount": 27720
+        },
+        {
+          "stage": 3,
+          "amount": 51480
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 63360
+        },
+        {
+          "stage": 5,
+          "amount": 79200
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          6,
+          87120
+        ],
+        [
+          2500000,
+          7,
+          95040
+        ],
+        [
+          3750000,
+          8,
+          110880
+        ],
+        [
+          5000000,
+          9,
+          122760
+        ],
+        [
+          6250000,
+          10,
+          146520
+        ],
+        [
+          7500000,
+          11,
+          166320
+        ],
+        [
+          10000000,
+          12,
+          194040
+        ],
+        [
+          15000000,
+          13,
+          229680
+        ],
+        [
+          25000000,
+          14,
+          269280
+        ],
+        [
+          35000000,
+          15,
+          308880
+        ],
+        [
+          45000000,
+          16,
+          348480
+        ],
+        [
+          55000000,
+          17,
+          403920
+        ],
+        [
+          null,
+          18,
+          459360
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 53300,
+      "medRate": 0.0988,
+      "medCap": 850000,
+      "kodomoKinto": 1300,
+      "kodomoRate": 0.0026,
+      "kodomoCap": 21000
+    }
+  },
+  "yokohama": {
+    "name": "横浜市",
+    "resTax": {
+      "incomeRate": 0.10025,
+      "separateRate": 0.05,
+      "kintoYen": 6200,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0833,
+        "perCapita": 40870,
+        "perHousehold": 0,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0262,
+        "perCapita": 13380,
+        "perHousehold": 0,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0284,
+        "perCapita": 16200,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0034,
+        "perCapita": 1770,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 2,
+          "amount": 15880
+        },
+        {
+          "stage": 3,
+          "amount": 27000
+        },
+        {
+          "stage": 4,
+          "amount": 46470
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 5,
+          "amount": 71490
+        },
+        {
+          "stage": 6,
+          "amount": 79440
+        }
+      ],
+      "taxed": [
+        [
+          1200000,
+          7,
+          85000
+        ],
+        [
+          1600000,
+          8,
+          87380
+        ],
+        [
+          2100000,
+          9,
+          100880
+        ],
+        [
+          2500000,
+          10,
+          103270
+        ],
+        [
+          3200000,
+          11,
+          123130
+        ],
+        [
+          4200000,
+          12,
+          139020
+        ],
+        [
+          5200000,
+          13,
+          154900
+        ],
+        [
+          6200000,
+          14,
+          170790
+        ],
+        [
+          7200000,
+          15,
+          186680
+        ],
+        [
+          10000000,
+          16,
+          198600
+        ],
+        [
+          20000000,
+          17,
+          238320
+        ],
+        [
+          30000000,
+          18,
+          258180
+        ],
+        [
+          null,
+          19,
+          278040
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 52531,
+      "medRate": 0.103,
+      "medCap": 850000,
+      "kodomoKinto": 1330,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "osaka": {
+    "name": "大阪市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5300,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.095,
+        "perCapita": 34990,
+        "perHousehold": 33908,
+        "cap": 660000
+      },
+      "sup": {
+        "rate": 0.0306,
+        "perCapita": 11191,
+        "perHousehold": 10845,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.026,
+        "perCapita": 18682,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0028,
+        "perCapita": 1841,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 2,
+          "amount": 37181
+        },
+        {
+          "stage": 3,
+          "amount": 53830
+        },
+        {
+          "stage": 4,
+          "amount": 76027
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 5,
+          "amount": 94340
+        },
+        {
+          "stage": 6,
+          "amount": 110988
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          7,
+          122087
+        ],
+        [
+          2000000,
+          8,
+          138735
+        ],
+        [
+          3000000,
+          9,
+          166482
+        ],
+        [
+          4000000,
+          10,
+          194229
+        ],
+        [
+          5000000,
+          11,
+          221976
+        ],
+        [
+          6000000,
+          12,
+          244174
+        ],
+        [
+          7000000,
+          13,
+          266372
+        ],
+        [
+          10000000,
+          14,
+          288569
+        ],
+        [
+          null,
+          15,
+          332964
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 64931,
+      "medRate": 0.1151,
+      "medCap": 850000,
+      "kodomoKinto": 1373,
+      "kodomoRate": 0.0024,
+      "kodomoCap": 21000
+    }
+  },
+  "kyoto": {
+    "name": "京都市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5600,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0794,
+        "perCapita": 30080,
+        "perHousehold": 17930,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0266,
+        "perCapita": 10360,
+        "perHousehold": 6180,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0251,
+        "perCapita": 11090,
+        "perHousehold": 5370,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0028,
+        "perCapita": 1170,
+        "perHousehold": 660,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 24487
+        },
+        {
+          "stage": 2,
+          "amount": 36945
+        },
+        {
+          "stage": 3,
+          "amount": 58855
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 77328
+        },
+        {
+          "stage": 5,
+          "amount": 85920
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          6,
+          94512
+        ],
+        [
+          1900000,
+          7,
+          115992
+        ],
+        [
+          4000000,
+          8,
+          137472
+        ],
+        [
+          5500000,
+          9,
+          158952
+        ],
+        [
+          7000000,
+          10,
+          180432
+        ],
+        [
+          8500000,
+          11,
+          201912
+        ],
+        [
+          10000000,
+          12,
+          223392
+        ],
+        [
+          11500000,
+          13,
+          244872
+        ],
+        [
+          null,
+          14,
+          266352
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 59590,
+      "medRate": 0.1015,
+      "medCap": 850000,
+      "kodomoKinto": 1350,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "kobe": {
+    "name": "神戸市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 6200,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0738,
+        "perCapita": 33700,
+        "perHousehold": 21800,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0297,
+        "perCapita": 13510,
+        "perHousehold": 8740,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0278,
+        "perCapita": 13970,
+        "perHousehold": 6880,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0026,
+        "perCapita": 1330,
+        "perHousehold": 830,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 18556
+        },
+        {
+          "stage": 2,
+          "amount": 34348
+        },
+        {
+          "stage": 3,
+          "amount": 53693
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 71064
+        },
+        {
+          "stage": 5,
+          "amount": 78960
+        }
+      ],
+      "taxed": [
+        [
+          1200000,
+          6,
+          90804
+        ],
+        [
+          1900000,
+          7,
+          97911
+        ],
+        [
+          2900000,
+          8,
+          116072
+        ],
+        [
+          4000000,
+          9,
+          132258
+        ],
+        [
+          5000000,
+          10,
+          142128
+        ],
+        [
+          6000000,
+          11,
+          150024
+        ],
+        [
+          7000000,
+          12,
+          173712
+        ],
+        [
+          8000000,
+          13,
+          185556
+        ],
+        [
+          10000000,
+          14,
+          205296
+        ],
+        [
+          null,
+          15,
+          225036
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 58427,
+      "medRate": 0.1077,
+      "medCap": 850000,
+      "kodomoKinto": 1351,
+      "kodomoRate": 0.0024,
+      "kodomoCap": 21000
+    }
+  },
+  "fukuoka": {
+    "name": "福岡市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5500,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0558,
+        "perCapita": 19807,
+        "perHousehold": 18664,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0314,
+        "perCapita": 10441,
+        "perHousehold": 9838,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0261,
+        "perCapita": 10160,
+        "perHousehold": 7751,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0028,
+        "perCapita": 1039,
+        "perHousehold": 911,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 20282
+        },
+        {
+          "stage": 2,
+          "amount": 32700
+        },
+        {
+          "stage": 3,
+          "amount": 56707
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 74506
+        },
+        {
+          "stage": 5,
+          "amount": 82784
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          6,
+          91063
+        ],
+        [
+          2000000,
+          7,
+          107620
+        ],
+        [
+          3000000,
+          8,
+          132455
+        ],
+        [
+          4000000,
+          9,
+          149012
+        ],
+        [
+          5000000,
+          10,
+          165568
+        ],
+        [
+          6000000,
+          11,
+          182125
+        ],
+        [
+          7000000,
+          12,
+          198682
+        ],
+        [
+          8000000,
+          13,
+          206960
+        ],
+        [
+          9000000,
+          14,
+          215239
+        ],
+        [
+          null,
+          15,
+          223517
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 66340,
+      "medRate": 0.117,
+      "medCap": 850000,
+      "kodomoKinto": 1339,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  }
+};
+
+    // 配当控除（住民税）：名古屋市の5%減税は市民税分(2.24%->2.128%)のみ適用、県民税分(0.56%)は不変 => 2.688% / 1.344%。他市は標準2.8% / 1.4%。
+    function calcDividendCreditRes(taxableTotal, divIncome, city) {
       if (divIncome <= 0) return 0;
-      const baseRate = isNagoya ? 0.02688 : 0.028;
-      const halfRate = isNagoya ? 0.01344 : 0.014;
+      const dcr = CITY_DATA[city].resTax;
+      const baseRate = dcr.divCreditRate;
+      const halfRate = dcr.divCreditHalfRate;
       if (taxableTotal <= 10000000) return Math.floor(divIncome * baseRate);
       const over10m = Math.min(divIncome, taxableTotal - 10000000);
       return Math.floor((divIncome - over10m) * baseRate + over10m * halfRate);
     }
 
     function calcKaigoPremium(city, totalIncome, pensionRev, selfTaxed, householdTaxed) {
+      const kd = CITY_DATA[city].kaigo;
       const nonPensionIncome = Math.max(0, totalIncome - calcNenkinShotoku(pensionRev, true));
       const exemptJudgeSum = pensionRev + nonPensionIncome;
 
-      if (city === "nagoya") {
-        if (!householdTaxed && !selfTaxed) {
-          if (exemptJudgeSum <= 826500) return { stage: 2, amount: 20851 };
-          if (exemptJudgeSum <= 1200000) return { stage: 3, amount: 33362 };
-          return { stage: 4, amount: 57132 };
-        }
-        if (!selfTaxed) {
-          if (exemptJudgeSum <= 826500) return { stage: 5, amount: 70893 };
-          return { stage: 6, amount: 83403 };
-        }
-        const tiers = [
-          [800000, 7, 87574], [1250000, 8, 91744], [2000000, 9, 104254],
-          [2900000, 10, 125105], [4000000, 11, 141786], [5200000, 12, 158466],
-          [6200000, 13, 175147], [7200000, 14, 191827], [8200000, 15, 208508],
-          [10000000, 16, 225189], [15000000, 17, 241869]
-        ];
-        for (const [lim, st, amt] of tiers) if (totalIncome < lim) return { stage: st, amount: amt };
-        return { stage: 18, amount: 258550 };
-      } else {
-        if (!householdTaxed && !selfTaxed) {
-          if (exemptJudgeSum <= 826500) return { stage: 1, amount: 15100 };
-          if (exemptJudgeSum <= 1200000) return { stage: 2, amount: 26300 };
-          return { stage: 3, amount: 45100 };
-        }
-        if (!selfTaxed) {
-          if (exemptJudgeSum <= 826500) return { stage: 4, amount: 59200 };
-          return { stage: 5, amount: 65800 };
-        }
-        const tiers = [
-          [1200000, 6, 79000], [2100000, 7, 85600], [3200000, 8, 98800],
-          [4200000, 9, 111900], [5200000, 10, 125100], [6200000, 11, 138300],
-          [7200000, 12, 151500], [8000000, 13, 158100], [10000000, 14, 164700]
-        ];
-        for (const [lim, st, amt] of tiers) if (totalIncome < lim) return { stage: st, amount: amt };
-        return { stage: 15, amount: 171200 };
+      if (!householdTaxed && !selfTaxed) {
+        if (exemptJudgeSum <= 826500) return { stage: kd.nonTaxed[0].stage, amount: kd.nonTaxed[0].amount };
+        if (exemptJudgeSum <= 1200000) return { stage: kd.nonTaxed[1].stage, amount: kd.nonTaxed[1].amount };
+        return { stage: kd.nonTaxed[2].stage, amount: kd.nonTaxed[2].amount };
       }
+      if (!selfTaxed) {
+        if (exemptJudgeSum <= 826500) return { stage: kd.selfNonTaxed[0].stage, amount: kd.selfNonTaxed[0].amount };
+        return { stage: kd.selfNonTaxed[1].stage, amount: kd.selfNonTaxed[1].amount };
+      }
+      for (const [lim, st, amt] of kd.taxed) {
+        if (lim === null || totalIncome < lim) return { stage: st, amount: amt };
+      }
+      const last = kd.taxed[kd.taxed.length - 1];
+      return { stage: last[1], amount: last[2] };
     }
 
     function calcGenekiMedicalCap(resTaxableTotal) {
@@ -656,7 +1843,7 @@
 
     // ---------- HOUSEHOLD SIMULATION FOR ARBITRARY PER-MEMBER MODES ----------
     function simulateHousehold(city, modesByMemberId) {
-      const isNagoya = (city === "nagoya");
+      const cd = CITY_DATA[city];
       const head = members.find(m => m.isHead) || members[0];
 
       const mStates = members.map(m => {
@@ -761,13 +1948,14 @@
         m.itTax = Math.floor((itSogo + itSep) * 1.021) + m.withheldInNoneIT;
         totalIT += m.itTax;
 
-        // 住民税非課税基準（名古屋市：1級地、尾張旭市：2級地 均等割32万×人数+28.9万 / 所得割35万×人数+42万）※尾張旭市「令和8年度（令和7年中所得）市民税・県民税申告について」による
-        const resKintoExemptLimit = isNagoya
-          ? (deps === 0 ? 450000 : (350000 * (1 + deps) + 310000))
-          : (deps === 0 ? 420000 : (320000 * (1 + deps) + 289000));
-        const resShotokuExemptLimit = isNagoya
-          ? (deps === 0 ? 450000 : (350000 * (1 + deps) + 420000))
-          : (deps === 0 ? 450000 : (350000 * (1 + deps) + 420000));
+        // 住民税非課税基準（1級地：均等割35万×人数+31万 / 所得割35万×人数+42万、単身はいずれも45万。尾張旭市のみ2級地：均等割32万×人数+28.9万、単身42万）
+        const rt = cd.resTax;
+        const resKintoExemptLimit = deps === 0
+          ? (rt.kintoBase + rt.singleAdd)
+          : (rt.kintoBase * (1 + deps) + rt.kintoAdd);
+        const resShotokuExemptLimit = deps === 0
+          ? (rt.shotokuBase + rt.singleAdd)
+          : (rt.shotokuBase * (1 + deps) + rt.shotokuAdd);
 
         m.resExempt = m.gokeiShotoku <= resKintoExemptLimit;
         const resShotokuExempt = m.gokeiShotoku <= resShotokuExemptLimit;
@@ -780,14 +1968,14 @@
         m.resTaxableSep = Math.max(0, m.declaredCapAfterCarry - resUnusedDed);
         m.resTaxableTotal = m.resTaxableSogo + m.resTaxableSep;
 
-        const resRateSogo = isNagoya ? 0.097 : 0.10;
-        const resRateSep = isNagoya ? 0.0485 : 0.05;
+        const resRateSogo = rt.incomeRate;
+        const resRateSep = rt.separateRate;
 
         let resSogo = resShotokuExempt ? 0 : Math.max(0, Math.floor((Math.floor(m.resTaxableSogo / 1000) * 1000) * resRateSogo) - 2500);
         if (!resShotokuExempt && m.divIsComp && m.declaredDiv > 0) {
-          resSogo = Math.max(0, resSogo - calcDividendCreditRes(m.resTaxableTotal, m.declaredDiv, isNagoya));
+          resSogo = Math.max(0, resSogo - calcDividendCreditRes(m.resTaxableTotal, m.declaredDiv, city));
         }
-        const resKinto = m.resExempt ? 0 : (isNagoya ? 5300 : 5500);
+        const resKinto = m.resExempt ? 0 : rt.kintoYen;
         const resSep = resShotokuExempt ? 0 : Math.floor((Math.floor(m.resTaxableSep / 1000) * 1000) * resRateSep);
         m.resTax = resKinto + resSogo + resSep + m.withheldInNoneRes;
         totalRes += m.resTax;
@@ -818,25 +2006,18 @@
         const kaigo2BaseSum = kokuhoMembers.filter(m => m.ageGroup === "40to64").reduce((s, m) => s + Math.max(0, m.soShotokuTo - 430000), 0);
         const adultCount = kokuhoMembers.filter(m => m.ageGroup !== "under18").length;
 
-        if (isNagoya) {
-          // 名古屋市国保の独自扶養控除（33万円）は「国保の被保険者である扶養親族」が対象
-          const kokuhoDependentsCount = kokuhoMembers.filter(m => m.id !== taxpayer.id && m.gokeiShotoku <= 620000).length;
-          const dedBaseSum = Math.max(0, rateBaseSum - kokuhoDependentsCount * 330000);
-          const dedKaigo2Sum = Math.max(0, kaigo2BaseSum - (taxpayer.ageGroup === "40to64" ? kokuhoDependentsCount * 330000 : 0));
-          const dokujiKinto = redRate > 0 ? 2000 * cnt : 0;
+        const kh = cd.kokuho;
+        // 国保加入扶養の独自控除（名古屋市のみ：国保の被保険者である扶養親族1人につき33万円）
+        const kokuhoDependentsCount = kokuhoMembers.filter(m => m.id !== taxpayer.id && m.gokeiShotoku <= 620000).length;
+        const dedBaseSum = Math.max(0, rateBaseSum - kokuhoDependentsCount * (kh.dependentDeduction || 0));
+        const dedKaigo2Sum = Math.max(0, kaigo2BaseSum - (taxpayer.ageGroup === "40to64" ? kokuhoDependentsCount * (kh.dependentDeduction || 0) : 0));
+        const dokujiKinto = redRate > 0 ? (kh.dokujiKinto || 0) * cnt : 0;
 
-          const med = Math.min(670000, Math.floor(dedBaseSum * 0.0883) + Math.floor(50591 * (1 - redRate) * cnt));
-          const sup = Math.min(260000, Math.floor(dedBaseSum * 0.0258) + Math.floor(15784 * (1 - redRate) * cnt));
-          const kaigo = kaigo2Count > 0 ? Math.min(170000, Math.floor(dedKaigo2Sum * 0.0234) + Math.floor(16120 * (1 - redRate) * kaigo2Count)) : 0;
-          const kodomo = Math.min(30000, Math.floor(dedBaseSum * 0.0026) + Math.floor(((1771 + 92) * adultCount) * (1 - redRate)));
-          totalKokuho = Math.max(0, Math.floor((med + sup + kaigo + kodomo - dokujiKinto) / 10) * 10);
-        } else {
-          const med = Math.min(670000, Math.floor(rateBaseSum * 0.0780) + Math.floor((30200 * cnt + 22000) * (1 - redRate)));
-          const sup = Math.min(260000, Math.floor(rateBaseSum * 0.0275) + Math.floor((11500 * cnt + 7600) * (1 - redRate)));
-          const kaigo = kaigo2Count > 0 ? Math.min(170000, Math.floor(kaigo2BaseSum * 0.0231) + Math.floor((11700 * kaigo2Count + 5800) * (1 - redRate))) : 0;
-          const kodomo = Math.min(30000, Math.floor(rateBaseSum * 0.0029) + Math.floor(((1200 + 60) * adultCount + 750) * (1 - redRate)));
-          totalKokuho = Math.floor((med + sup + kaigo + kodomo) / 100) * 100;
-        }
+        const med = Math.min(kh.med.cap, Math.floor(dedBaseSum * kh.med.rate) + Math.floor((kh.med.perCapita * cnt + kh.med.perHousehold) * (1 - redRate)));
+        const sup = Math.min(kh.sup.cap, Math.floor(dedBaseSum * kh.sup.rate) + Math.floor((kh.sup.perCapita * cnt + kh.sup.perHousehold) * (1 - redRate)));
+        const kaigo = kaigo2Count > 0 ? Math.min(kh.kaigo.cap, Math.floor(dedKaigo2Sum * kh.kaigo.rate) + Math.floor((kh.kaigo.perCapita * kaigo2Count + kh.kaigo.perHousehold) * (1 - redRate))) : 0;
+        const kodomo = Math.min(kh.kodomo.cap, Math.floor(dedBaseSum * kh.kodomo.rate) + Math.floor((kh.kodomo.perCapita * adultCount + kh.kodomo.perHousehold) * (1 - redRate)));
+        totalKokuho = Math.max(0, Math.floor((med + sup + kaigo + kodomo - dokujiKinto) / (kh.rounding || 100)) * (kh.rounding || 100));
       }
 
       // Koki
@@ -854,21 +2035,22 @@
         const gBonus = Math.max(0, kokiEarnerCount - 1) * 100000;
         const kCnt = kokiMembers.length;
 
-        let medKinto = 56130, kodomoKinto = 1362;
+        const kk = CITY_DATA[city].koki;
+        let medKinto = kk.medKinto, kodomoKinto = kk.kodomoKinto;
         if (kokiKeigenIncomeSum <= 430000 + gBonus) {
-          medKinto = 15716; kodomoKinto = 408; kokiReductionLabel = "7.2割軽減(医療)";
+          medKinto = Math.floor(kk.medKinto * 0.28); kodomoKinto = Math.floor(kk.kodomoKinto * 0.3); kokiReductionLabel = "7.2割軽減(医療)";
         } else if (kokiKeigenIncomeSum <= 430000 + 310000 * kCnt + gBonus) {
-          medKinto = 28065; kodomoKinto = 681; kokiReductionLabel = "5割軽減";
+          medKinto = Math.floor(kk.medKinto * 0.5); kodomoKinto = Math.floor(kk.kodomoKinto * 0.5); kokiReductionLabel = "5割軽減";
         } else if (kokiKeigenIncomeSum <= 430000 + 570000 * kCnt + gBonus) {
-          medKinto = 44904; kodomoKinto = 1089; kokiReductionLabel = "2割軽減";
+          medKinto = Math.floor(kk.medKinto * 0.8); kodomoKinto = Math.floor(kk.kodomoKinto * 0.8); kokiReductionLabel = "2割軽減";
         } else {
           kokiReductionLabel = "軽減なし";
         }
 
         kokiMembers.forEach(m => {
           const base = Math.max(0, m.soShotokuTo - 430000);
-          const med = Math.min(850000, Math.floor((Math.floor(base * 0.1048) + medKinto) / 100) * 100);
-          const kodomo = Math.min(21000, Math.floor((Math.floor(base * 0.0025) + kodomoKinto) / 100) * 100);
+          const med = Math.min(kk.medCap, Math.floor((Math.floor(base * kk.medRate) + medKinto) / 100) * 100);
+          const kodomo = Math.min(kk.kodomoCap, Math.floor((Math.floor(base * kk.kodomoRate) + kodomoKinto) / 100) * 100);
           m.kokiPremium = med + kodomo;
           totalKoki += m.kokiPremium;
         });
@@ -1200,13 +2382,8 @@
     function updateAll() {
       const city = document.getElementById("inp-city").value;
 
-      document.getElementById("hdr-nagoya").className = city === "nagoya"
-        ? "px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-indigo-600 text-white"
-        : "px-3 py-1.5 rounded-lg text-xs font-semibold transition text-slate-300 hover:text-white";
-      document.getElementById("hdr-owariasahi").className = city === "owariasahi"
-        ? "px-3 py-1.5 rounded-lg text-xs font-semibold transition bg-indigo-600 text-white"
-        : "px-3 py-1.5 rounded-lg text-xs font-semibold transition text-slate-300 hover:text-white";
-      document.getElementById("city-badge").textContent = (city === "nagoya" ? "名古屋市" : "尾張旭市") + `（${members.length}人世帯）`;
+      document.getElementById("hdr-city").value = city;
+      document.getElementById("city-badge").textContent = CITY_DATA[city].name + `（${members.length}人世帯）`;
 
       const { combos, noneEntry, bestCombo } = buildAndEvaluateCombos(city);
 
@@ -1442,8 +2619,7 @@
 
     window.addEventListener("DOMContentLoaded", () => {
       document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
-      document.getElementById("hdr-nagoya").addEventListener("click", () => { document.getElementById("inp-city").value = "nagoya"; updateAll(); });
-      document.getElementById("hdr-owariasahi").addEventListener("click", () => { document.getElementById("inp-city").value = "owariasahi"; updateAll(); });
+      document.getElementById("hdr-city").addEventListener("change", () => { document.getElementById("inp-city").value = document.getElementById("hdr-city").value; updateAll(); });
       document.getElementById("inp-city").addEventListener("change", updateAll);
       document.getElementById("btn-add-member").addEventListener("click", () => {
         if (members.length >= 5) return;
