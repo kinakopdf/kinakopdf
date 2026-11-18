@@ -157,7 +157,7 @@ class BasePageListWidget(QListWidget):
 
 class MainPageListWidget(BasePageListWidget):
     reorderRequested = pyqtSignal(list, int)
-    pagesDropped = pyqtSignal(int, bytes)
+    pagesDropped = pyqtSignal(int, object)
     filesDropped = pyqtSignal(int, list)
 
     def __init__(self, doc_provider, annot_provider, parent=None):
@@ -329,9 +329,17 @@ class MainPageListWidget(BasePageListWidget):
             pdf_bytes = bytes(event.mimeData().data(MIME_PDF_PAGES))
             if pdf_bytes:
                 self._accept_drag_event(event)
+                payload = pdf_bytes
+                if pdf_bytes == b"IN_PROCESS_DOC":
+                    # startDrag の drag.exec() 終了後 500ms で _in_process_drag_doc
+                    # が破棄されるため、QTimer コールバックを待たず同期処理中に
+                    # 所有権を取得する（遅延するとドキュメントが閉じられる）。
+                    in_proc_doc = BasePageListWidget.take_in_process_drag_doc()
+                    if in_proc_doc is not None:
+                        payload = in_proc_doc
                 QTimer.singleShot(
                     0,
-                    lambda t=target_idx, b=pdf_bytes: self.pagesDropped.emit(t, b),
+                    lambda t=target_idx, b=payload: self.pagesDropped.emit(t, b),
                 )
             return
 
@@ -606,6 +614,7 @@ class PageManager(QDockWidget):
         if not doc or len(doc) <= 1:
             return
 
+        viewer.cancel_active_interaction()
         selected = self.list_widget.selectedItems()
         if selected:
             rows = sorted(set(self.list_widget.row(item) for item in selected))
@@ -881,7 +890,15 @@ class PageManager(QDockWidget):
         max_concurrent = max(2, min(4, self.thread_pool.maxThreadCount()))
 
         while active_tasks < max_concurrent and (self._pending_main_thumbs or self._pending_sub_thumbs):
-            if self._pending_main_thumbs and self.main.viewer.current_pdf:
+            # 文書が閉じられた後にタイマーが発火することがある（テストや
+            # ウィンドウ close 直後）。閉じた文書の真偽判定は ValueError を
+            # 吐くため、is_closed で明示的に弾く。
+            _main_doc = self.main.viewer.current_pdf
+            if (
+                self._pending_main_thumbs
+                and _main_doc is not None
+                and not _main_doc.is_closed
+            ):
                 idx = self._pick_priority_index(
                     self.list_widget,
                     self._pending_main_thumbs,
@@ -894,7 +911,7 @@ class PageManager(QDockWidget):
                     task = ThumbnailTask(
                         list_type="main",
                         page_idx=idx,
-                        doc=self.main.viewer.current_pdf,
+                        doc=_main_doc,
                         gen_id=self._main_generation_id,
                         ann_list=ann_list,
                         thumb_scale=THUMBNAIL_RENDER_SCALE,
@@ -905,7 +922,12 @@ class PageManager(QDockWidget):
                     active_tasks += 1
                     continue
 
-            if self._pending_sub_thumbs and self.sub_pdf:
+            _sub_doc = self.sub_pdf
+            if (
+                self._pending_sub_thumbs
+                and _sub_doc is not None
+                and not _sub_doc.is_closed
+            ):
                 idx = self._pick_priority_index(
                     self.sub_list_widget,
                     self._pending_sub_thumbs,
@@ -916,7 +938,7 @@ class PageManager(QDockWidget):
                     task = ThumbnailTask(
                         list_type="sub",
                         page_idx=idx,
-                        doc=self.sub_pdf,
+                        doc=_sub_doc,
                         gen_id=self._sub_generation_id,
                         ann_list=[],
                         thumb_scale=THUMBNAIL_RENDER_SCALE,
@@ -947,11 +969,21 @@ class PageManager(QDockWidget):
             # staying a placeholder forever.
             if list_type == "main":
                 self._in_flight_main_thumbs.discard(page_idx)
-                if self.main.viewer.current_pdf and 0 <= page_idx < self.list_widget.count():
+                _main_doc = self.main.viewer.current_pdf
+                if (
+                    _main_doc is not None
+                    and not _main_doc.is_closed
+                    and 0 <= page_idx < self.list_widget.count()
+                ):
                     self._pending_main_thumbs.add(page_idx)
             else:
                 self._in_flight_sub_thumbs.discard(page_idx)
-                if self.sub_pdf and 0 <= page_idx < self.sub_list_widget.count():
+                _sub_doc = self.sub_pdf
+                if (
+                    _sub_doc is not None
+                    and not _sub_doc.is_closed
+                    and 0 <= page_idx < self.sub_list_widget.count()
+                ):
                     self._pending_sub_thumbs.add(page_idx)
             self._trigger_thumb_queue()
             return
@@ -961,14 +993,24 @@ class PageManager(QDockWidget):
 
         if list_type == "main":
             self._in_flight_main_thumbs.discard(page_idx)
-            if self.main.viewer.current_pdf and page_idx < self.list_widget.count():
+            _main_doc = self.main.viewer.current_pdf
+            if (
+                _main_doc is not None
+                and not _main_doc.is_closed
+                and page_idx < self.list_widget.count()
+            ):
                 item = self.list_widget.item(page_idx)
                 if item is not None:
                     item.setText(label)
                     item.setIcon(icon)
         elif list_type == "sub":
             self._in_flight_sub_thumbs.discard(page_idx)
-            if self.sub_pdf and page_idx < self.sub_list_widget.count():
+            _sub_doc = self.sub_pdf
+            if (
+                _sub_doc is not None
+                and not _sub_doc.is_closed
+                and page_idx < self.sub_list_widget.count()
+            ):
                 item = self.sub_list_widget.item(page_idx)
                 if item is not None:
                     item.setText(str(page_idx + 1))
@@ -1100,6 +1142,7 @@ class PageManager(QDockWidget):
         if not doc:
             return
 
+        viewer.cancel_active_interaction()
         prev_idx = viewer.current_page_idx
         cmd = ReorderPagesCommand(desired, prev_idx, next_idx)
         cmd.redo(viewer)
@@ -1109,6 +1152,7 @@ class PageManager(QDockWidget):
         viewer = self.main.viewer
         doc = viewer.current_pdf
 
+        viewer.cancel_active_interaction()
         in_proc_doc = None
         if isinstance(pdf_source, fitz.Document):
             in_proc_doc = pdf_source
@@ -1162,6 +1206,8 @@ class PageManager(QDockWidget):
             return
 
         viewer = self.main.viewer
+
+        viewer.cancel_active_interaction()
         if not viewer.current_pdf:
             self.main.open_file_from_path(filepaths[0])
             if not viewer.current_pdf:
@@ -1241,6 +1287,7 @@ class PageManager(QDockWidget):
         if not doc:
             return
 
+        viewer.cancel_active_interaction()
         selected = self.list_widget.selectedItems()
         if selected:
             rows = sorted(set(self.list_widget.row(item) for item in selected))
@@ -1281,6 +1328,7 @@ class PageManager(QDockWidget):
         if not doc:
             return
 
+        viewer.cancel_active_interaction()
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "挿入するPDFを選択",

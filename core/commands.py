@@ -394,7 +394,14 @@ class CropPagesCommand(BaseCommand):
                 affected.append(page_idx)
         if not affected:
             return affected
-        _set_current_page_safe(viewer, viewer.current_page_idx)
+        # 別のページを閲覧中に Undo/Redo したとき、対象ページへ移動しないと
+        # 画面上で変化が見えないため、対象外なら先頭の対象ページへ移動する。
+        target_page = (
+            viewer.current_page_idx
+            if viewer.current_page_idx in affected
+            else affected[0]
+        )
+        _set_current_page_safe(viewer, target_page)
         viewer.render_page(fit_view=True, rebuild_base=True)
         viewer.pageSelectionChanged.emit(viewer.current_page_idx)
         viewer.notify_pages_updated(affected)
@@ -437,6 +444,8 @@ class AddAnnotationsMultiPageCommand(BaseCommand):
                     continue
                 ann_list.pop(found_idx)
                 adjust_updated_after_on_remove(ann_list, found_idx)
+                if not ann_list:
+                    viewer.page_annotations.pop(page_idx, None)
             affected.append(page_idx)
         if not affected:
             return
@@ -444,7 +453,12 @@ class AddAnnotationsMultiPageCommand(BaseCommand):
         rebuild = page_changed or any(
             annotation_affects_base_pdf_text(ann) for _, ann in self.entries
         )
-        _set_current_page_safe(viewer, viewer.current_page_idx)
+        # 別のページを閲覧中に Undo/Redo したとき、対象ページへ移動しないと
+        # 画面上で変化が見えないため、対象外なら先頭の対象ページへ移動する。
+        target_page = (
+            viewer.current_page_idx if not page_changed else affected[0]
+        )
+        _set_current_page_safe(viewer, target_page)
         viewer.render_page(fit_view=False, rebuild_base=rebuild)
         viewer.pageSelectionChanged.emit(viewer.current_page_idx)
         viewer.notify_pages_updated(affected)

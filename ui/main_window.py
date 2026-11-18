@@ -2465,6 +2465,7 @@ class MainWindow(QMainWindow):
             sys_dlg.setOption(QPrintDialog.PrintDialogOption.PrintCurrentPage, True)
             sys_dlg.setOption(QPrintDialog.PrintDialogOption.PrintCollateCopies, True)
             sys_dlg.setMinMax(1, total_doc_pages)
+            sys_printer.setFromTo(1, total_doc_pages)
             if sys_dlg.exec() != QDialog.DialogCode.Accepted:
                 return
 
@@ -2857,12 +2858,24 @@ class MainWindow(QMainWindow):
         if not folder_dir:
             return
 
-        result = load_folder_as_merged_document(
-            folder_dir,
-            password_callback=lambda fname: QInputDialog.getText(
-                self, "パスワード", f"「{fname}」のパスワードを入力:", QLineEdit.EchoMode.Password
-            ),
-        )
+        def _password_callback(fname):
+            # パスワード入力中は待機カーソルを一時解除し、終わったら戻す。
+            QApplication.restoreOverrideCursor()
+            try:
+                return QInputDialog.getText(
+                    self, "パスワード", f"「{fname}」のパスワードを入力:", QLineEdit.EchoMode.Password
+                )
+            finally:
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = load_folder_as_merged_document(
+                folder_dir,
+                password_callback=_password_callback,
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
         merged_doc = result[0]
         manifest = result[1]
         # Coordinated contract: core returns (doc, manifest, skipped);

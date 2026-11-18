@@ -943,8 +943,23 @@ class PDFViewer(QGraphicsView):
         return out
 
     def _finish_text_selection(self, raw_rect, scene_rect):
-        """ドラッグ確定後のテキスト選択処理。単語を集めてハイライト＋コピーポップアップを出す。"""
+        """ドラッグ確定後のテキスト選択処理。単語を集めてハイライト＋コピーポップアップを出す。
+
+        消去済み領域（白塗り墨消し・テキスト消去）の単語は対象外にする。
+        なお単語矩形は get_text("words") が未回転・cropbox 基準で返すため、
+        _get_page_word_rects_raw の cropbox 原点加算が全回転角で正しい
+        （view_rect_to_raw_rect で変換すると回転時にズレるので使わない）。
+        """
         words = self._get_page_word_rects_raw()
+        erased_rects = collect_all_erased_raw_rects(self.current_annotations)
+        if erased_rects:
+            words = [
+                w
+                for w in words
+                if not is_rect_substantially_erased(
+                    fitz.Rect(w[0], w[1], w[2], w[3]), erased_rects
+                )
+            ]
         selected = select_words_in_rect(
             words, (raw_rect.x0, raw_rect.y0, raw_rect.x1, raw_rect.y1)
         )
