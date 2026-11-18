@@ -685,12 +685,27 @@ class PDFDocumentManager:
             with FITZ_LOCK:
                 work_doc = fitz.open()
                 work_doc.insert_pdf(source_doc)
+                # しおり（TOC）は insert_pdf では引き継がれないため明示的に複製する。
+                try:
+                    toc = source_doc.get_toc()
+                    if toc:
+                        work_doc.set_toc(toc)
+                except Exception:
+                    logger.debug("Optional TOC copy skipped", exc_info=True)
                 cls.bake_annotations_to_doc(work_doc, page_annotations, verify=True)
 
                 try:
-                    orig_meta = work_doc.metadata or {}
+                    # insert_pdf では文書のメタデータは引き継がれないため、
+                    # 元の文書（source_doc）のメタデータをベースに producer だけ更新する。
+                    # set_metadata は渡した辞書で全項目を上書きするため、
+                    # 受け付けるキーのみを抽出してタイトル・作成者などを保持する。
+                    orig_meta = dict(source_doc.metadata or {})
                     producer_val = orig_meta.get("producer") or f"PyMuPDF {fitz.__doc__ or ''}".strip()
-                    work_doc.set_metadata({"producer": producer_val})
+                    orig_meta["producer"] = producer_val
+                    allowed_keys = ("title", "author", "subject", "keywords",
+                                    "creator", "producer", "creationDate", "modDate")
+                    clean_meta = {k: orig_meta[k] for k in allowed_keys if orig_meta.get(k)}
+                    work_doc.set_metadata(clean_meta)
                 except Exception:
                     logger.debug("Optional PDF operation skipped", exc_info=True)
                 if hasattr(work_doc, "del_xml_metadata"):
