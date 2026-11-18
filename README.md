@@ -25,7 +25,7 @@ PDF を開いて編集・保存する、完全ローカルのデスクトップ�
 
 ```bash
 pip install -r requirements.txt
-python secure_local_pdf_editor.py
+python secure_local_pdf_editor.pyw
 ```
 
 PDF をダブルクリックで開くこともできます（Windows では「既定の PDF に設定」から登録できます）。

@@ -1134,9 +1134,13 @@ class FullscreenSpreadReader(QWidget):
             self._local_undo_stack.append((page_idx, cur_list))
             self.annotations[page_idx] = next_list
             self._has_edited = True
-            self._update_current_spread_cache(only_page_idx=page_idx)
+            self._last_edited_page_idx = page_idx
+            if self.spreads and page_idx not in self.spreads[self.current_spread_idx].page_indices:
+                self.set_current_page(page_idx)
+            else:
+                self._update_current_spread_cache(only_page_idx=page_idx)
+                self.update()
             self._show_hud("↷ 操作をやり直しました")
-            self.update()
 
     def _get_visible_draw_segments(self, ann_list: list, idx: int, ann: dict) -> List[List[Tuple[float, float]]]:
         return get_visible_draw_segments(ann_list, idx, ann)

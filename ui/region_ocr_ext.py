@@ -22,7 +22,9 @@ from core.geometry import (
     extract_number_from_text,
     format_number_value,
     get_effective_cropbox,
+    raw_rect_to_view_rect,
     view_point_to_raw_pdf_from_geom,
+    view_rect_to_raw_rect,
 )
 from core.ocr_cleaner import (
     _DOT_LIKE_CHARS,
@@ -45,6 +47,12 @@ def _safe_remove_scene_item(scene, item) -> None:
 
 
 def _scene_rect_to_view_rect(viewer, scene_rect: QRectF) -> Optional[fitz.Rect]:
+    """シーン矩形を view 座標（page.rect 基準・未回転表示座標）の矩形に変換する。
+
+    折りたたみ表示中はシーン座標が帯の分だけ詰まっているため、単純な線形
+    計算ではズレる。折りたたみ対応の viewer.scene_to_pdf で raw 座標に
+    戻してから raw_rect_to_view_rect で view 座標に変換する。
+    """
     if (
         viewer.current_pdf is None
         or viewer.page_rect is None
@@ -52,19 +60,21 @@ def _scene_rect_to_view_rect(viewer, scene_rect: QRectF) -> Optional[fitz.Rect]:
         or viewer.pixmap_height <= 0
     ):
         return None
-    sx = viewer.page_rect.width() / float(viewer.pixmap_width)
-    sy = viewer.page_rect.height() / float(viewer.pixmap_height)
-    vr = fitz.Rect(
-        viewer.page_rect.x() + scene_rect.left() * sx,
-        viewer.page_rect.y() + scene_rect.top() * sy,
-        viewer.page_rect.x() + scene_rect.right() * sx,
-        viewer.page_rect.y() + scene_rect.bottom() * sy,
-    )
+    p0 = viewer.scene_to_pdf(scene_rect.topLeft())
+    p1 = viewer.scene_to_pdf(scene_rect.bottomRight())
+    with FITZ_LOCK:
+        page = viewer.current_pdf[viewer.current_page_idx]
+        vr = raw_rect_to_view_rect(page, fitz.Rect(p0.x, p0.y, p1.x, p1.y))
     vr.normalize()
     return vr
 
 
 def _view_rect_to_scene_rect(viewer, view_rect: fitz.Rect) -> QRectF:
+    """view 座標の矩形をシーン矩形に変換する（折りたたみ対応）。
+
+    view_rect_to_raw_rect で raw 座標に戻してから、折りたたみ対応の
+    viewer.pdf_to_scene でシーン座標に変換する。
+    """
     if (
         viewer.current_pdf is None
         or viewer.page_rect is None
@@ -72,12 +82,12 @@ def _view_rect_to_scene_rect(viewer, view_rect: fitz.Rect) -> QRectF:
         or viewer.page_rect.height() <= 0
     ):
         return QRectF()
-    sx = float(viewer.pixmap_width) / viewer.page_rect.width()
-    sy = float(viewer.pixmap_height) / viewer.page_rect.height()
-    return QRectF(
-        QPointF((view_rect.x0 - viewer.page_rect.x()) * sx, (view_rect.y0 - viewer.page_rect.y()) * sy),
-        QPointF((view_rect.x1 - viewer.page_rect.x()) * sx, (view_rect.y1 - viewer.page_rect.y()) * sy),
-    ).normalized()
+    with FITZ_LOCK:
+        page = viewer.current_pdf[viewer.current_page_idx]
+        raw_r = view_rect_to_raw_rect(page, view_rect)
+    x0, y0 = viewer.pdf_to_scene(fitz.Point(raw_r.x0, raw_r.y0))
+    x1, y1 = viewer.pdf_to_scene(fitz.Point(raw_r.x1, raw_r.y1))
+    return QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized()
 
 
 def _detect_border_spanning_lines(gray_bytes: bytes, w: int, h: int) -> Tuple[List[int], List[int]]:
