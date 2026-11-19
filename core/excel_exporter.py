@@ -82,6 +82,9 @@ def parse_excel_numeric_cell(text: str) -> Optional[Tuple[float, bool]]:
         val = -val
     if is_percent:
         val = val / 100.0
+    if val == 0.0:
+        # -0.0 になる経路を防ぐ（"-0.0%" が -0.0 として出力されないようにする）。
+        val = 0.0
     return val, is_percent
 
 

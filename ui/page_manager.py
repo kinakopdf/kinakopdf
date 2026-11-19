@@ -329,9 +329,17 @@ class MainPageListWidget(BasePageListWidget):
             pdf_bytes = bytes(event.mimeData().data(MIME_PDF_PAGES))
             if pdf_bytes:
                 self._accept_drag_event(event)
+                payload = pdf_bytes
+                if pdf_bytes == b"IN_PROCESS_DOC":
+                    # startDrag の drag.exec() 終了後 500ms で _in_process_drag_doc
+                    # が破棄されるため、QTimer コールバックを待たず同期処理中に
+                    # 所有権を取得する（遅延するとドキュメントが閉じられる）。
+                    in_proc_doc = BasePageListWidget.take_in_process_drag_doc()
+                    if in_proc_doc is not None:
+                        payload = in_proc_doc
                 QTimer.singleShot(
                     0,
-                    lambda t=target_idx, b=pdf_bytes: self.pagesDropped.emit(t, b),
+                    lambda t=target_idx, b=payload: self.pagesDropped.emit(t, b),
                 )
             return
 
@@ -606,6 +614,7 @@ class PageManager(QDockWidget):
         if not doc or len(doc) <= 1:
             return
 
+        viewer.cancel_active_interaction()
         selected = self.list_widget.selectedItems()
         if selected:
             rows = sorted(set(self.list_widget.row(item) for item in selected))
@@ -1100,6 +1109,7 @@ class PageManager(QDockWidget):
         if not doc:
             return
 
+        viewer.cancel_active_interaction()
         prev_idx = viewer.current_page_idx
         cmd = ReorderPagesCommand(desired, prev_idx, next_idx)
         cmd.redo(viewer)
@@ -1109,6 +1119,7 @@ class PageManager(QDockWidget):
         viewer = self.main.viewer
         doc = viewer.current_pdf
 
+        viewer.cancel_active_interaction()
         in_proc_doc = None
         if isinstance(pdf_source, fitz.Document):
             in_proc_doc = pdf_source
@@ -1241,6 +1252,7 @@ class PageManager(QDockWidget):
         if not doc:
             return
 
+        viewer.cancel_active_interaction()
         selected = self.list_widget.selectedItems()
         if selected:
             rows = sorted(set(self.list_widget.row(item) for item in selected))
@@ -1281,6 +1293,7 @@ class PageManager(QDockWidget):
         if not doc:
             return
 
+        viewer.cancel_active_interaction()
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "挿入するPDFを選択",

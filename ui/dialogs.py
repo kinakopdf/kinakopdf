@@ -11,6 +11,7 @@ from PyQt6.QtGui import (
     QShortcut,
 )
 from PyQt6.QtWidgets import (
+    QApplication,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -193,6 +194,12 @@ class TextEditDeleteDialog(QDialog):
             self.btn_delete.clicked.connect(self._on_delete_clicked)
             btn_layout.addWidget(self.btn_delete)
 
+        self.btn_copy = QPushButton("📋 コピー")
+        self.btn_copy.setAutoDefault(False)
+        self.btn_copy.setToolTip("テキストをコピーしてこの画面を閉じます（変更はしません）")
+        self.btn_copy.clicked.connect(self._on_copy_clicked)
+        btn_layout.addWidget(self.btn_copy)
+
         self.btn_cancel = QPushButton("キャンセル")
         self.btn_cancel.setAutoDefault(False)
         self.btn_cancel.clicked.connect(self.reject)
@@ -229,6 +236,16 @@ class TextEditDeleteDialog(QDialog):
     def _on_delete_clicked(self):
         self.result_action = self.ACTION_DELETE
         self.accept()
+
+    def _on_copy_clicked(self):
+        cursor = self.text_edit.textCursor()
+        if cursor.hasSelection():
+            text = cursor.selectedText().replace("\u2029", "\n")
+        else:
+            text = self.text_edit.toPlainText()
+        QApplication.clipboard().setText(text)
+        self.result_action = self.ACTION_NONE
+        self.reject()
 
     def get_clean_text(self):
         raw = self.text_edit.toPlainText()

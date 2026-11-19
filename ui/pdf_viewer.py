@@ -7,7 +7,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 import fitz
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -34,6 +34,9 @@ from PyQt6.QtWidgets import (
     QGraphicsView,
     QMainWindow,
     QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from core import (
@@ -133,7 +136,59 @@ from core.geometry import (
     view_rect_to_raw_rect,
 )
 from core.pdf_engine import PDFDocumentManager
+from core.text_select import select_words_in_rect, words_to_text
 from ui.dialogs import PreciseTextAnnotationItem, TextEditDeleteDialog
+
+
+class _TextCopyPopup(QWidget):
+    """テキスト選択後に選択範囲の近くに出すフローティングの「📋 コピー」ボタン。
+
+    Popup ウィンドウなので、外側のクリックで自動的に閉じる。Esc でも閉じる。
+    コピーボタンを押すと on_copy（クリップボードへコピー）を呼んでから閉じる。
+    閉じるときは on_closed を一度だけ呼ぶ（選択ハイライトの解除は呼び出し側で行う）。
+    """
+
+    def __init__(self, parent, on_copy, on_closed):
+        super().__init__(
+            parent,
+            Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint,
+        )
+        self._on_copy = on_copy
+        self._on_closed = on_closed
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(0)
+        self._button = QPushButton("📋 コピー", self)
+        self._button.setToolTip("選択中のテキストをクリップボードにコピーします")
+        self._button.clicked.connect(self._handle_copy_clicked)
+        layout.addWidget(self._button)
+        self.setStyleSheet(
+            "QWidget { background-color: #ffffff; border: 1px solid #8a97a5; border-radius: 6px; }"
+            "QPushButton { background-color: #e8f2ff; color: #0b3d91; border: 1px solid #7fb0e8; "
+            "  border-radius: 4px; padding: 6px 14px; font-weight: bold; font-size: 13px; }"
+            "QPushButton:hover { background-color: #d3e6ff; }"
+            "QPushButton:pressed { background-color: #bcd8ff; }"
+        )
+
+    def _handle_copy_clicked(self):
+        if self._on_copy is not None:
+            self._on_copy()
+        self.close()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        if self._on_closed is not None:
+            callback, self._on_closed = self._on_closed, None
+            callback()
 
 
 class CrispPagePixmapItem(QGraphicsRectItem):
@@ -316,6 +371,12 @@ class PDFViewer(QGraphicsView):
         # 向き "h" は横帯 (y0, y1)、向き "v" は縦帯 (x0, x1)。
         # PDFファイルには一切書き込まない。表示だけの状態。
         self._fold_bands: Dict[int, Tuple[str, float, float]] = {}
+        # テキスト選択（ドラッグで文字を選び、コピーボタンを出す）の一時状態。
+        # 単語は raw 座標のタプル (x0, y0, x1, y1, text, block, line, word)。
+        self._text_sel_words: List[Tuple] = []
+        self._text_sel_text = ""
+        self._text_sel_highlight_group = None
+        self._copy_popup = None
 
     @property
     def current_annotations(self):
@@ -365,6 +426,7 @@ class PDFViewer(QGraphicsView):
             self._dragging_text_item.setPos(self._text_drag_start_item_pos)
         self._reset_text_drag_state()
         self._clear_interactive_guides()
+        self.clear_text_selection()
         if self.region_ocr_controller is not None:
             self.region_ocr_controller.cancel_drag()
 
@@ -576,6 +638,7 @@ class PDFViewer(QGraphicsView):
         self._cached_pdf_tokens = []
         self._cached_tokens_key = None
         self._pdf_tokens_cache.clear()
+        self.clear_text_selection()
         if self.region_ocr_controller is not None and hasattr(self.region_ocr_controller, "reset"):
             self.region_ocr_controller.reset()
 
@@ -830,6 +893,162 @@ class PDFViewer(QGraphicsView):
         if has_item:
             self.scene.addItem(group)
             self.search_highlight_group = group
+
+    # ==========================================
+    # テキスト選択 → コピーボタン（表示だけの一時選択。PDFは変えない）
+    # ==========================================
+
+    def _get_page_word_rects_raw(self, page_idx=None):
+        """今のページの単語矩形を raw 座標のタプル一覧で返す。
+
+        PyMuPDF の get_text("words") は未回転・cropbox 基準の座標を返すため、
+        cropbox の原点を足して raw（未回転・mediabox 基準）座標に変換する。
+        各要素は (x0, y0, x1, y1, text, block_no, line_no, word_no)。
+        """
+        if not self.current_pdf:
+            return []
+        target_idx = self.current_page_idx if page_idx is None else int(page_idx)
+        if not (0 <= target_idx < len(self.current_pdf)):
+            return []
+        with FITZ_LOCK:
+            page = self.current_pdf[target_idx]
+            crop = get_effective_cropbox(page)
+            try:
+                words = page.get_text("words") or []
+            except Exception:
+                return []
+        out = []
+        for w in words:
+            if len(w) < 5:
+                continue
+            text = str(w[4]).strip()
+            if not text:
+                continue
+            try:
+                block_no = int(w[5]) if len(w) > 5 else 0
+                line_no = int(w[6]) if len(w) > 6 else 0
+                word_no = int(w[7]) if len(w) > 7 else 0
+            except (TypeError, ValueError):
+                block_no, line_no, word_no = 0, 0, 0
+            out.append((
+                float(w[0]) + crop.x0,
+                float(w[1]) + crop.y0,
+                float(w[2]) + crop.x0,
+                float(w[3]) + crop.y0,
+                text,
+                block_no,
+                line_no,
+                word_no,
+            ))
+        return out
+
+    def _finish_text_selection(self, raw_rect, scene_rect):
+        """ドラッグ確定後のテキスト選択処理。単語を集めてハイライト＋コピーポップアップを出す。
+
+        消去済み領域（白塗り墨消し・テキスト消去）の単語は対象外にする。
+        なお単語矩形は get_text("words") が未回転・cropbox 基準で返すため、
+        _get_page_word_rects_raw の cropbox 原点加算が全回転角で正しい
+        （view_rect_to_raw_rect で変換すると回転時にズレるので使わない）。
+        """
+        words = self._get_page_word_rects_raw()
+        erased_rects = collect_all_erased_raw_rects(self.current_annotations)
+        if erased_rects:
+            words = [
+                w
+                for w in words
+                if not is_rect_substantially_erased(
+                    fitz.Rect(w[0], w[1], w[2], w[3]), erased_rects
+                )
+            ]
+        selected = select_words_in_rect(
+            words, (raw_rect.x0, raw_rect.y0, raw_rect.x1, raw_rect.y1)
+        )
+        text = words_to_text(selected)
+        if not text:
+            self.clear_text_selection()
+            self._show_status_message("選択範囲にコピーできる文字が見つかりませんでした")
+            return
+        self._text_sel_words = selected
+        self._text_sel_text = text
+        self._update_text_sel_highlight_items()
+        self._show_copy_popup(scene_rect)
+        self._show_status_message(
+            f"📋 {len(selected)}個の単語を選択しました（{len(text)}文字）。"
+            "コピーボタンを押すとコピーして閉じます"
+        )
+
+    def _update_text_sel_highlight_items(self):
+        if self._text_sel_highlight_group is not None:
+            if self._text_sel_highlight_group.scene() is self.scene:
+                self.scene.removeItem(self._text_sel_highlight_group)
+            self._text_sel_highlight_group = None
+
+        if not self.current_pdf or not self._text_sel_words:
+            return
+
+        group = QGraphicsItemGroup()
+        group.setZValue(955)
+        for w in self._text_sel_words:
+            x0, y0 = self.pdf_to_scene(fitz.Point(w[0], w[1]))
+            x1, y1 = self.pdf_to_scene(fitz.Point(w[2], w[3]))
+            s_rect = QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized().adjusted(-1.5, -1.5, 1.5, 1.5)
+            rect_item = QGraphicsRectItem(s_rect)
+            rect_item.setPen(QPen(QColor(0, 120, 215, 200), 1.2, Qt.PenStyle.SolidLine))
+            rect_item.setBrush(QBrush(QColor(0, 120, 215, 55)))
+            group.addToGroup(rect_item)
+
+        self.scene.addItem(group)
+        self._text_sel_highlight_group = group
+
+    def _show_copy_popup(self, scene_rect):
+        """選択範囲の右下の近くにフローティングの「📋 コピー」ボタンを出す。"""
+        self._hide_copy_popup()
+        popup = _TextCopyPopup(
+            self.viewport(), self._copy_selected_text, self._on_copy_popup_closed
+        )
+        popup.adjustSize()
+        anchor_view = self.mapFromScene(scene_rect.bottomRight())
+        pw, ph = popup.width(), popup.height()
+        vp_rect = self.viewport().rect()
+        x = min(max(anchor_view.x() + 8, 4), max(4, vp_rect.width() - pw - 4))
+        y = min(max(anchor_view.y() + 8, 4), max(4, vp_rect.height() - ph - 4))
+        popup.move(self.viewport().mapToGlobal(QPoint(x, y)))
+        self._copy_popup = popup
+        popup.show()
+        popup.setFocus()
+
+    def _hide_copy_popup(self):
+        if self._copy_popup is not None:
+            popup, self._copy_popup = self._copy_popup, None
+            popup.close()
+
+    def _on_copy_popup_closed(self):
+        """ポップアップが閉じたら（コピー・Esc・外側クリック）選択も解除する。"""
+        self._copy_popup = None
+        self._clear_text_selection_data()
+
+    def _clear_text_selection_data(self):
+        self._text_sel_words = []
+        self._text_sel_text = ""
+        if self._text_sel_highlight_group is not None:
+            if self._text_sel_highlight_group.scene() is self.scene:
+                self.scene.removeItem(self._text_sel_highlight_group)
+            self._text_sel_highlight_group = None
+
+    def clear_text_selection(self):
+        """テキスト選択のポップアップとハイライトを解除する。"""
+        self._hide_copy_popup()
+        self._clear_text_selection_data()
+
+    def _copy_selected_text(self):
+        """選択中のテキストをクリップボードにコピーする（ポップアップは呼び出し側で閉じる）。"""
+        text = self._text_sel_text
+        if not text:
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+        self._show_status_message(f"📋 テキストをコピーしました（{len(text)}文字）")
 
     def clear_calc_selection(self):
         if not self.calc_selected_items and self.calc_highlight_group is None:
@@ -2255,7 +2474,13 @@ class PDFViewer(QGraphicsView):
             self._zoom_render_timer.start()
 
     def _on_zoom_render_timeout(self):
-        if not self.current_pdf or self.page_rect is None or self.page_rect.width() <= 0:
+        # 文書が閉じられた後にタイマーが発火することがある（テスト等）。
+        # 閉じた文書に len() を呼ぶと ValueError になり、Qt スロットからの
+        # 例外でプロセスが abort するため、is_closed で先に弾く。
+        doc = self.current_pdf
+        if doc is None or getattr(doc, "is_closed", False):
+            return
+        if self.page_rect is None or self.page_rect.width() <= 0:
             return
         current_phys_w, current_phys_h = self._compute_target_physical_size()
 
@@ -2291,6 +2516,10 @@ class PDFViewer(QGraphicsView):
         self.hover_highlight_item = None
         self.calc_highlight_group = None
         self.search_highlight_group = None
+        self._hide_copy_popup()
+        self._text_sel_words = []
+        self._text_sel_text = ""
+        self._text_sel_highlight_group = None
         self._base_pixmap_item = None
         if self.region_ocr_controller is not None:
             self.region_ocr_controller.on_scene_about_to_clear()
@@ -2805,6 +3034,7 @@ class PDFViewer(QGraphicsView):
             if self.search_results:
                 self.clear_search_results()
             self.clear_calc_selection()
+            self.clear_text_selection()
             self.escapePressed.emit()
             event.accept()
             return
@@ -2841,6 +3071,8 @@ class PDFViewer(QGraphicsView):
     def _restore_mode_cursor(self):
         if self.mode == "view":
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+        elif self.mode == "text_select":
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         elif self.mode in ("crop", "box_erase", "highlight", "type", "draw", "region_ocr", "fold"):
             self.viewport().setCursor(Qt.CursorShape.CrossCursor)
         elif self.mode in ("text_erase", "highlight_erase"):
@@ -3063,7 +3295,7 @@ class PDFViewer(QGraphicsView):
                 event.accept()
                 return
 
-        if self.mode in ("crop", "box_erase", "highlight", "highlight_erase", "fold"):
+        if self.mode in ("crop", "box_erase", "highlight", "highlight_erase", "fold", "text_select"):
             pos = self._clamp_to_scene(raw_pos)
         else:
             if not self.scene.sceneRect().contains(raw_pos):
@@ -3119,8 +3351,10 @@ class PDFViewer(QGraphicsView):
             QTimer.singleShot(0, lambda p=QPointF(pos): self.prompt_new_text_at_scene_pos(p))
             return
 
-        if self.mode in ("crop", "box_erase", "highlight", "highlight_erase", "fold"):
+        if self.mode in ("crop", "box_erase", "highlight", "highlight_erase", "fold", "text_select"):
             self._clear_interactive_guides()
+            if self.mode == "text_select":
+                self.clear_text_selection()
             self.drawing = True
             self.drag_start_pos = pos
 
@@ -3146,6 +3380,11 @@ class PDFViewer(QGraphicsView):
                     QPen(QColor(220, 20, 20, 230), 2.0, Qt.PenStyle.DashLine)
                 )
                 self.drag_rect_item.setBrush(QBrush(QColor(255, 80, 80, 45)))
+            elif self.mode == "text_select":
+                self.drag_rect_item.setPen(
+                    QPen(QColor(0, 120, 215, 230), 1.8, Qt.PenStyle.DashLine)
+                )
+                self.drag_rect_item.setBrush(QBrush(QColor(0, 120, 215, 45)))
             else:
                 self.drag_rect_item.setPen(
                     QPen(QColor(220, 0, 0, 200), 1.5, Qt.PenStyle.DashLine)
@@ -3237,7 +3476,7 @@ class PDFViewer(QGraphicsView):
 
         if (
             self.drawing
-            and self.mode in ("crop", "box_erase", "highlight", "highlight_erase", "text_erase", "fold")
+            and self.mode in ("crop", "box_erase", "highlight", "highlight_erase", "text_erase", "fold", "text_select")
             and self.drag_rect_item is not None
         ):
             clamped_pos = self._clamp_to_scene(raw_pos)
@@ -3648,6 +3887,21 @@ class PDFViewer(QGraphicsView):
                         )
                 else:
                     self.render_page(fit_view=False, rebuild_base=False)
+
+            elif self.mode == "text_select" and self.drag_rect_item is not None:
+                rect = self.drag_rect_item.rect()
+                if self.drag_rect_item.scene() is self.scene:
+                    self.scene.removeItem(self.drag_rect_item)
+                self.drag_rect_item = None
+
+                if rect.width() > 3 and rect.height() > 3:
+                    p0 = self.scene_to_pdf(rect.topLeft())
+                    p1 = self.scene_to_pdf(rect.bottomRight())
+                    raw_rect = fitz.Rect(p0.x, p0.y, p1.x, p1.y)
+                    raw_rect.normalize()
+                    self._finish_text_selection(raw_rect, rect)
+                else:
+                    self.clear_text_selection()
 
             elif self.mode in ("draw", "erase") and self.current_path_item is not None:
                 raw_pos = self._clamp_to_scene(self.mapToScene(event.position().toPoint()))
