@@ -375,6 +375,147 @@ def fill_form_fields(doc, values: dict) -> dict:
     return {"filled": filled, "missing": missing}
 
 
+def _pdf_string_literal(text: str) -> str:
+    """文字列を PDF の文字列オブジェクト表現にする。
+
+    印字可能な ASCII だけならリテラル文字列 (...)、それ以外は
+    UTF-16BE の16進文字列 <FEFF...> にする（日本語も安全に書ける）。
+    """
+    if all(0x20 <= ord(c) <= 0x7E for c in text):
+        escaped = (
+            text.replace("\\", "\\\\")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+        )
+        return f"({escaped})"
+    return "<" + (b"\xfe\xff" + text.encode("utf-16-be")).hex() + ">"
+
+
+def snapshot_form_field_values(doc, names=None) -> list:
+    """フォーム欄の値をウィジェット単位で記録する（Undo 用スナップショット）。
+
+    同じ名前の欄でも、ウィジェット自身が /V を持っていると欄ごとに
+    別の値になり得るため、名前単位ではなくウィジェット単位で記録する。
+
+    names が与えられた場合は、その名前の欄だけを対象にする。
+    戻り値: [{"page": int（0始まり）, "xref": int, "order": int,
+              "name": str, "field_type": int, "value": object,
+              "own_value": bool}, ...]
+    order は同一ページ・同一名の中での出現順（xref が変わった場合の予備の手がかり）。
+    own_value はウィジェット自身が /V を持っているかどうか。
+    """
+    entries = []
+    counters = {}
+    for page_idx, page in enumerate(doc):
+        for widget in page.widgets() or []:
+            name = widget.field_name or ""
+            if names is not None and name not in names:
+                continue
+            key = (page_idx, name)
+            order = counters.get(key, 0)
+            counters[key] = order + 1
+            try:
+                vtype, _vraw = doc.xref_get_key(widget.xref, "V")
+            except Exception:
+                vtype = "null"
+            entries.append({
+                "page": page_idx,
+                "xref": widget.xref,
+                "order": order,
+                "name": name,
+                "field_type": widget.field_type,
+                "value": widget.field_value,
+                "own_value": vtype != "null",
+            })
+    return entries
+
+
+def _match_widget(widgets, entry):
+    """ウィジェット一覧からスナップショットの1件に対応するものを探す。
+
+    xref が一致するものを優先し、無ければ（名前・出現順）で探す。
+    """
+    for widget in widgets:
+        if widget.xref == entry.get("xref"):
+            return widget
+    same_name = [w for w in widgets
+                 if (w.field_name or "") == entry.get("name", "")]
+    order = entry.get("order", 0)
+    if 0 <= order < len(same_name):
+        return same_name[order]
+    return None
+
+
+def _restore_widget_value(doc, page, entry) -> bool:
+    """スナップショットの1件分を、対応するウィジェットに戻す。
+
+    注意: PyMuPDF の Widget は、取り出した Page が解放されると
+    update() が失敗する（Annot is not bound to a page）ため、
+    必ず page を保持した状態で呼ぶこと。
+    """
+    widgets = list(page.widgets() or [])
+    widget = _match_widget(widgets, entry)
+    if widget is None:
+        return False
+    value = entry.get("value")
+    if widget.field_type in (
+        fitz.PDF_WIDGET_TYPE_CHECKBOX,
+        fitz.PDF_WIDGET_TYPE_RADIOBUTTON,
+    ):
+        if isinstance(value, str):
+            value = value.strip().lower() in (
+                "on", "true", "1", "yes", "チェック")
+        widget.field_value = bool(value)
+        widget.update()
+        return True
+    new_text = "" if value is None else str(value)
+    if entry.get("own_value"):
+        # 自前の /V を直接戻してから、ウィジェットを取り直して
+        # 見た目（appearance）をその値で作り直す。
+        doc.xref_set_key(widget.xref, "V", _pdf_string_literal(new_text))
+        fresh = _match_widget(list(page.widgets() or []), entry)
+        if fresh is not None:
+            fresh.update()
+        return True
+    if new_text == "":
+        _clear_widget_value(doc, widget)
+    widget.field_value = new_text
+    widget.update()
+    return True
+
+
+def set_form_field_values_by_widget(doc, entries) -> dict:
+    """snapshot_form_field_values で記録した値をウィジェット単位で復元する。
+
+    戻り値: {"filled": 復元できた件数, "missing": 見つからなかった件数}
+
+    復元の順序が重要: ウィジェット自身の /V を持つものを先に戻す。
+    widget.update() は親フィールドの /V をそのウィジェットの値で書き換える
+    副作用があるため、自前 /V を持たないウィジェット（親の値を共有する側）を
+    後に戻すことで、親の値が最後に正しい共有値で確定する。
+    """
+    filled = 0
+    missing = 0
+    all_entries = list(entries or [])
+    for own_pass in (True, False):
+        targets = [e for e in all_entries
+                   if bool(e.get("own_value")) == own_pass]
+        if not targets:
+            continue
+        done = 0
+        for page_no, page in enumerate(doc):
+            page_targets = [e for e in targets if e.get("page") == page_no]
+            for entry in page_targets:
+                try:
+                    if _restore_widget_value(doc, page, entry):
+                        done += 1
+                except Exception:
+                    pass
+        filled += done
+        missing += len(targets) - done
+    return {"filled": filled, "missing": missing}
+
+
 def flatten_form_fields(doc) -> dict:
     """フォーム欄を通常の表示に固定（フラット化）する。
 

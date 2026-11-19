@@ -943,13 +943,26 @@ class FillFormFieldsCommand(BaseCommand):
     def __init__(self, doc, values):
         super().__init__()
         self.values = {str(k): v for k, v in (values or {}).items()}
-        self.old_values = {}
+        # 旧値はウィジェット単位で記録する。同名の欄でもウィジェット自身が
+        # /V を持っていると欄ごとに別の値になり得て、名前単位の記録だと
+        # Undo で全部同じ値に戻ってしまうため。
+        self.old_entries = []
         with FITZ_LOCK:
-            for page in doc:
-                for widget in page.widgets() or []:
-                    name = widget.field_name or ""
-                    if name in self.values and name not in self.old_values:
-                        self.old_values[name] = widget.field_value
+            from core.trial_tools import snapshot_form_field_values
+
+            self.old_entries = snapshot_form_field_values(
+                doc, names=set(self.values))
+        # 名前→最初の値（従来形式。参照用に残す）
+        self.old_values = {}
+        for entry in self.old_entries:
+            self.old_values.setdefault(entry["name"], entry["value"])
+        self.affected_pages = sorted({e["page"] for e in self.old_entries})
+
+    def _refresh_viewer(self, viewer):
+        viewer.render_page(fit_view=False, rebuild_base=True)
+        # 他のコマンドと同様に、サムネイル側にも更新を通知する
+        viewer.notify_pages_updated(self.affected_pages or None)
+        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
 
     def _apply(self, viewer, values):
         from core.trial_tools import fill_form_fields
@@ -959,11 +972,17 @@ class FillFormFieldsCommand(BaseCommand):
             return
         with FITZ_LOCK:
             fill_form_fields(doc, values)
-        viewer.render_page(fit_view=False, rebuild_base=True)
-        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
+        self._refresh_viewer(viewer)
 
     def redo(self, viewer):
         self._apply(viewer, self.values)
 
     def undo(self, viewer):
-        self._apply(viewer, self.old_values)
+        from core.trial_tools import set_form_field_values_by_widget
+
+        doc = viewer.current_pdf
+        if doc is None:
+            return
+        with FITZ_LOCK:
+            set_form_field_values_by_widget(doc, self.old_entries)
+        self._refresh_viewer(viewer)
