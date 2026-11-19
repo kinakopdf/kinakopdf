@@ -117,6 +117,36 @@ from ui.region_ocr_ext import DirectViewerRegionOCRController
 from ui.spread_reader import FullscreenSpreadReader
 
 
+# ============================================================
+# 印刷まわりの共通計算（プレビューと実印刷で同じ結果にするため共有する）
+# ============================================================
+PRINT_SHEET_MARGIN_PT = 14.0  # 「余白あり」モードの余白（pt）
+PRINT_GRID_MAX_PAGES = 24  # 一覧プレビューで描画する最大ページ数
+
+
+def print_margin_pt(scale_mode) -> float:
+    """印刷スケールモードに応じた余白（pt）。プレビューと実印刷で共通。"""
+    return PRINT_SHEET_MARGIN_PT if scale_mode == "fit_margin" else 0.0
+
+
+def fit_size_within(content_w, content_h, avail_w, avail_h):
+    """縦横比を保ったまま avail 内に収まる描画サイズ (w, h) を返す。"""
+    if content_w <= 0 or content_h <= 0 or avail_w <= 0 or avail_h <= 0:
+        return 0.0, 0.0
+    ratio = min(avail_w / content_w, avail_h / content_h)
+    return content_w * ratio, content_h * ratio
+
+
+def print_grid_status_text(total_sel: int) -> str:
+    """一覧プレビューのステータス表示。上限を超える場合はその旨を明記する。"""
+    if total_sel > PRINT_GRID_MAX_PAGES:
+        return (
+            f" 一覧（全 {total_sel} ページ中 "
+            f"最大{PRINT_GRID_MAX_PAGES}ページまで表示） "
+        )
+    return f" 全 {total_sel} ページ一覧 "
+
+
 class MainWindow(QMainWindow):
 
     _open_windows = []
@@ -2087,7 +2117,7 @@ class MainWindow(QMainWindow):
             page = work_doc[page_idx]
             pr = page.rect
             scale_mode = combo_scale.currentData()
-            margin_pt = 14.0 if scale_mode == "fit_margin" else 0.0
+            margin_pt = print_margin_pt(scale_mode)
 
             avail_w_pt = max(20.0, paper_w_pt - margin_pt * 2.0)
             avail_h_pt = max(20.0, paper_h_pt - margin_pt * 2.0)
@@ -2096,9 +2126,9 @@ class MainWindow(QMainWindow):
                 draw_w_pt = pr.width
                 draw_h_pt = pr.height
             else:
-                ratio = min(avail_w_pt / max(1.0, pr.width), avail_h_pt / max(1.0, pr.height))
-                draw_w_pt = pr.width * ratio
-                draw_h_pt = pr.height * ratio
+                draw_w_pt, draw_h_pt = fit_size_within(
+                    max(1.0, pr.width), max(1.0, pr.height),
+                    avail_w_pt, avail_h_pt)
 
             draw_w_px = max(1, int(round(draw_w_pt * scale_pt_to_px)))
             draw_h_px = max(1, int(round(draw_h_pt * scale_pt_to_px)))
@@ -2193,11 +2223,11 @@ class MainWindow(QMainWindow):
 
                 preview_scene.setSceneRect(QRectF(-20.0, -20.0, pw + 50.0, ph + 50.0))
             else:
-                lbl_page_status.setText(f" 全 {total_sel} ページ一覧 ")
+                lbl_page_status.setText(print_grid_status_text(total_sel))
                 btn_prev.setEnabled(False)
                 btn_next.setEnabled(False)
 
-                max_grid_pages = min(total_sel, 24)
+                max_grid_pages = min(total_sel, PRINT_GRID_MAX_PAGES)
                 cols = max(1, min(4, int(math.ceil(math.sqrt(max_grid_pages)))))
                 grid_dpi = 130 if max_grid_pages <= 9 else 96
 
@@ -2334,24 +2364,29 @@ class MainWindow(QMainWindow):
                     ):
                         continue
 
+                    # プレビューと同じ余白を実印刷にも付ける（「余白あり」時）。
+                    # 余白を引いた残りの領域にフィットさせることで、
+                    # プレビュー表示と印刷結果の大きさ・位置が一致する。
+                    margin_pt = print_margin_pt(scale_mode)
+                    if margin_pt > 0:
+                        eff_dpi = dpi if dpi and dpi > 0 else render_dpi
+                        m_px = margin_pt / 72.0 * eff_dpi
+                        target_rect = target_rect.adjusted(
+                            m_px, m_px, -m_px, -m_px)
+                        if target_rect.width() <= 0 or target_rect.height() <= 0:
+                            continue
+
                     if scale_mode == "actual" and dpi > 0:
                         draw_w = (page.rect.width / 72.0) * dpi
                         draw_h = (page.rect.height / 72.0) * dpi
                         draw_x = target_rect.left() + (target_rect.width() - draw_w) / 2.0
                         draw_y = target_rect.top() + (target_rect.height() - draw_h) / 2.0
                     else:
-                        img_ratio = qimg.width() / qimg.height()
-                        rect_ratio = target_rect.width() / target_rect.height()
-                        if img_ratio > rect_ratio:
-                            draw_w = target_rect.width()
-                            draw_h = draw_w / img_ratio
-                            draw_x = target_rect.left()
-                            draw_y = target_rect.top() + (target_rect.height() - draw_h) / 2.0
-                        else:
-                            draw_h = target_rect.height()
-                            draw_w = draw_h * img_ratio
-                            draw_x = target_rect.left() + (target_rect.width() - draw_w) / 2.0
-                            draw_y = target_rect.top()
+                        draw_w, draw_h = fit_size_within(
+                            float(qimg.width()), float(qimg.height()),
+                            target_rect.width(), target_rect.height())
+                        draw_x = target_rect.left() + (target_rect.width() - draw_w) / 2.0
+                        draw_y = target_rect.top() + (target_rect.height() - draw_h) / 2.0
 
                     painter.drawImage(
                         QRectF(draw_x, draw_y, draw_w, draw_h),
