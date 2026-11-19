@@ -113,6 +113,7 @@ from ui.accounting_dialogs import (
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
 from ui.pdf_viewer import PDFViewer
+from ui.photo_to_pdf_dialog import PhotoToPdfDialog
 from ui.region_ocr_ext import DirectViewerRegionOCRController
 from ui.spread_reader import FullscreenSpreadReader
 
@@ -549,6 +550,7 @@ class MainWindow(QMainWindow):
         self.add_action(trial_toolbar, "🔴 印鑑・スタンプ", self.trial_stamp_dialog)
         self.add_action(trial_toolbar, "🔖 しおり", self.trial_bookmark_dialog)
         self.add_action(trial_toolbar, "🔢 ヘッダー/透かし", self.trial_header_footer_dialog)
+        self.add_action(trial_toolbar, "📷 写真をPDF化", self.trial_photo_to_pdf_dialog)
 
         # 試作多機能版（feature/trial-multi）の P1 機能（会計向け）
         p1_toolbar = QToolBar("会計試作ツールバー")
@@ -1717,6 +1719,11 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.information(
             self, "完了", f"{res['pages']}ページに適用しました。\n保存するとPDFに反映されます。")
+
+    def trial_photo_to_pdf_dialog(self):
+        # 写真から新規PDFを作る機能なので、PDFが開かれていなくても使える
+        dlg = PhotoToPdfDialog(self)
+        dlg.exec()
 
     # 試作多機能版 P1（feature/trial-multi・会計向け）
     # コア処理は core/accounting_tools.py、ダイアログは ui/accounting_dialogs.py
