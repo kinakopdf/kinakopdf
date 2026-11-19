@@ -268,6 +268,7 @@ class PDFViewer(QGraphicsView):
     escapePressed = pyqtSignal()
     searchStatusChanged = pyqtSignal(int, int)
     batchStatusMessage = pyqtSignal(str)
+    scrollModeChanged = pyqtSignal(bool)
     _cached_font_family = None
 
     def __init__(self, parent=None):
@@ -309,6 +310,18 @@ class PDFViewer(QGraphicsView):
         self._pan_start_pos = QPointF()
         self._space_pressed = False
         self._last_wheel_page_turn_time = 0.0
+
+        # ページスクロール表示（通常画面で全ページを縦に並べてスクロールする表示）。
+        # 閲覧専用。注釈の表示・編集はしない（ダブルクリックで1ページ表示に戻る）。
+        self.scroll_mode = False
+        self._scroll_zoom = 1.0
+        self._scroll_page_rects: Dict[int, QRectF] = {}
+        self._scroll_items: Dict[int, object] = {}
+        self._scroll_rendered: set = set()
+        self._scroll_pixmap_cache: Dict[Tuple[int, int], QPixmap] = {}
+        self._scroll_updating_page = False
+        self._scroll_press_pos = None
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll_bar_changed)
 
         self.page_annotations = {}
         self.history = HistoryManager()
@@ -1385,10 +1398,20 @@ class PDFViewer(QGraphicsView):
         return len(candidates)
 
     def load_pdf(self, doc, page_idx=0, fit_view=True):
+        # スクロール表示中は、同じ文書のページ移動はスクロールだけですませる。
+        if self.scroll_mode and doc is self.current_pdf and len(doc) > 0:
+            target = max(0, min(page_idx, len(doc) - 1))
+            self._scroll_to_page(target)
+            if target != self.current_page_idx:
+                self.current_page_idx = target
+                self.pageSelectionChanged.emit(target)
+                self.statusUpdated.emit()
+            return
         # 別の文書を開いたら折りたたみ状態はリセットする。
         # 同じ文書内のページ移動では状態を残す。
         if doc is not self.current_pdf:
             self._fold_bands.clear()
+            self._scroll_pixmap_cache.clear()
         self.cancel_active_interaction()
         self.current_pdf = doc
         self._close_clean_redacted_doc()
@@ -1428,6 +1451,234 @@ class PDFViewer(QGraphicsView):
             self.load_pdf(self.current_pdf, self.current_page_idx + 1, fit_view=True)
             return True
         return False
+
+    # ==========================================
+    # ページスクロール表示（ベータ版）
+    # 通常画面で全ページを縦に並べ、スクロールして読む表示。閲覧専用で、
+    # 注釈の表示・編集はしない。ダブルクリックで1ページ表示に戻って編集する。
+    # ==========================================
+    SCROLL_PAGE_GAP = 16.0
+    SCROLL_MIN_ZOOM = 0.5
+    SCROLL_MAX_ZOOM = 3.0
+
+    def set_scroll_mode(self, on: bool):
+        """スクロール表示のON/OFFを切り替える。OFFにすると1ページ表示に戻る。"""
+        on = bool(on)
+        if on and (not self.current_pdf or len(self.current_pdf) == 0):
+            self._show_status_message("スクロール表示するPDFが開かれていません。先にPDFを開いてください。")
+            self.scrollModeChanged.emit(False)
+            return
+        if on == self.scroll_mode:
+            return
+        self.cancel_active_interaction()
+        self.scroll_mode = on
+        if on:
+            self._scroll_zoom = 1.0
+            self._scroll_pixmap_cache.clear()
+            self._render_scroll_view()
+            self._show_status_message(
+                "スクロール表示：ホイールでページをスクロールします。"
+                "ダブルクリックで1ページ表示に戻って編集できます。"
+            )
+        else:
+            self.load_pdf(self.current_pdf, self.current_page_idx, fit_view=True)
+        self.scrollModeChanged.emit(on)
+
+    def _scroll_display_size(self, page_idx: int) -> Tuple[float, float]:
+        """回転を考慮したページの表示サイズ（PDFポイント単位）を返す。"""
+        with FITZ_LOCK:
+            page = self.current_pdf[page_idx]
+            rect = page.rect
+            rot = page.rotation % 360
+        w, h = float(rect.width), float(rect.height)
+        if rot in (90, 270):
+            w, h = h, w
+        return max(1.0, w), max(1.0, h)
+
+    def _scroll_fit_scale(self) -> float:
+        """画面幅に合わせる倍率（ズーム倍率込み）を返す。"""
+        if not self.current_pdf or len(self.current_pdf) == 0:
+            return 1.0
+        max_w = max(self._scroll_display_size(i)[0] for i in range(len(self.current_pdf)))
+        avail = max(50.0, float(self.viewport().width()) - 8.0)
+        return max(0.05, avail / max_w) * self._scroll_zoom
+
+    def _render_scroll_view(self):
+        """スクロール表示のシーン全体を作り直す（レイアウト＋見えているページの描画）。"""
+        if not self.current_pdf or len(self.current_pdf) == 0:
+            return
+        self.drawing = False
+        self._reset_text_drag_state()
+        self.current_path = None
+        self.current_path_item = None
+        self.current_stroke = []
+        self.drag_rect_item = None
+        self._calc_dragging = False
+        self._calc_drag_rect_item = None
+        self.text_guide_group = None
+        self.hover_highlight_item = None
+        self.calc_highlight_group = None
+        self.search_highlight_group = None
+        self._hide_copy_popup()
+        self._text_sel_words = []
+        self._text_sel_text = ""
+        self._text_sel_highlight_group = None
+        self._base_pixmap_item = None
+        if self.region_ocr_controller is not None:
+            self.region_ocr_controller.on_scene_about_to_clear()
+        self.scene.clear()
+
+        scale = self._scroll_fit_scale()
+        total_w = 0.0
+        self._scroll_page_rects = {}
+        self._scroll_items = {}
+        self._scroll_rendered = set()
+        rects: Dict[int, QRectF] = {}
+        y = 0.0
+        for i in range(len(self.current_pdf)):
+            w, h = self._scroll_display_size(i)
+            rw, rh = w * scale, h * scale
+            total_w = max(total_w, rw)
+            rects[i] = (rw, rh, y)
+            y += rh + self.SCROLL_PAGE_GAP
+        total_h = max(1.0, y - self.SCROLL_PAGE_GAP)
+        for i, (rw, rh, top) in rects.items():
+            x = (total_w - rw) / 2.0
+            rect = QRectF(x, top, rw, rh)
+            self._scroll_page_rects[i] = rect
+            ph = QGraphicsRectItem(rect)
+            ph.setPen(QPen(QColor(200, 190, 170)))
+            ph.setBrush(QBrush(QColor(245, 242, 235)))
+            self.scene.addItem(ph)
+            self._scroll_items[i] = ph
+        self.scene.setSceneRect(QRectF(0, 0, total_w, total_h))
+        self.resetTransform()
+        self._render_visible_scroll_pages()
+        self._scroll_to_page(self.current_page_idx)
+        self.statusUpdated.emit()
+
+    def _render_visible_scroll_pages(self):
+        """画面に見えているページ（＋上下1ページ分）だけ描画する。"""
+        if not self.scroll_mode or not self._scroll_page_rects:
+            return
+        visible = self.mapToScene(self.viewport().rect()).boundingRect()
+        margin = max(200.0, self.viewport().height())
+        expanded = visible.adjusted(0, -margin, 0, margin)
+        for i, rect in self._scroll_page_rects.items():
+            if i in self._scroll_rendered:
+                continue
+            if rect.intersects(expanded):
+                self._render_scroll_page(i)
+
+    def _render_scroll_page(self, page_idx: int):
+        rect = self._scroll_page_rects.get(page_idx)
+        if rect is None:
+            return
+        dpr = max(1.0, float(self.viewport().devicePixelRatioF()))
+        target_w = max(64, int(round(rect.width() * dpr)))
+        cache_key = (page_idx, target_w)
+        pixmap = self._scroll_pixmap_cache.get(cache_key)
+        if pixmap is None:
+            pixmap = self._render_scroll_page_pixmap(page_idx, target_w)
+            if pixmap is None:
+                return
+            self._scroll_pixmap_cache[cache_key] = pixmap
+        item = CrispPagePixmapItem(pixmap, rect.width(), rect.height())
+        item.setPos(rect.topLeft())
+        old = self._scroll_items.get(page_idx)
+        if old is not None and old.scene() is self.scene:
+            self.scene.removeItem(old)
+        self.scene.addItem(item)
+        self._scroll_items[page_idx] = item
+        self._scroll_rendered.add(page_idx)
+
+    def _render_scroll_page_pixmap(self, page_idx: int, target_w: int):
+        """1ページ分の画像を作る。墨消し（テキストのみ）済みのページは消した状態で描く。"""
+        with FITZ_LOCK:
+            disp_w, _disp_h = self._scroll_display_size(page_idx)
+            scale = target_w / disp_w
+            source_page = self.current_pdf[page_idx]
+            temp_doc = None
+            redact_rects = collect_text_only_redact_raw_rects(
+                self.page_annotations.get(page_idx, [])
+            )
+            if redact_rects:
+                temp_doc = fitz.open()
+                temp_doc.insert_pdf(self.current_pdf, from_page=page_idx, to_page=page_idx)
+                temp_page = temp_doc[0]
+                saved_rot = temp_page.rotation % 360
+                saved_crop = get_effective_cropbox(temp_page)
+                temp_page.set_rotation(0)
+                temp_page.set_cropbox(temp_page.mediabox)
+                PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, redact_rects)
+                if temp_page.rotation != saved_rot:
+                    temp_page.set_rotation(saved_rot)
+                if saved_crop != temp_page.mediabox:
+                    temp_page.set_cropbox(saved_crop)
+                source_page = temp_page
+            try:
+                pix = source_page.get_pixmap(
+                    matrix=fitz.Matrix(scale, scale),
+                    colorspace=fitz.csRGB,
+                    alpha=False,
+                )
+                qimg = QImage(
+                    pix.samples,
+                    pix.width,
+                    pix.height,
+                    pix.stride,
+                    QImage.Format.Format_RGB888,
+                ).copy()
+            finally:
+                if temp_doc is not None:
+                    temp_doc.close()
+        return QPixmap.fromImage(qimg)
+
+    def _on_scroll_bar_changed(self):
+        if not self.scroll_mode:
+            return
+        self._render_visible_scroll_pages()
+        self._update_scroll_current_page()
+
+    def _scroll_page_at_scene_pos(self, pos: QPointF):
+        """シーン座標がどのページの上か（隙間の場合は一番近いページ）を返す。"""
+        if not self._scroll_page_rects:
+            return None
+        if pos.y() < 0:
+            return 0
+        last = len(self.current_pdf) - 1 if self.current_pdf else 0
+        for i in sorted(self._scroll_page_rects):
+            rect = self._scroll_page_rects[i]
+            if rect.contains(pos):
+                return i
+            if pos.y() < rect.bottom():
+                return i
+        return last
+
+    def _update_scroll_current_page(self):
+        """画面の中央にあるページを現在のページにする。"""
+        if self._scroll_updating_page or not self.scroll_mode:
+            return
+        center = self.mapToScene(self.viewport().rect().center())
+        idx = self._scroll_page_at_scene_pos(center)
+        if idx is not None and idx != self.current_page_idx:
+            self._scroll_updating_page = True
+            try:
+                self.current_page_idx = idx
+                self.pageSelectionChanged.emit(idx)
+                self.statusUpdated.emit()
+            finally:
+                self._scroll_updating_page = False
+
+    def _scroll_to_page(self, page_idx: int):
+        """指定ページの上端が画面の上に来るようスクロールする。"""
+        rect = self._scroll_page_rects.get(page_idx)
+        if rect is None:
+            return False
+        self._render_visible_scroll_pages()
+        self.verticalScrollBar().setValue(int(round(rect.top())))
+        self._update_scroll_current_page()
+        return True
 
     def rotate_current_page(self, delta_angle):
         if not self.current_pdf or not (0 <= self.current_page_idx < len(self.current_pdf)):
@@ -2480,6 +2731,10 @@ class PDFViewer(QGraphicsView):
         doc = self.current_pdf
         if doc is None or getattr(doc, "is_closed", False):
             return
+        if self.scroll_mode:
+            # 画面サイズが変わったら幅に合わせて並べ直す（45msの遅延つき）。
+            self._render_scroll_view()
+            return
         if self.page_rect is None or self.page_rect.width() <= 0:
             return
         current_phys_w, current_phys_h = self._compute_target_physical_size()
@@ -2495,6 +2750,10 @@ class PDFViewer(QGraphicsView):
         self._schedule_zoom_rerender()
 
     def render_page(self, fit_view=False, rebuild_base=False):
+        # スクロール表示中は1ページ描画ではなくスクロール表示を作り直す。
+        if self.scroll_mode:
+            self._render_scroll_view()
+            return
         if not self.current_pdf:
             return
 
@@ -3084,6 +3343,23 @@ class PDFViewer(QGraphicsView):
         if self.drawing or self._calc_dragging or self._dragging_text_ann_idx is not None:
             event.accept()
             return
+        if self.scroll_mode:
+            # スクロール表示ではホイールはそのままスクロール（ページ送りはしない）。
+            # Ctrl+ホイールはスクロール表示の拡大・縮小。
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                angle = event.angleDelta().y()
+                if angle > 0:
+                    self._scroll_zoom = min(self.SCROLL_MAX_ZOOM, self._scroll_zoom * 1.2)
+                elif angle < 0:
+                    self._scroll_zoom = max(self.SCROLL_MIN_ZOOM, self._scroll_zoom / 1.2)
+                else:
+                    event.accept()
+                    return
+                self._render_scroll_view()
+                event.accept()
+                return
+            super().wheelEvent(event)
+            return
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             angle = event.angleDelta().y()
             current_scale = self.transform().m11()
@@ -3137,6 +3413,10 @@ class PDFViewer(QGraphicsView):
         event.accept()
 
     def zoom_in(self):
+        if self.scroll_mode:
+            self._scroll_zoom = min(self.SCROLL_MAX_ZOOM, self._scroll_zoom * 1.25)
+            self._render_scroll_view()
+            return
         if not self.current_pdf:
             self._show_status_message("拡大するPDFが開かれていません。先にPDFを開いてください。")
             return
@@ -3145,6 +3425,10 @@ class PDFViewer(QGraphicsView):
             self._schedule_zoom_rerender()
 
     def zoom_out(self):
+        if self.scroll_mode:
+            self._scroll_zoom = max(self.SCROLL_MIN_ZOOM, self._scroll_zoom / 1.25)
+            self._render_scroll_view()
+            return
         if not self.current_pdf:
             self._show_status_message("縮小するPDFが開かれていません。先にPDFを開いてください。")
             return
@@ -3153,6 +3437,10 @@ class PDFViewer(QGraphicsView):
             self._schedule_zoom_rerender()
 
     def fit_page(self):
+        if self.scroll_mode:
+            self._scroll_zoom = 1.0
+            self._render_scroll_view()
+            return
         if not self.current_pdf:
             self._show_status_message("表示するPDFが開かれていません。先にPDFを開いてください。")
             return
@@ -3164,8 +3452,33 @@ class PDFViewer(QGraphicsView):
         )
         self._render_optimal_pixmap_for_current_view()
 
+    def mouseDoubleClickEvent(self, event):
+        if self.scroll_mode:
+            # スクロール表示でダブルクリックしたページを1ページ表示で開いて編集できるようにする。
+            scene_pos = self.mapToScene(event.position().toPoint())
+            idx = self._scroll_page_at_scene_pos(scene_pos)
+            if idx is not None:
+                self.current_page_idx = idx
+            self.set_scroll_mode(False)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def mousePressEvent(self, event):
         if not self.current_pdf:
+            return
+
+        if self.scroll_mode:
+            # スクロール表示では編集操作はしない。左ドラッグで画面を動かし、
+            # クリックでページを選び、ダブルクリックで1ページ表示に戻る。
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._scroll_press_pos = event.position()
+                if self.mode != "view":
+                    self._show_status_message(
+                        "スクロール表示では編集できません。"
+                        "ダブルクリックで1ページ表示に切り替えてください。"
+                    )
+            super().mousePressEvent(event)
             return
 
         raw_pos = self.mapToScene(event.position().toPoint())
@@ -3678,6 +3991,25 @@ class PDFViewer(QGraphicsView):
         return len(applicable)
 
     def mouseReleaseEvent(self, event):
+        if (
+            self.scroll_mode
+            and event.button() == Qt.MouseButton.LeftButton
+            and self._scroll_press_pos is not None
+        ):
+            # スクロール表示でのクリック（ドラッグでなければ）でページを選ぶ。
+            moved = (event.position() - self._scroll_press_pos).manhattanLength()
+            self._scroll_press_pos = None
+            if moved < 6.0:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                idx = self._scroll_page_at_scene_pos(scene_pos)
+                if idx is not None and idx != self.current_page_idx:
+                    self.current_page_idx = idx
+                    self.pageSelectionChanged.emit(idx)
+                    self.statusUpdated.emit()
+            super().mouseReleaseEvent(event)
+            event.accept()
+            return
+
         if self._calc_dragging and event.button() == Qt.MouseButton.LeftButton:
             self._calc_dragging = False
             start_pos = self._calc_drag_start_pos

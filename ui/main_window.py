@@ -99,6 +99,8 @@ class MainWindow(QMainWindow):
         self._initial_positioned = False
         self._active_reader = None
         self._active_reader_closed_handler = None
+        # 全画面見開きの表紙の有無（次に開くときも同じ設定を使う）
+        self._reader_cover_single = True
 
         self.viewer = PDFViewer()
         self.setCentralWidget(self.viewer)
@@ -111,6 +113,7 @@ class MainWindow(QMainWindow):
 
         self.viewer.pagesUpdated.connect(self.page_manager.update_thumbnails)
         self.viewer.pageSelectionChanged.connect(self.page_manager.sync_selection)
+        self.viewer.scrollModeChanged.connect(self._sync_scroll_action)
         self.viewer.batchStatusMessage.connect(self.statusBar().showMessage)
         self.viewer.selected_pages_provider = (
             lambda: sorted(
@@ -294,6 +297,10 @@ class MainWindow(QMainWindow):
         self.add_action(top_toolbar, "🔍 拡大", self.viewer.zoom_in)
         self.add_action(top_toolbar, "🔎 縮小", self.viewer.zoom_out)
         self.add_action(top_toolbar, "全体表示", self.viewer.fit_page)
+
+        self.act_scroll_mode = self.add_action(top_toolbar, "📜 スクロール表示", self.toggle_scroll_mode)
+        self.act_scroll_mode.setCheckable(True)
+        self.act_scroll_mode.setToolTip("通常画面でページを上下スクロールして表示します（ダブルクリックで1ページ表示に戻ります）")
 
         top_toolbar.addSeparator()
 
@@ -764,7 +771,20 @@ class MainWindow(QMainWindow):
                     act.setChecked(True)
                 break
 
+    def toggle_scroll_mode(self):
+        """ツールバーの「📜 スクロール表示」ボタンで通常画面の表示を切り替える"""
+        self.viewer.set_scroll_mode(self.act_scroll_mode.isChecked())
+
+    def _sync_scroll_action(self, on: bool):
+        if hasattr(self, "act_scroll_mode"):
+            self.act_scroll_mode.blockSignals(True)
+            self.act_scroll_mode.setChecked(on)
+            self.act_scroll_mode.blockSignals(False)
+
     def set_mode(self, mode):
+        # スクロール表示中に編集モードを選んだら、1ページ表示に戻って編集できるようにする。
+        if mode != "view" and self.viewer.scroll_mode:
+            self.viewer.set_scroll_mode(False)
         # 折りたたみモードのボタンを押したとき、すでに折りたたみ帯がある
         # ページでは、ボタンが折りたたみ表示のON/OFF切り替えになる。
         if mode == "fold" and self.viewer.has_fold_band():
@@ -2142,6 +2162,7 @@ class MainWindow(QMainWindow):
         self._active_reader = FullscreenSpreadReader(
             doc=self.viewer.current_pdf,
             start_page=cur_idx,
+            cover_single=self._reader_cover_single,
             annotations=self.viewer.page_annotations,
             draw_annot_callback=PageManager.draw_annotations_on_image,
             redact_page_callback=PDFDocumentManager.apply_text_only_redactions_to_page,
@@ -2158,6 +2179,8 @@ class MainWindow(QMainWindow):
     def _on_reader_closed(self):
         """全画面を閉じたとき、読んでいたページと編集内容をメインエディタに反映する"""
         if self._active_reader and self.viewer.current_pdf and self._active_reader.spreads:
+            # 表紙の有無の選択を覚えておく（次に開くときも同じ設定）
+            self._reader_cover_single = bool(self._active_reader.cover_single)
             idx = max(0, min(self._active_reader.current_spread_idx, len(self._active_reader.spreads) - 1))
             sp = self._active_reader.spreads[idx]
             edited_page = getattr(self._active_reader, "_last_edited_page_idx", None)
@@ -2235,6 +2258,7 @@ class MainWindow(QMainWindow):
         self._active_reader = FullscreenSpreadReader(
             doc=merged_doc,
             start_page=0,
+            cover_single=self._reader_cover_single,
             file_manifest=manifest,
             draw_annot_callback=PageManager.draw_annotations_on_image,
             redact_page_callback=PDFDocumentManager.apply_text_only_redactions_to_page,
@@ -2250,6 +2274,8 @@ class MainWindow(QMainWindow):
 
 
     def _on_folder_reader_closed(self):
+        if self._active_reader is not None:
+            self._reader_cover_single = bool(self._active_reader.cover_single)
         self._active_reader = None
         self._active_reader_closed_handler = None
 

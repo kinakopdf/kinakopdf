@@ -227,6 +227,19 @@ class FullscreenSpreadReader(QWidget):
         self.btn_hud_jump.clicked.connect(self._prompt_page_jump)
         hud_layout.addWidget(self.btn_hud_jump)
 
+        # 表紙の有無を選択するボタン（[C] キーと同じ動作。押すたびに切替）
+        self.btn_hud_cover = QPushButton("📕 表紙", self.hud_container)
+        self.btn_hud_cover.setToolTip("表紙を1ページ目だけ単独で表示する / しない（Cキーでも切替）")
+        self.btn_hud_cover.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_cover.setCheckable(True)
+        self.btn_hud_cover.setChecked(self.cover_single)
+        self.btn_hud_cover.setStyleSheet(
+            hud_btn_style
+            + "QPushButton:checked { background-color: #0e639c; color: #ffffff; border-color: #3794ff; }"
+        )
+        self.btn_hud_cover.clicked.connect(self._toggle_cover_mode)
+        hud_layout.addWidget(self.btn_hud_cover)
+
         self.btn_hud_edit = QPushButton("✏ マーカー・編集ツール (E)", self.hud_container)
         self.btn_hud_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_hud_edit.setStyleSheet(
@@ -845,6 +858,8 @@ class FullscreenSpreadReader(QWidget):
         self._cancel_active_drawing()
         cur_page = self.spreads[self.current_spread_idx].page_indices[0] if self.spreads else 0
         self.cover_single = not self.cover_single
+        if getattr(self, "btn_hud_cover", None) is not None:
+            self.btn_hud_cover.setChecked(self.cover_single)
         self._build_spreads()
         for idx, sp in enumerate(self.spreads):
             if cur_page in sp.page_indices:
