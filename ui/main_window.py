@@ -77,6 +77,7 @@ from core.geometry import (
 )
 from core.pdf_engine import PDFDocumentManager
 from core.pdf_loader import load_folder_as_merged_document
+from core.text_tools import extract_page_texts
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
 from ui.pdf_viewer import PDFViewer
@@ -262,6 +263,10 @@ class MainWindow(QMainWindow):
         act_ocr = self.add_action(top_toolbar, "🧼 色抜き・OCR", self.open_scan_clean_ocr_dialog)
         act_ocr.setShortcut(QKeySequence("Ctrl+Shift+O"))
         act_ocr.setToolTip("スキャンした明細から黄・赤・青の背景や点々を消し、Windows標準OCRで文字認識します (Ctrl+Shift+O)")
+
+        self.act_text_data = self.add_action(top_toolbar, "📝 文字データ", self.open_text_data_dialog)
+        self.act_text_data.setToolTip("PDFに埋め込まれている文字データをそのまま表示します（AIや検索が読む中身の確認・手直し・コピー用）")
+        self.act_text_data.setEnabled(False)
 
         top_toolbar.addSeparator()
 
@@ -741,7 +746,21 @@ class MainWindow(QMainWindow):
         toolbar.addAction(action)
         return action
 
+    def _sync_text_data_action(self):
+        """「📝 文字データ」ボタンの有効/無効を、文書を開いているかどうかで切り替える"""
+        if not hasattr(self, "act_text_data"):
+            return
+        doc = self.viewer.current_pdf
+        has_doc = False
+        if doc is not None:
+            try:
+                has_doc = len(doc) > 0
+            except Exception:
+                has_doc = False
+        self.act_text_data.setEnabled(has_doc)
+
     def update_window_title(self):
+        self._sync_text_data_action()
         if not self.viewer.current_pdf:
             self.setWindowTitle(APP_NAME)
             return
@@ -2336,6 +2355,26 @@ class MainWindow(QMainWindow):
             self._reader_cover_single = bool(self._active_reader.cover_single)
         self._active_reader = None
         self._active_reader_closed_handler = None
+
+    def open_text_data_dialog(self):
+        """PDFに埋め込まれた文字データを表示・手直し・コピーするダイアログを開く"""
+        doc = self.viewer.current_pdf
+        if not doc or len(doc) == 0:
+            QMessageBox.information(self, "案内", "先にPDFファイルを開いてください。")
+            return
+        try:
+            page_texts = extract_page_texts(doc, self.viewer.page_annotations)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "文字データエラー",
+                f"文字データの読み取りに失敗しました。\n{e}",
+            )
+            return
+        from ui.text_data_dialog import TextDataDialog
+
+        dlg = TextDataDialog(page_texts, parent=self)
+        dlg.exec()
 
     def open_scan_clean_ocr_dialog(self):
         """スキャン用紙の色抜き（黄・赤・青・点々消去）＆Windows標準OCRダイアログを開く"""
