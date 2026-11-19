@@ -101,6 +101,9 @@ class MainWindow(QMainWindow):
         self._active_reader_closed_handler = None
         # 全画面見開きの表紙の有無（次に開くときも同じ設定を使う）
         self._reader_cover_single = True
+        # 現在の文書が複数ファイルの一括読み込み（フォルダ結合）由来か。
+        # True の間は元のファイル群への上書きを防ぐため、保存は別名保存のみ。
+        self._current_doc_from_bulk = False
 
         self.viewer = PDFViewer()
         self.setCentralWidget(self.viewer)
@@ -967,6 +970,7 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = filepath
         self.viewer.current_pdf = doc
+        self._current_doc_from_bulk = False
         self.viewer.current_pdf_was_encrypted = bool(
             getattr(self, "_last_opened_was_encrypted", False)
             or PDFDocumentManager._is_encrypted_document(doc)
@@ -1010,24 +1014,32 @@ class MainWindow(QMainWindow):
             return False, False
         return True, True
 
+    def _should_force_save_as(self):
+        """上書き保存をせず、別名保存ダイアログを使うべきかを返す。
+
+        複数ファイルの一括読み込み由来の文書は、元のファイル群のどれにも
+        上書きしないよう常に別名保存にする。保存先が未設定の文書も同様。
+        """
+        if self._current_doc_from_bulk:
+            return True
+        return not self.viewer.current_file
+
     def save_file(self):
         if not self.viewer.current_pdf:
             QMessageBox.information(self, "案内", "保存するPDFが開かれていません。先にPDFを開いてください。")
             return
 
-        if self.viewer.current_file:
-            filepath = self.viewer.current_file
-        else:
-            filepath, _ = QFileDialog.getSaveFileName(
-                self,
-                "PDFを保存",
-                "",
-                "PDF Files (*.pdf)",
-            )
-
-        if not filepath:
+        if self._should_force_save_as():
+            if self._current_doc_from_bulk:
+                QMessageBox.information(
+                    self,
+                    "別名保存の案内",
+                    "複数のファイルから作ったドキュメントは上書き保存できません。別名で保存してください。",
+                )
+            self.save_as()
             return
 
+        filepath = self.viewer.current_file
         if not filepath.lower().endswith(".pdf"):
             filepath += ".pdf"
 
@@ -2033,7 +2045,12 @@ class MainWindow(QMainWindow):
             if replace_err is not None:
                 raise replace_err
 
-            self.viewer.current_file = filepath
+            # 複数ファイル由来の文書は、別名保存しても保存先をそのファイルに
+            # 固定しない（次回保存も別名保存にし、元のファイル群や保存した
+            # 結合ファイルへの上書きを防ぐ）。
+            self.viewer.current_file = (
+                None if self._current_doc_from_bulk else filepath
+            )
             self.viewer.current_pdf_was_encrypted = False
             if allow_strip_encryption:
                 self.viewer._encryption_strip_approved = True
@@ -2096,6 +2113,7 @@ class MainWindow(QMainWindow):
         page_idx: int = 0,
         target_mode: str = "highlight",
         has_edited: bool = False,
+        from_bulk: bool = False,
     ) -> bool:
         if self.viewer.is_modified:
             reply = QMessageBox.question(
@@ -2113,6 +2131,8 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = None
         self.viewer.current_pdf = doc
+        # 複数ファイルの一括読み込み由来なら上書き禁止フラグを引き継ぐ
+        self._current_doc_from_bulk = bool(from_bulk)
         self.viewer.current_pdf_was_encrypted = False
         self.viewer.reset_history()
         self.viewer.page_annotations = copy.deepcopy(annotations) if annotations else {}
@@ -2255,6 +2275,44 @@ class MainWindow(QMainWindow):
             with FITZ_LOCK:
                 merged_doc.close()
             return
+
+        # 結合した文書の開き方を選んでもらう（見開きで読む／メイン画面で編集）
+        choice = QMessageBox(self)
+        choice.setWindowTitle("フォルダ読込")
+        choice.setText(
+            f"{len(manifest)} ファイル（全 {len(merged_doc)} ページ）を結合しました。\n"
+            "どのように開きますか？"
+        )
+        btn_read = choice.addButton(
+            "📖 見開きで読む", QMessageBox.ButtonRole.AcceptRole
+        )
+        btn_edit = choice.addButton(
+            "✏️ メイン画面で編集する", QMessageBox.ButtonRole.ActionRole
+        )
+        choice.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        choice.setDefaultButton(btn_read)
+        choice.exec()
+        clicked = choice.clickedButton()
+        if clicked is btn_edit:
+            # ページの並べ替え・削除はメイン画面のページ一覧で行う。
+            # 未保存編集の確認や後始末は _adopt_reader_doc_to_main に任せる。
+            adopted = self._adopt_reader_doc_to_main(
+                merged_doc,
+                {},
+                0,
+                target_mode="highlight",
+                has_edited=False,
+                from_bulk=True,
+            )
+            if not adopted:
+                with FITZ_LOCK:
+                    merged_doc.close()
+            return
+        if clicked is not btn_read:
+            with FITZ_LOCK:
+                merged_doc.close()
+            return
+
         self._active_reader = FullscreenSpreadReader(
             doc=merged_doc,
             start_page=0,

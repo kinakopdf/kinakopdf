@@ -644,7 +644,12 @@ class FullscreenSpreadReader(QWidget):
                 else (self.spreads[self.current_spread_idx].page_indices[0] if self.spreads else 0)
             )
             adopted = self.editor_callbacks["adopt_doc_to_main"](
-                self.doc, self.annotations, cur_page, target_mode, self._has_edited
+                self.doc,
+                self.annotations,
+                cur_page,
+                target_mode,
+                self._has_edited,
+                from_bulk=bool(self.file_manifest),
             )
             if adopted:
                 self.own_doc = False
