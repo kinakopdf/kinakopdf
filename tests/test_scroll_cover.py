@@ -120,6 +120,40 @@ class TestScrollDisplay(unittest.TestCase):
         viewer.close()
         self._app.processEvents()
 
+    def test_scroll_pixmap_cache_invalidated_on_render_page(self):
+        # 内容の変更（コマンドの実行・Undo/Redo）で render_page が呼ばれたら、
+        # 古い画像キャッシュではなく現在の内容で描き直されること。
+        self.viewer.set_scroll_mode(True)
+        self.viewer._render_scroll_page(0)
+        key = next(k for k in self.viewer._scroll_pixmap_cache if k[0] == 0)
+        before = self.viewer._scroll_pixmap_cache[key].toImage()
+        self.doc[0].insert_text((40, 400), "CHANGED TEXT", fontsize=40)
+        self.viewer.render_page()
+        self._app.processEvents()
+        self.assertIn(key, self.viewer._scroll_pixmap_cache)
+        after = self.viewer._scroll_pixmap_cache[key].toImage()
+        self.assertEqual(before.size(), after.size())
+        self.assertNotEqual(before, after)
+
+    def test_scroll_layout_rebuilt_when_page_deleted_via_load_pdf(self):
+        # ページ削除を load_pdf で通知してくるコマンド系でも、
+        # スクロール表示の並びが新しいページ数で作り直されること。
+        self.viewer.set_scroll_mode(True)
+        self.assertEqual(len(self.viewer._scroll_page_rects), 4)
+        del self.doc[3]
+        self.viewer.load_pdf(self.doc, 0, fit_view=True)
+        self.assertTrue(self.viewer.scroll_mode)
+        self.assertEqual(len(self.viewer._scroll_page_rects), 3)
+
+    def test_scroll_layout_rebuilt_when_page_rotated_via_load_pdf(self):
+        self.viewer.set_scroll_mode(True)
+        rect_before = self.viewer._scroll_page_rects[0]
+        self.assertGreater(rect_before.height(), rect_before.width())
+        self.doc[0].set_rotation(90)
+        self.viewer.load_pdf(self.doc, 0, fit_view=True)
+        rect_after = self.viewer._scroll_page_rects[0]
+        self.assertGreater(rect_after.width(), rect_after.height())
+
 
 class TestCoverToggle(unittest.TestCase):
     """全画面見開きの表紙の有無。"""

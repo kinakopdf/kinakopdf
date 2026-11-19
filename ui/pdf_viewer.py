@@ -319,6 +319,7 @@ class PDFViewer(QGraphicsView):
         self._scroll_items: Dict[int, object] = {}
         self._scroll_rendered: set = set()
         self._scroll_pixmap_cache: Dict[Tuple[int, int], QPixmap] = {}
+        self._scroll_signature = None
         self._scroll_updating_page = False
         self._scroll_press_pos = None
         self.verticalScrollBar().valueChanged.connect(self._on_scroll_bar_changed)
@@ -1401,6 +1402,15 @@ class PDFViewer(QGraphicsView):
         # スクロール表示中は、同じ文書のページ移動はスクロールだけですませる。
         if self.scroll_mode and doc is self.current_pdf and len(doc) > 0:
             target = max(0, min(page_idx, len(doc) - 1))
+            # ページ構成が変わっていたら（ページの削除・回転などを load_pdf で
+            # 通知してくるコマンド系）、古い並びのままにせず作り直す。
+            if self._scroll_structure_signature() != self._scroll_signature:
+                self._scroll_pixmap_cache.clear()
+                self.current_page_idx = target
+                self._render_scroll_view()
+                self.pageSelectionChanged.emit(target)
+                self.statusUpdated.emit()
+                return
             self._scroll_to_page(target)
             if target != self.current_page_idx:
                 self.current_page_idx = target
@@ -1485,15 +1495,28 @@ class PDFViewer(QGraphicsView):
         self.scrollModeChanged.emit(on)
 
     def _scroll_display_size(self, page_idx: int) -> Tuple[float, float]:
-        """回転を考慮したページの表示サイズ（PDFポイント単位）を返す。"""
+        """ページの表示サイズ（PDFポイント単位）を返す。
+        page.rect は回転を反映した大きさ（90度回転なら幅と高さが入れ替わった
+        大きさ）なので、そのまま使う。通常表示（render_page）と同じ扱い。"""
         with FITZ_LOCK:
             page = self.current_pdf[page_idx]
             rect = page.rect
-            rot = page.rotation % 360
-        w, h = float(rect.width), float(rect.height)
-        if rot in (90, 270):
-            w, h = h, w
-        return max(1.0, w), max(1.0, h)
+        return max(1.0, float(rect.width)), max(1.0, float(rect.height))
+
+    def _scroll_structure_signature(self):
+        """ページ構成（ページ数・各ページの大きさと回転）の署名を返す。
+        ページの追加・削除・回転・トリミングで変わる。注釈の変更では変わらない。"""
+        if not self.current_pdf:
+            return None
+        with FITZ_LOCK:
+            return tuple(
+                (
+                    round(float(page.rect.width), 2),
+                    round(float(page.rect.height), 2),
+                    page.rotation % 360,
+                )
+                for page in self.current_pdf
+            )
 
     def _scroll_fit_scale(self) -> float:
         """画面幅に合わせる倍率（ズーム倍率込み）を返す。"""
@@ -1507,6 +1530,7 @@ class PDFViewer(QGraphicsView):
         """スクロール表示のシーン全体を作り直す（レイアウト＋見えているページの描画）。"""
         if not self.current_pdf or len(self.current_pdf) == 0:
             return
+        self._scroll_signature = self._scroll_structure_signature()
         self.drawing = False
         self._reset_text_drag_state()
         self.current_path = None
@@ -2751,7 +2775,11 @@ class PDFViewer(QGraphicsView):
 
     def render_page(self, fit_view=False, rebuild_base=False):
         # スクロール表示中は1ページ描画ではなくスクロール表示を作り直す。
+        # ここは内容の変更（コマンドの実行・Undo/Redoなど）で呼ばれる入口なので、
+        # 古い画像キャッシュを捨てて現在の内容で描き直す（墨消しのUndo/Redoが
+        # 表示に反映されない事故を防ぐ）。
         if self.scroll_mode:
+            self._scroll_pixmap_cache.clear()
             self._render_scroll_view()
             return
         if not self.current_pdf:
