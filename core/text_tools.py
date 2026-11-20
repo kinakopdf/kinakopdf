@@ -9,6 +9,8 @@
   取り出し元は extract_page_texts と同じ焼き込み済み複製なので、
   墨消しした文字はスパンにも現れない。
 - join_fragments: OCRや抽出で改行ごとにバラバラになった文を1行につなげる。
+- strip_text_layer_to_doc: 見た目（画像）はそのままに、文字データだけを
+  消した新しい文書を返す（AIが壊れた文字レイヤーを誤読するのを防ぐ用）。
 """
 import contextlib
 import math
@@ -22,6 +24,7 @@ from core.geometry import (
     MIN_FONT_SIZE,
     TEXT_FONT_SIZE,
     srgb_int_to_rgb_tuple,
+    text_annotation_rotation,
     view_point_to_raw_pdf,
     view_rect_to_raw_rect,
 )
@@ -136,8 +139,10 @@ def _span_record(page, line, span):
         dx, dy = line_dir[0] / dir_len, line_dir[1] / dir_len
     else:
         dx, dy = 1.0, 0.0
-    view_deg = int(round(math.degrees(math.atan2(dy, dx)) / 90.0) * 90) % 360
-    rotation = (page.rotation - view_deg) % 360
+    # 注釈の rotation はページ回転を含めない（text_annotation_rotation 参照）。
+    # 以前は (page.rotation - view_deg) で、回転ページでは書き戻した文字が
+    # ページ回転ぶんずれた向きになっていた。
+    rotation = text_annotation_rotation(dx, dy)
 
     origin = span.get("origin")
     if origin:
@@ -230,6 +235,135 @@ def render_page_png_bytes(doc, page_idx, page_annotations=None, zoom=2.0):
             page = src[page_idx]
             pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
             return pix.tobytes("png")
+
+
+# ==========================================
+# 画像だけのPDF（文字データの除去）
+# ==========================================
+
+# 画像のないページを画像化するときの解像度
+_RASTERIZE_DPI = 200
+
+
+def _remove_text_layer_keeping_images(page):
+    """画像のあるページから、文字レイヤーだけを取り除く（ページを直接書き換える）。
+
+    全面のリダクションを images=NONE / line art=NONE で適用するので、
+    画像のピクセル（画像に焼き付いた字形も含む）とベクターの線画には
+    一切触れず、埋め込み文字だけが消える。アプリの墨消し経路
+    （apply_text_only_redactions_to_page は画像側の字形ピクセルも消す）
+    とは目的が逆なので、そちらは通らない。
+    ページ回転は一時的に外して作業し、終わったら元に戻す。
+    """
+    saved_rot = page.rotation % 360
+    if saved_rot:
+        page.set_rotation(0)
+    try:
+        page.add_redact_annot(page.rect, fill=False)
+        img_none = getattr(fitz, "PDF_REDACT_IMAGE_NONE", 0)
+        gfx_none = getattr(fitz, "PDF_REDACT_LINE_ART_NONE", 0)
+        text_opt = getattr(fitz, "PDF_REDACT_TEXT_REMOVE", 0)
+        try:
+            page.apply_redactions(
+                images=img_none,
+                graphics=gfx_none,
+                text=text_opt,
+            )
+        except TypeError:
+            page.apply_redactions(images=img_none)
+    finally:
+        if saved_rot:
+            page.set_rotation(saved_rot)
+
+
+def _rasterize_page_via_copy(doc, page_idx, dpi=_RASTERIZE_DPI):
+    """画像のないページを、回転なしの向きで描画した結果を返す。
+
+    呼び出し側の文書には触れないよう、1ページだけの複製の上で回転を
+    外して描画する。戻り値は (width, height, png_bytes, rotation) で、
+    width / height は回転なしページの大きさ。
+    """
+    tmp = fitz.open()
+    try:
+        tmp.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+        page = tmp[0]
+        saved_rot = page.rotation % 360
+        if saved_rot:
+            page.set_rotation(0)
+        zoom = float(dpi) / 72.0
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        return page.rect.width, page.rect.height, pix.tobytes("png"), saved_rot
+    finally:
+        tmp.close()
+
+
+def strip_text_layer_to_doc(doc):
+    """文字データをすべて消し、見た目をそのまま残した新しい文書を返す。
+
+    - 画像のあるページ: 文字レイヤーだけを消す。画像（写真・スキャン）も
+      ベクターの線画もそのまま残るので、見た目は変わらない。
+    - 画像のないページ: 文字を消すと真っ白になってしまうため、ページを
+      200 DPI で画像化して差し替える（見た目は同じで、文字データはない）。
+
+    ページの大きさ・回転・順序と、文書のメタデータは元どおりに保つ。
+    呼び出し側の doc は変更しない。戻り値の文書は呼び出し側が閉じること。
+    doc が None の場合は None を返す。
+    """
+    if doc is None:
+        return None
+    with FITZ_LOCK:
+        out = fitz.open()
+        try:
+            try:
+                allowed_keys = (
+                    "title", "author", "subject", "keywords",
+                    "creator", "producer", "creationDate", "modDate",
+                )
+                meta = {
+                    k: (doc.metadata or {}).get(k)
+                    for k in allowed_keys
+                    if (doc.metadata or {}).get(k)
+                }
+                if meta:
+                    out.set_metadata(meta)
+            except Exception:
+                pass
+            for page in doc:
+                if page.get_images():
+                    out.insert_pdf(
+                        doc, from_page=page.number, to_page=page.number
+                    )
+                    _remove_text_layer_keeping_images(out[len(out) - 1])
+                else:
+                    width, height, png, saved_rot = _rasterize_page_via_copy(
+                        doc, page.number
+                    )
+                    new_page = out.new_page(width=width, height=height)
+                    new_page.insert_image(new_page.rect, stream=png)
+                    if saved_rot:
+                        new_page.set_rotation(saved_rot)
+            return out
+        except Exception:
+            out.close()
+            raise
+
+
+def save_image_only_pdf(doc, page_annotations, path):
+    """現在の文書の「画像だけのPDF」を path に保存する。
+
+    注釈（墨消し等）がある場合は、文字の取り出しと同じ焼き込み済み複製を
+    元にするため、保存されるPDFの見た目は現在の表示と一致する。
+    元の文書は変更しない。
+    """
+    with FITZ_LOCK:
+        with _baked_source(doc, page_annotations) as src:
+            stripped = strip_text_layer_to_doc(src)
+            if stripped is None:
+                raise ValueError("PDFが開かれていません。")
+            try:
+                stripped.save(path, garbage=4, deflate=True)
+            finally:
+                stripped.close()
 
 
 _JP_FONT_OBJ = None

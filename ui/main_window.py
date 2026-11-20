@@ -84,6 +84,7 @@ from core.text_tools import (
     fit_fontsize_to_width,
     get_page_view_rects,
     render_page_png_bytes,
+    save_image_only_pdf,
 )
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
@@ -2470,6 +2471,8 @@ class MainWindow(QMainWindow):
 
         from ui.text_data_dialog import TextDataDialog
 
+        current_file = getattr(self.viewer, "current_file", None)
+        strip_stem = Path(current_file).stem if current_file else "PDF"
         dlg = TextDataDialog(
             page_texts,
             parent=self,
@@ -2479,8 +2482,29 @@ class MainWindow(QMainWindow):
             apply_handler=self._apply_text_data_replacement,
             refresh_handler=_refresh,
             image_provider=_image,
+            strip_handler=self._save_image_only_pdf,
+            strip_filename=f"{strip_stem}_画像のみ.pdf",
         )
         dlg.exec()
+
+    def _save_image_only_pdf(self, path):
+        """文字データ画面の「画像だけのPDFとして保存」を実行する。
+
+        現在の文書（注釈を焼き込んだ見た目）から、文字データだけを消した
+        PDFを path に保存し、(成功したか, メッセージ) を返す。
+        開いている文書や現在のファイルは変更しない。
+        """
+        doc = self.viewer.current_pdf
+        if not doc or len(doc) == 0:
+            return False, "PDFが開かれていません。"
+        try:
+            save_image_only_pdf(doc, self.viewer.page_annotations, path)
+        except Exception as e:
+            return False, f"画像だけのPDFを保存できませんでした。\n{e}"
+        return True, (
+            "画像だけのPDFを保存しました。"
+            "見た目はそのままで、文字データは入っていません。"
+        )
 
     def _apply_text_data_replacement(self, page_idx, spans, joined_text):
         """文字データ画面の「PDFに反映」を実行する。

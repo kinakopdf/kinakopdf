@@ -1396,3 +1396,389 @@ class TestUnderlayNudge(_QtTestBase):
             self.assertIn("+0.0", dlg.lbl_nudge.text())
         finally:
             dlg.close()
+
+
+# ==========================================
+# 回転ページでの文字の書き戻し（Change B の回帰テスト）
+# ==========================================
+
+
+def _rotated_frag_doc(rotation, display_upright=True):
+    """断片化した文を持つ、回転したページの文書を作る。
+
+    display_upright=True: 表示したときに正立して読める文字
+    （raw の進み方向角は -rotation）。実際の回転付き明細PDFはこちら。
+    display_upright=False: raw 座標で正立に書かれ、表示では回転して見える文字。
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    if display_upright:
+        page.set_rotation(rotation)
+        derot = page.derotation_matrix
+
+        def ins(xy, text):
+            page.insert_text(
+                fitz.Point(*xy) * derot,
+                text,
+                fontsize=20,
+                fontname="japan",
+                rotate=rotation,
+            )
+
+        ins((100, 200), "これは")
+        ins((100, 230), "テストです")
+        ins((100, 400), "関係ない文字")
+    else:
+        page.insert_text((100, 200), "これは", fontsize=20, fontname="japan")
+        page.insert_text((100, 230), "テストです", fontsize=20, fontname="japan")
+        page.insert_text((100, 400), "関係ない文字", fontsize=20, fontname="japan")
+        page.set_rotation(rotation)
+    return doc
+
+
+def _replacement_annotations(doc, page_idx=0):
+    """MainWindow._apply_text_data_replacement と同じ注釈構成を作る。"""
+    from core import build_text_annotation
+
+    spans = extract_page_spans(doc)[page_idx]
+    frag = [sp for sp in spans if sp["text"] in ("これは", "テストです")]
+    assert len(frag) == 2
+    joined = join_span_texts([sp["text"] for sp in frag])
+    anns = [
+        {"type": "text_redact", "rect": tuple(sp["raw_rect"])} for sp in frag
+    ]
+    first = frag[0]
+    rects = [fitz.Rect(sp["raw_rect"]) for sp in frag]
+    union = rects[0]
+    for r in rects[1:]:
+        union = union | r
+    available = union.width if int(first["rotation"]) % 180 == 0 else union.height
+    fontsize = fit_fontsize_to_width(joined, float(first["fontsize"]), available)
+    anns.append(
+        build_text_annotation(
+            text=joined,
+            pos=first["pos"],
+            baseline_pos=first["baseline_pos"],
+            fontsize=fontsize,
+            color=first["color"],
+            rotation=int(first["rotation"]),
+        )
+    )
+    return anns, first
+
+
+def _display_span(page, target):
+    """対象テキストのスパンの (表示座標bbox, 表示方向) を返す。"""
+    rot_m = page.rotation_matrix
+    for blk in page.get_text("dict").get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            for sp in ln.get("spans", []):
+                if sp.get("text") == target:
+                    d = ln.get("dir", (1.0, 0.0))
+                    vx = rot_m.a * d[0] + rot_m.c * d[1]
+                    vy = rot_m.b * d[0] + rot_m.d * d[1]
+                    return fitz.Rect(sp["bbox"]) * rot_m, (vx, vy)
+    return None, None
+
+
+class TestRotatedTextReplacement(unittest.TestCase):
+    """回転ページで「PDFに反映」した文字が、元の場所に正しい向きで入ること。
+
+    以前は注釈の rotation が (ページ回転 − 方向角) で計算されており、
+    焼き込み時にページ回転ぶんずれた向きで挿入され、180度回転では
+    ページ外にはみ出すこともあった。rotation はページ回転を含めない
+    (-方向角) が正しい。
+    """
+
+    def _bake_and_check(self, rotation, display_upright, expect_dir):
+        from core.pdf_engine import PDFDocumentManager
+
+        doc = _rotated_frag_doc(rotation, display_upright)
+        self.addCleanup(doc.close)
+        anns, first = _replacement_annotations(doc)
+        if display_upright:
+            # 表示で正立する文字の rotation は、ページ回転と一致するはず
+            self.assertEqual(first["rotation"], rotation % 360)
+        baked = PDFDocumentManager.extract_pages_as_doc(doc, [0], {0: anns})
+        self.addCleanup(baked.close)
+        page = baked[0]
+        bbox, direction = _display_span(page, "これはテストです")
+        self.assertIsNotNone(bbox, "つなげた文が見つからない")
+        prect = page.rect
+        self.assertGreaterEqual(bbox.x0, prect.x0 - 2.0)
+        self.assertGreaterEqual(bbox.y0, prect.y0 - 2.0)
+        self.assertLessEqual(bbox.x1, prect.x1 + 2.0)
+        self.assertLessEqual(bbox.y1, prect.y1 + 2.0)
+        self.assertAlmostEqual(direction[0], expect_dir[0], places=2)
+        self.assertAlmostEqual(direction[1], expect_dir[1], places=2)
+        texts = [sp["text"] for sp in extract_page_spans(baked)[0]]
+        self.assertIn("これはテストです", texts)
+        self.assertNotIn("これは", texts)
+        self.assertNotIn("テストです", texts)
+        self.assertIn("関係ない文字", texts)
+
+    def test_display_upright_90(self):
+        self._bake_and_check(90, True, (1.0, 0.0))
+
+    def test_display_upright_180(self):
+        self._bake_and_check(180, True, (1.0, 0.0))
+
+    def test_display_upright_270(self):
+        self._bake_and_check(270, True, (1.0, 0.0))
+
+    def test_raw_upright_90(self):
+        self._bake_and_check(90, False, (0.0, 1.0))
+
+    def test_raw_upright_180(self):
+        self._bake_and_check(180, False, (-1.0, 0.0))
+
+    def test_raw_upright_270(self):
+        self._bake_and_check(270, False, (0.0, -1.0))
+
+    def test_unrotated_unchanged(self):
+        self._bake_and_check(0, True, (1.0, 0.0))
+
+
+class TestRotatedViewerTokens(_WindowTestBase):
+    """ビューアのトークン抽出（PDF内の文字を編集）でも rotation が直ること。"""
+
+    def test_token_rotation_matches_page_rotation_for_upright_text(self):
+        for rotation in (90, 180, 270):
+            doc = _rotated_frag_doc(rotation, display_upright=True)
+            path = Path(self._tmp.name) / f"rot{rotation}.pdf"
+            path.write_bytes(doc.tobytes())
+            doc.close()
+            self._open(str(path))
+            tokens = self.window.viewer._get_page_pdf_text_tokens(page_idx=0)
+            frag = [t for t in tokens if t["text"] == "これは"]
+            self.assertEqual(len(frag), 1, f"R={rotation}: {tokens}")
+            self.assertEqual(frag[0]["rotation"], rotation)
+
+
+# ==========================================
+# 画像だけのPDFとして保存（Change A）
+# ==========================================
+
+
+def _pix_dark_total(pix):
+    """Pixmap 全体の暗いピクセル数。"""
+    total = 0
+    n = pix.n
+    samples = pix.samples
+    for i in range(0, len(samples), n):
+        if samples[i] < 100 and samples[i + 1] < 100 and samples[i + 2] < 100:
+            total += 1
+    return total
+
+
+def _pix_diff_ratio(pa, pb):
+    """同サイズの2つの Pixmap で、色差の大きいピクセルの割合。"""
+    assert pa.width == pb.width and pa.height == pb.height
+    n = pa.n
+    sa, sb = pa.samples, pb.samples
+    diff = 0
+    for i in range(0, len(sa), n):
+        if max(abs(sa[i + k] - sb[i + k]) for k in range(n)) > 16:
+            diff += 1
+    return diff / float(pa.width * pa.height)
+
+
+def _image_text_pdf_bytes():
+    """画像＋文字レイヤーのPDF（クレジット明細風）のバイト列を作る。"""
+    src = fitz.open()
+    sp = src.new_page(width=400, height=400)
+    sp.insert_text((20, 40), "CARD STATEMENT", fontsize=14, fontname="japan")
+    sp.insert_text((20, 70), "AMOUNT 12,345", fontsize=14, fontname="japan")
+    img = sp.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False).tobytes("png")
+    src.close()
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_image(page.rect, stream=img)
+    page.insert_text(
+        (20, 40), "CARD STATEMENT", fontsize=14, fontname="japan",
+        color=(0.2, 0.2, 0.2),
+    )
+    page.insert_text(
+        (20, 70), "AMOUNT 12,345", fontsize=14, fontname="japan",
+        color=(0.2, 0.2, 0.2),
+    )
+    page.draw_rect(fitz.Rect(10, 100, 390, 300), color=(0, 0, 0), width=1.5)
+    try:
+        return doc.tobytes()
+    finally:
+        doc.close()
+
+
+class TestStripTextLayer(unittest.TestCase):
+    """strip_text_layer_to_doc: 見た目を残して文字データだけを消すこと。"""
+
+    def test_image_page_keeps_image_and_look_loses_text(self):
+        from core.text_tools import strip_text_layer_to_doc
+
+        doc = fitz.open(stream=_image_text_pdf_bytes())
+        self.addCleanup(doc.close)
+        self.assertIn("CARD STATEMENT", doc[0].get_text())
+        before_pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+
+        out = strip_text_layer_to_doc(doc)
+        self.addCleanup(out.close)
+        page = out[0]
+        # 文字データは消え、画像とベクターの罫線は残る
+        self.assertEqual(page.get_text(), "")
+        self.assertGreaterEqual(len(page.get_images()), 1)
+        self.assertTrue(page.get_drawings())
+        after_pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        # 見た目はほぼ同じ（文字レイヤーが二重描きでなくなる分だけ僅差）
+        self.assertLess(_pix_diff_ratio(before_pix, after_pix), 0.02)
+        before_dark = _pix_dark_total(before_pix)
+        after_dark = _pix_dark_total(after_pix)
+        self.assertLess(abs(after_dark - before_dark), before_dark * 0.10)
+
+    def test_vector_only_page_is_rasterized(self):
+        from core.text_tools import strip_text_layer_to_doc
+
+        doc = fitz.open()
+        self.addCleanup(doc.close)
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 200), "VECTOR ONLY TEXT", fontsize=20, fontname="japan")
+        page.draw_line(
+            fitz.Point(50, 300), fitz.Point(545, 300), color=(0, 0, 0), width=2
+        )
+        before_pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+
+        out = strip_text_layer_to_doc(doc)
+        self.addCleanup(out.close)
+        opage = out[0]
+        self.assertEqual(opage.get_text(), "")
+        self.assertGreaterEqual(len(opage.get_images()), 1)
+        after_pix = opage.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        before_dark = _pix_dark_total(before_pix)
+        after_dark = _pix_dark_total(after_pix)
+        self.assertLess(abs(after_dark - before_dark), before_dark * 0.10)
+
+    def test_mixed_doc_keeps_pages_sizes_rotations_metadata(self):
+        from core.text_tools import strip_text_layer_to_doc
+
+        doc = fitz.open(stream=_image_text_pdf_bytes())
+        self.addCleanup(doc.close)
+        p2 = doc.new_page(width=595, height=842)
+        p2.insert_text((100, 200), "PAGE TWO", fontsize=20, fontname="japan")
+        p2.set_rotation(90)
+        doc.new_page(width=300, height=300)
+        doc.set_metadata({"title": "TEST TITLE", "author": "SOMEONE"})
+        rects_before = [tuple(p.rect) for p in doc]
+        rots_before = [p.rotation for p in doc]
+
+        out = strip_text_layer_to_doc(doc)
+        self.addCleanup(out.close)
+        self.assertEqual(len(out), 3)
+        self.assertEqual([tuple(p.rect) for p in out], rects_before)
+        self.assertEqual([p.rotation for p in out], rots_before)
+        for p in out:
+            self.assertEqual(p.get_text(), "")
+        self.assertEqual(out.metadata.get("title"), "TEST TITLE")
+
+    def test_source_document_is_not_modified(self):
+        from core.text_tools import strip_text_layer_to_doc
+
+        doc = fitz.open(stream=_image_text_pdf_bytes())
+        self.addCleanup(doc.close)
+        text_before = doc[0].get_text()
+        images_before = len(doc[0].get_images())
+        out = strip_text_layer_to_doc(doc)
+        self.addCleanup(out.close)
+        self.assertEqual(doc[0].get_text(), text_before)
+        self.assertEqual(len(doc[0].get_images()), images_before)
+        self.assertIn("CARD STATEMENT", doc[0].get_text())
+
+    def test_none_document(self):
+        from core.text_tools import strip_text_layer_to_doc
+
+        self.assertIsNone(strip_text_layer_to_doc(None))
+
+
+class TestImageOnlySaveFlow(_WindowTestBase):
+    """ダイアログのボタンから保存し、開いている文書は変わらないこと。"""
+
+    def test_dialog_button_saves_image_only_pdf(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+        from core.text_tools import extract_page_texts
+        from ui.text_data_dialog import TextDataDialog
+
+        src_path = Path(self._tmp.name) / "statement.pdf"
+        src_path.write_bytes(_image_text_pdf_bytes())
+        self._open(str(src_path))
+        win = self.window
+        self.assertEqual(win.viewer.current_file, str(src_path))
+
+        out_path = str(Path(self._tmp.name) / "statement_画像のみ.pdf")
+        dlg = TextDataDialog(
+            extract_page_texts(win.viewer.current_pdf, win.viewer.page_annotations),
+            parent=win,
+            strip_handler=win._save_image_only_pdf,
+            strip_filename="statement_画像のみ.pdf",
+        )
+        try:
+            self.assertTrue(dlg.btn_strip.isEnabled())
+            with mock.patch.object(
+                QMessageBox, "question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ), mock.patch.object(
+                QMessageBox, "information", return_value=None
+            ), mock.patch.object(
+                QFileDialog, "getSaveFileName",
+                return_value=(out_path, "PDFファイル (*.pdf)"),
+            ):
+                dlg.btn_strip.click()
+        finally:
+            dlg.close()
+
+        saved = fitz.open(out_path)
+        self.addCleanup(saved.close)
+        self.assertEqual(saved[0].get_text(), "")
+        self.assertGreaterEqual(len(saved[0].get_images()), 1)
+        # 開いている文書と現在のファイルは変更されていない
+        self.assertEqual(win.viewer.current_file, str(src_path))
+        self.assertIn("CARD STATEMENT", win.viewer.current_pdf[0].get_text())
+        self.assertFalse(win.viewer.is_modified)
+
+    def test_no_text_document_notes_it_in_confirm(self):
+        from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+        from ui.text_data_dialog import TextDataDialog
+
+        calls = {}
+
+        def fake_handler(path):
+            calls["path"] = path
+            return True, "保存しました"
+
+        dlg = TextDataDialog(
+            [""],
+            parent=self.window,
+            strip_handler=fake_handler,
+            strip_filename="blank_画像のみ.pdf",
+        )
+        try:
+            captured = {}
+
+            def fake_question(parent, title, text, *args, **kwargs):
+                captured["text"] = text
+                return QMessageBox.StandardButton.Yes
+
+            with mock.patch.object(
+                QMessageBox, "question", side_effect=fake_question
+            ), mock.patch.object(
+                QMessageBox, "information", return_value=None
+            ), mock.patch.object(
+                QFileDialog, "getSaveFileName",
+                return_value=("out.pdf", "PDFファイル (*.pdf)"),
+            ):
+                dlg.btn_strip.click()
+            self.assertIn("文字データが見つかりませんでした", captured["text"])
+            self.assertEqual(calls["path"], "out.pdf")
+        finally:
+            dlg.close()

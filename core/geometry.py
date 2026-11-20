@@ -341,6 +341,26 @@ def view_rect_to_raw_rect(page: fitz.Page, view_rect: Union[fitz.Rect, Sequence[
     return rr
 
 
+def text_annotation_rotation(dir_x: float, dir_y: float) -> int:
+    """文字の進み方向（未回転＝raw座標系）から、テキスト注釈の rotation を返す。
+
+    注釈の rotation は「回転なしページへ fitz の insert_text(rotate=...) で
+    文字を入れるとき、その文字が元の進み方向を向く値」として定義する。
+    insert_text の rotate=θ はベースライン方向角を −θ にするため
+    （実測: θ=90 で方向は (0,-1)）、進み方向角 view_deg に対して
+    rotation = (-view_deg) % 360 が必要になる。
+
+    ページ自体の回転 (/Rotate) はこの値に含めない。焼き込み
+    （PDFDocumentManager）はページ回転を外してから insert_text するので
+    この値のまま渡せば元の向きが再現でき、ビューア表示ではビューア側が
+    ページ回転と組み合わせて（item回転 = ページ回転 − rotation）描く。
+    以前は (ページ回転 − view_deg) としており、回転したページでは
+    挿入した文字がページ回転ぶんずれた向きになり、位置もずれていた。
+    """
+    view_deg = int(round(math.degrees(math.atan2(dir_y, dir_x)) / 90.0) * 90) % 360
+    return (-view_deg) % 360
+
+
 def estimate_text_bbox_in_pdf(ann: Dict[str, Any]) -> fitz.Rect:
     fontsize = max(4.0, float(ann.get("fontsize", TEXT_FONT_SIZE)))
     text_str = str(ann.get("text", ""))

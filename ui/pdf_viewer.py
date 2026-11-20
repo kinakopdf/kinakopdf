@@ -131,6 +131,7 @@ from core.geometry import (
     raw_rect_to_view_rect,
     raw_rect_to_view_rect_from_geom,
     srgb_int_to_rgb_tuple,
+    text_annotation_rotation,
     view_point_to_raw_pdf,
     view_point_to_raw_pdf_from_geom,
     view_rect_to_raw_rect,
@@ -1979,8 +1980,9 @@ class PDFViewer(QGraphicsView):
                     if cur_chunk:
                         chunks.append(cur_chunk)
 
-                    view_deg = int(round(math.degrees(math.atan2(dy, dx)) / 90.0) * 90) % 360
-                    token_rot = (page.rotation - view_deg) % 360
+                    # 注釈の rotation はページ回転を含めない
+                    # （core.geometry.text_annotation_rotation 参照）
+                    token_rot = text_annotation_rotation(dx, dy)
 
                     for chunk in chunks:
                         raw_text_str = "".join(item[0].get("c", "") for item in chunk).strip()

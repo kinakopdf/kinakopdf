@@ -22,8 +22,10 @@ QApplication,
 QCheckBox,
 QComboBox,
 QDialog,
+QFileDialog,
 QHBoxLayout,
 QLabel,
+QMessageBox,
 QPlainTextEdit,
 QPushButton,
 QTabWidget,
@@ -619,6 +621,8 @@ class TextDataDialog(QDialog):
         apply_handler=None,
         refresh_handler=None,
         image_provider=None,
+        strip_handler=None,
+        strip_filename="",
     ):
         super().__init__(parent)
         self._page_texts = [str(t or "") for t in (page_texts or [])]
@@ -641,6 +645,8 @@ class TextDataDialog(QDialog):
         self._apply_handler = apply_handler
         self._refresh_handler = refresh_handler
         self._image_provider = image_provider
+        self._strip_handler = strip_handler
+        self._strip_filename = str(strip_filename or "")
         self._image_cache = {}
         self._loading = False
         # 全画面表示の状態（Fキーとボタンで切り替える）
@@ -700,6 +706,14 @@ class TextDataDialog(QDialog):
         self.lbl_status.setStyleSheet("color: #256d2a; font-size: 11px;")
         bottom_row.addWidget(self.lbl_status)
         bottom_row.addStretch(1)
+        self.btn_strip = QPushButton("🖼️ 画像だけのPDFとして保存")
+        self.btn_strip.setToolTip(
+            "見た目（画像）はそのまま残して、文字データだけを消したPDFを"
+            "別のファイルに保存します。元のファイルは変更しません"
+        )
+        self.btn_strip.setEnabled(self._strip_handler is not None)
+        self.btn_strip.clicked.connect(self._on_strip_clicked)
+        bottom_row.addWidget(self.btn_strip)
         self.btn_close = QPushButton("閉じる")
         self.btn_close.clicked.connect(self.accept)
         bottom_row.addWidget(self.btn_close)
@@ -1240,3 +1254,49 @@ class TextDataDialog(QDialog):
                     self._page_spans.append([])
         self._reload_all()
         self.lbl_status.setText("PDFに反映しました。メイン画面で保存すると確定します")
+
+    # --- 画像だけのPDFとして保存（文字データの除去） ---
+
+    def _on_strip_clicked(self):
+        """見た目はそのままに、文字データだけを消したPDFを別ファイルへ保存する。
+
+        実際の生成と保存は strip_handler（MainWindow）が行い、開いている
+        文書や現在のファイルは変更されない。
+        """
+        if self._strip_handler is None:
+            return
+        has_text = any(t.strip() for t in self._page_texts)
+        message = (
+            "見た目（画像）はそのまま残して、文字データだけを消したPDFを、"
+            "別のファイルに保存します。元のファイルは変更しません。"
+        )
+        if not has_text:
+            message += (
+                "\n\n（このPDFには文字データが見つかりませんでした。"
+                "見た目をそのまま写したPDFを保存します）"
+            )
+        answer = QMessageBox.question(
+            self,
+            "画像だけのPDFとして保存",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "画像だけのPDFとして保存",
+            self._strip_filename or "画像のみ.pdf",
+            "PDFファイル (*.pdf)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+        ok, result_message = self._strip_handler(path)
+        if ok:
+            self.lbl_status.setText(result_message)
+            QMessageBox.information(self, "保存しました", result_message)
+        else:
+            QMessageBox.critical(self, "保存できませんでした", result_message)
