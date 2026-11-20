@@ -86,6 +86,7 @@ from core.geometry import (
     raw_pdf_to_view_point_from_geom,
     view_point_to_raw_pdf_from_geom,
 )
+from core.text_tools import spans_are_scan_overlay
 
 
 from ui.spread_engine import SpreadCoordMapper, SpreadItem, SpreadLayoutEngine
@@ -1814,6 +1815,8 @@ class FullscreenSpreadReader(QWidget):
             if dlg.result_action == dlg_cls.ACTION_DELETE or not dlg.get_clean_text():
                 if old_ann.get("redact_rect"):
                     new_ann = {"type": "text_redact", "rect": old_ann["redact_rect"]}
+                    if old_ann.get("invisible"):
+                        new_ann["keep_image"] = True
                     self._record_and_apply_edit(page_idx, ann_idx, old_ann, new_ann)
                 else:
                     self._record_and_apply_remove(page_idx, ann_idx)
@@ -1886,6 +1889,11 @@ class FullscreenSpreadReader(QWidget):
                         tok["pos"], tok["baseline_pos"], new_fs
                     )
 
+                tok_invisible = False
+                if self.doc is not None and 0 <= page_idx < len(self.doc):
+                    tok_invisible = spans_are_scan_overlay(
+                        self.doc[page_idx], [tok["raw_rect"]]
+                    )
                 annot = build_pdf_token_replacement_annotation(
                     tok,
                     new_text=new_text,
@@ -1893,6 +1901,7 @@ class FullscreenSpreadReader(QWidget):
                     new_color=new_col,
                     new_pos=new_pos,
                     updated_after=len(self.annotations.get(page_idx, [])),
+                    invisible=tok_invisible,
                 )
                 self._record_and_apply_add(page_idx, annot)
                 self._show_hud("✔ PDF内の文字を書き換えました")

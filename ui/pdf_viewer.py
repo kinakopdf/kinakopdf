@@ -51,6 +51,7 @@ from core import (
     clip_stroke_by_rects,
     collect_all_erased_raw_rects,
     collect_text_only_redact_raw_rects,
+    split_text_only_redact_raw_rects,
     find_draw_annotation_at_point,
     find_draws_along_eraser_stroke,
     find_highlight_annotation_at_point,
@@ -66,6 +67,7 @@ from core import (
     point_to_segment_distance,
 )
 from ui import rgb_tuple_to_qcolor
+from core.text_tools import spans_are_scan_overlay
 from core.batch_apply import (
     SCOPE_ALL,
     SCOPE_CURRENT,
@@ -1624,10 +1626,10 @@ class PDFViewer(QGraphicsView):
             scale = target_w / disp_w
             source_page = self.current_pdf[page_idx]
             temp_doc = None
-            redact_rects = collect_text_only_redact_raw_rects(
+            redact_rects, keep_image_rects = split_text_only_redact_raw_rects(
                 self.page_annotations.get(page_idx, [])
             )
-            if redact_rects:
+            if redact_rects or keep_image_rects:
                 temp_doc = fitz.open()
                 temp_doc.insert_pdf(self.current_pdf, from_page=page_idx, to_page=page_idx)
                 temp_page = temp_doc[0]
@@ -1635,7 +1637,9 @@ class PDFViewer(QGraphicsView):
                 saved_crop = get_effective_cropbox(temp_page)
                 temp_page.set_rotation(0)
                 temp_page.set_cropbox(temp_page.mediabox)
-                PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, redact_rects)
+                PDFDocumentManager.apply_text_only_redactions_to_page(
+                    temp_page, redact_rects, keep_image_rects
+                )
                 if temp_page.rotation != saved_rot:
                     temp_page.set_rotation(saved_rot)
                 if saved_crop != temp_page.mediabox:
@@ -2597,8 +2601,10 @@ class PDFViewer(QGraphicsView):
         )
 
         self._close_clean_redacted_doc()
-        text_redact_rects = collect_text_only_redact_raw_rects(self.current_annotations)
-        if text_redact_rects:
+        text_redact_rects, keep_image_rects = split_text_only_redact_raw_rects(
+            self.current_annotations
+        )
+        if text_redact_rects or keep_image_rects:
             temp_doc = fitz.open()
             temp_doc.insert_pdf(
                 self.current_pdf,
@@ -2611,7 +2617,9 @@ class PDFViewer(QGraphicsView):
             temp_page.set_rotation(0)
             temp_page.set_cropbox(temp_page.mediabox)
 
-            PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, text_redact_rects)
+            PDFDocumentManager.apply_text_only_redactions_to_page(
+                temp_page, text_redact_rects, keep_image_rects
+            )
 
             if temp_page.rotation != saved_rot:
                 temp_page.set_rotation(saved_rot)
@@ -2990,6 +2998,10 @@ class PDFViewer(QGraphicsView):
                 self.scene.addItem(item)
 
             elif ann["type"] == "text":
+                # 不可視テキスト（OCRレイヤーの置換）は画面に字形を描かない。
+                # 文字データとしてのみ存在し、編集は文字データ画面から行う。
+                if ann.get("invisible"):
+                    continue
                 text_bbox = estimate_text_bbox_in_pdf(ann)
                 if is_rect_substantially_erased(text_bbox, later_erases):
                     continue
@@ -3050,6 +3062,19 @@ class PDFViewer(QGraphicsView):
         self.notify_pages_updated([self.current_page_idx])
         return True
 
+    def _token_is_scan_overlay(self, pdf_token):
+        """PDF内文字トークンがスキャン画像の上に乗ったOCR文字か判定する。
+
+        OCR文字の置換は、画像の上に字形を表示せず、文字データだけを
+        差し替える（不可視テキストにする）ために使う。
+        """
+        if not pdf_token or not self.current_pdf:
+            return False
+        if not (0 <= self.current_page_idx < len(self.current_pdf)):
+            return False
+        page = self.current_pdf[self.current_page_idx]
+        return spans_are_scan_overlay(page, [pdf_token["raw_rect"]])
+
     def quick_recolor_existing_pdf_token(self, pdf_token, new_color):
         if not pdf_token:
             return False
@@ -3057,6 +3082,7 @@ class PDFViewer(QGraphicsView):
             pdf_token,
             new_color=new_color,
             updated_after=len(self.current_annotations),
+            invisible=self._token_is_scan_overlay(pdf_token),
         )
         self.current_annotations.append(annot)
         self.history.push(AddAnnotationCommand(self.current_page_idx, annot))
@@ -3130,6 +3156,8 @@ class PDFViewer(QGraphicsView):
                 "redact_rect": pdf_token["raw_rect"],
                 "updated_after": len(self.current_annotations),
             }
+            if self._token_is_scan_overlay(pdf_token):
+                annot["invisible"] = True
             self.current_annotations.append(annot)
             self.history.push(AddAnnotationCommand(self.current_page_idx, annot))
             self.render_page(fit_view=False, rebuild_base=True)

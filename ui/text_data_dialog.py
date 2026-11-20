@@ -1253,7 +1253,19 @@ class TextDataDialog(QDialog):
                 while len(self._page_spans) < len(self._page_texts):
                     self._page_spans.append([])
         self._reload_all()
-        self.lbl_status.setText("PDFに反映しました。メイン画面で保存すると確定します")
+        # 反映が不可視（OCRレイヤー型）だった場合は、その旨を伝える。
+        # apply_handler の持ち主（MainWindow）が結果を属性に残す。
+        handler_owner = getattr(self._apply_handler, "__self__", None)
+        applied_invisible = bool(
+            getattr(handler_owner, "_last_text_data_apply_invisible", False)
+        )
+        if applied_invisible:
+            self.lbl_status.setText(
+                "PDFに反映しました（画像の上には表示されず、文字データだけ直しました）。"
+                "メイン画面で保存すると確定します"
+            )
+        else:
+            self.lbl_status.setText("PDFに反映しました。メイン画面で保存すると確定します")
 
     # --- 画像だけのPDFとして保存（文字データの除去） ---
 

@@ -192,6 +192,31 @@ def collect_text_only_redact_raw_rects(ann_list: Sequence[Dict[str, Any]]) -> Li
     return rects
 
 
+def split_text_only_redact_raw_rects(
+    ann_list: Sequence[Dict[str, Any]],
+) -> Tuple[List[fitz.Rect], List[fitz.Rect]]:
+    """テキストのみ墨消しの矩形を (通常, 画像を残す) の2群に分けて返す。
+
+    「画像を残す」群は、スキャン画像の上に乗ったOCR文字の置換に伴う消去で、
+    文字データだけを取り除き、背景画像のピクセルには触れない。
+    - text_redact 注釈に keep_image が付いているもの
+    - invisible な text 注釈の redact_rect
+    が該当する。それ以外は通常群（従来どおり画像ピクセル消去の対象）。
+    """
+    normal: List[fitz.Rect] = []
+    keep_image: List[fitz.Rect] = []
+    for ann in ann_list:
+        if ann.get("type") == "text_redact" and "rect" in ann:
+            r = fitz.Rect(ann["rect"])
+            r.normalize()
+            (keep_image if ann.get("keep_image") else normal).append(r)
+        elif ann.get("type") == "text" and ann.get("redact_rect"):
+            r = fitz.Rect(ann["redact_rect"])
+            r.normalize()
+            (keep_image if ann.get("invisible") else normal).append(r)
+    return normal, keep_image
+
+
 def collect_all_erased_raw_rects(ann_list: Sequence[Dict[str, Any]]) -> List[fitz.Rect]:
     """テキスト消去領域（text_redact / redact_rect）と白塗り消去領域（erase / box_erase）を一括収集する"""
     rects = collect_text_only_redact_raw_rects(ann_list)
@@ -477,8 +502,14 @@ def build_text_annotation(
     rotation: int,
     updated_after: int = 0,
     redact_rect: Optional[Sequence[float]] = None,
+    invisible: bool = False,
 ) -> Dict[str, Any]:
-    """新規または置換用のテキスト注釈辞書を統一フォーマットで生成する"""
+    """新規または置換用のテキスト注釈辞書を統一フォーマットで生成する
+
+    invisible=True の場合、焼き込み時にレンダリングモード3（不可視）で
+    挿入される。スキャン画像の上に乗ったOCR文字の置換用で、見た目は
+    元の画像のままにし、内部の文字データだけを差し替える。
+    """
     annot: Dict[str, Any] = {
         "type": "text",
         "text": str(text),
@@ -491,6 +522,8 @@ def build_text_annotation(
     }
     if redact_rect is not None:
         annot["redact_rect"] = tuple(float(v) for v in redact_rect)
+    if invisible:
+        annot["invisible"] = True
     return annot
 
 
@@ -501,6 +534,7 @@ def build_pdf_token_replacement_annotation(
     new_color: Optional[Sequence[float]] = None,
     new_pos: Optional[Tuple[float, float]] = None,
     updated_after: int = 0,
+    invisible: bool = False,
 ) -> Dict[str, Any]:
     """既存のPDF内文字トークンを編集・色変更する際のテキスト注釈辞書を生成する"""
     return build_text_annotation(
@@ -512,6 +546,7 @@ def build_pdf_token_replacement_annotation(
         rotation=int(pdf_token.get("rotation", 0)),
         updated_after=updated_after,
         redact_rect=pdf_token["raw_rect"],
+        invisible=invisible,
     )
 
 
@@ -531,6 +566,8 @@ def plan_text_annotation_removal(
         return "noop", None, None
     if target.get("redact_rect"):
         redact_ann = {"type": "text_redact", "rect": tuple(target["redact_rect"])}
+        if target.get("invisible"):
+            redact_ann["keep_image"] = True
         return "replace_with_redact", dict(target), redact_ann
     return "pop", dict(target), None
 

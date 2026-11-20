@@ -657,11 +657,14 @@ class TestTextOnlyRedactionOverImage(unittest.TestCase):
 class TestScanReplacementRender(_WindowTestBase):
     """画像＋文字レイヤーのPDFで「PDFに反映」した後の描画レベル確認。
 
-    反映後の保存PDF・焼き込み描画で、元の断片の字形（画像ピクセル）が
-    残らず、つなげた文が1回だけ現れること。
+    断片がすべて画像の上に乗った文字の場合、置換は不可視で行われる:
+    見た目（画像）は元のままで字形が消えたり増えたりせず、内部の
+    文字データだけが連結文に差し替わる。
+    （以前は可視で置換していたため、画像側の字形を消してから新しい
+    文字を描いていた。現在の仕様はそちらではない）
     """
 
-    def test_gray_layer_apply_leaves_no_doubled_glyphs(self):
+    def test_gray_layer_apply_keeps_image_and_hides_text(self):
         from core.pdf_engine import PDFDocumentManager
 
         path = Path(self._tmp.name) / "scan_gray.pdf"
@@ -676,24 +679,42 @@ class TestScanReplacementRender(_WindowTestBase):
         self.assertEqual(len(frag), 2)
         frag1_rect = frag[0]["rect"]
         frag2_rect = frag[1]["rect"]
+
+        # 反映前: 両断片の場所に字形がある（画像＋文字レイヤーの重なり）
+        src_pix = viewer.current_pdf[0].get_pixmap(
+            matrix=fitz.Matrix(2, 2), alpha=False
+        )
+        dark1_before = _dark_pixel_count(src_pix, frag1_rect, 2)
+        dark2_before = _dark_pixel_count(src_pix, frag2_rect, 2)
+        self.assertGreater(dark1_before, 0)
+        self.assertGreater(dark2_before, 0)
+
         joined = join_span_texts([sp["text"] for sp in frag])
         self.assertTrue(
             self.window._apply_text_data_replacement(0, frag, joined)
         )
+        # 全断片が画像の上の文字なので、不可視の置換になっていること
+        self.assertTrue(self.window._last_text_data_apply_invisible)
 
         # 焼き込み描画（ダイアログの下敷き・見比べ画像と同じ経路）:
-        # 断片2の場所に元の字形が残らず、断片1の場所に連結文が描かれる
+        # 画像の字形は消えず、新しい字形も描かれない（ほぼ同量を維持）
         baked = PDFDocumentManager.extract_pages_as_doc(
             viewer.current_pdf, [0], viewer.page_annotations
         )
         try:
             pix = baked[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            self.assertEqual(_dark_pixel_count(pix, frag2_rect, 2), 0)
-            self.assertGreater(_dark_pixel_count(pix, frag1_rect, 2), 0)
+            for rect, before in ((frag1_rect, dark1_before), (frag2_rect, dark2_before)):
+                after = _dark_pixel_count(pix, rect, 2)
+                self.assertGreater(after, 0)
+                self.assertLessEqual(
+                    abs(after - before), max(30, int(before * 0.2))
+                )
+            # 文字データは連結文に差し替わっている
+            self.assertEqual(baked[0].get_text().count("これはテストです"), 1)
         finally:
             baked.close()
 
-        # 保存したPDFでも同じこと（文字レイヤーでも連結文は1回だけ）
+        # 保存したPDFでも同じこと（見た目は画像のまま、連結文は1回だけ）
         out = str(Path(self._tmp.name) / "saved.pdf")
         PDFDocumentManager.save_safely(
             viewer.current_pdf, viewer.page_annotations, out, str(path)
@@ -704,8 +725,12 @@ class TestScanReplacementRender(_WindowTestBase):
             self.assertEqual(text.count("これはテストです"), 1)
             self.assertEqual(text.count("テストです"), 1)
             pix = sdoc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            self.assertEqual(_dark_pixel_count(pix, frag2_rect, 2), 0)
-            self.assertGreater(_dark_pixel_count(pix, frag1_rect, 2), 0)
+            for rect, before in ((frag1_rect, dark1_before), (frag2_rect, dark2_before)):
+                after = _dark_pixel_count(pix, rect, 2)
+                self.assertGreater(after, 0)
+                self.assertLessEqual(
+                    abs(after - before), max(30, int(before * 0.2))
+                )
         finally:
             sdoc.close()
 
@@ -1782,3 +1807,393 @@ class TestImageOnlySaveFlow(_WindowTestBase):
             self.assertEqual(calls["path"], "out.pdf")
         finally:
             dlg.close()
+
+
+# ==========================================
+# OCR文字の不可視置換（画像はそのまま、文字データだけ差し替え）
+# ==========================================
+
+
+def _ocr_pdf_bytes():
+    """スキャン風PDFのバイト列を作る: 文字を画像化して全面に貼り、
+    その上に同じ位置・大きさのOCR文字レイヤーを不可視
+    （レンダリングモード3）で重ねたもの。"""
+    src = fitz.open()
+    sp = src.new_page(width=400, height=400)
+    sp.insert_text((20, 40), "これは", fontsize=12, fontname="japan")
+    sp.insert_text((20, 70), "テストです", fontsize=12, fontname="japan")
+    sp.insert_text((20, 200), "関係ない文字", fontsize=12, fontname="japan")
+    img = sp.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False).tobytes("png")
+    src.close()
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_image(page.rect, stream=img)
+    for xy, txt in (
+        ((20, 40), "これは"),
+        ((20, 70), "テストです"),
+        ((20, 200), "関係ない文字"),
+    ):
+        page.insert_text(xy, txt, fontsize=12, fontname="japan", render_mode=3)
+    try:
+        return doc.tobytes()
+    finally:
+        doc.close()
+
+
+class TestScanOverlayDetection(unittest.TestCase):
+    """spans_are_scan_overlay: 画像に覆われた文字だけをOCR文字と判定すること。"""
+
+    def test_full_page_image_is_overlay(self):
+        from core.text_tools import spans_are_scan_overlay
+
+        doc = fitz.open(stream=_ocr_pdf_bytes(), filetype="pdf")
+        self.addCleanup(doc.close)
+        page = doc[0]
+        bbox = _span_bbox(page, "これは")
+        self.assertIsNotNone(bbox)
+        self.assertTrue(spans_are_scan_overlay(page, [bbox]))
+
+    def test_born_digital_is_not_overlay(self):
+        from core.text_tools import spans_are_scan_overlay
+
+        doc = _make_jp_doc()
+        self.addCleanup(doc.close)
+        page = doc[0]
+        bbox = _span_bbox(page, "これは")
+        self.assertIsNotNone(bbox)
+        self.assertFalse(spans_are_scan_overlay(page, [bbox]))
+
+    def test_rect_outside_image_is_not_overlay(self):
+        from core.text_tools import spans_are_scan_overlay
+
+        doc = fitz.open()
+        self.addCleanup(doc.close)
+        page = doc.new_page(width=400, height=400)
+        pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 50, 50))
+        pix.clear_with(0x808080)
+        page.insert_image(fitz.Rect(0, 0, 100, 400), pixmap=pix)
+        page.insert_text((200, 40), "OUTSIDE", fontsize=12, fontname="japan")
+        bbox = _span_bbox(page, "OUTSIDE")
+        self.assertIsNotNone(bbox)
+        self.assertFalse(spans_are_scan_overlay(page, [bbox]))
+
+    def test_empty_inputs_are_not_overlay(self):
+        from core.text_tools import spans_are_scan_overlay
+
+        doc = fitz.open(stream=_ocr_pdf_bytes(), filetype="pdf")
+        self.addCleanup(doc.close)
+        self.assertFalse(spans_are_scan_overlay(doc[0], []))
+        self.assertFalse(spans_are_scan_overlay(None, [(0, 0, 10, 10)]))
+
+
+class TestInvisibleOcrReplacement(_WindowTestBase):
+    """OCRレイヤーの「PDFに反映」は不可視で行われ、画像がそのまま残ること。"""
+
+    def _open_ocr(self):
+        path = Path(self._tmp.name) / "ocr.pdf"
+        path.write_bytes(_ocr_pdf_bytes())
+        self._open(str(path))
+        return str(path)
+
+    def _fragments(self):
+        viewer = self.window.viewer
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        frag = [
+            sp for sp in spans[0] if sp["text"] in ("これは", "テストです")
+        ]
+        self.assertEqual(len(frag), 2)
+        return frag
+
+    def test_apply_flags_invisible_and_keeps_image(self):
+        from core.pdf_engine import PDFDocumentManager
+
+        path = self._open_ocr()
+        win = self.window
+        viewer = win.viewer
+        frag = self._fragments()
+        frag1_rect = frag[0]["rect"]
+        frag2_rect = frag[1]["rect"]
+
+        # 反映前の描画 = 画像のみ（OCRレイヤーは見えない）
+        src_pix = viewer.current_pdf[0].get_pixmap(
+            matrix=fitz.Matrix(2, 2), alpha=False
+        )
+        dark1_before = _dark_pixel_count(src_pix, frag1_rect, 2)
+        dark2_before = _dark_pixel_count(src_pix, frag2_rect, 2)
+        self.assertGreater(dark1_before, 0)
+        self.assertGreater(dark2_before, 0)
+
+        joined = join_span_texts([sp["text"] for sp in frag])
+        self.assertTrue(win._apply_text_data_replacement(0, frag, joined))
+        self.assertTrue(win._last_text_data_apply_invisible)
+
+        # 注釈: 置換テキストは invisible、断片の消去は keep_image 付き
+        anns = viewer.page_annotations[0]
+        text_anns = [a for a in anns if a.get("type") == "text"]
+        self.assertEqual(len(text_anns), 1)
+        self.assertEqual(text_anns[0]["text"], "これはテストです")
+        self.assertTrue(text_anns[0].get("invisible"))
+        redact_anns = [a for a in anns if a.get("type") == "text_redact"]
+        self.assertEqual(len(redact_anns), 2)
+        self.assertTrue(all(a.get("keep_image") for a in redact_anns))
+
+        # 焼き込み: 文字データは連結文だけ、描画は画像のまま変わらない
+        baked = PDFDocumentManager.extract_pages_as_doc(
+            viewer.current_pdf, [0], viewer.page_annotations
+        )
+        try:
+            text = baked[0].get_text()
+            self.assertEqual(text.count("これはテストです"), 1)
+            self.assertIn("関係ない文字", text)
+            pix = baked[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            self.assertEqual(_dark_pixel_count(pix, frag1_rect, 2), dark1_before)
+            self.assertEqual(_dark_pixel_count(pix, frag2_rect, 2), dark2_before)
+        finally:
+            baked.close()
+
+        # ダイアログの再表示（スパン抽出）でも連結文が1スパンとして見つかる
+        texts_after = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        self.assertIn("これはテストです", texts_after)
+        self.assertNotIn("これは", texts_after)
+        self.assertNotIn("テストです", texts_after)
+
+        # 保存したPDFでも、見た目は画像のまま・文字は連結文が抽出できる
+        out = str(Path(self._tmp.name) / "saved.pdf")
+        PDFDocumentManager.save_safely(
+            viewer.current_pdf, viewer.page_annotations, out, path
+        )
+        sdoc = fitz.open(out)
+        try:
+            stext = sdoc[0].get_text()
+            self.assertEqual(stext.count("これはテストです"), 1)
+            self.assertIn("関係ない文字", stext)
+            spix = sdoc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            self.assertEqual(_dark_pixel_count(spix, frag1_rect, 2), dark1_before)
+            self.assertEqual(_dark_pixel_count(spix, frag2_rect, 2), dark2_before)
+        finally:
+            sdoc.close()
+
+        # Undoで断片に戻り、Redoで再び連結文になる
+        viewer.history.undo(viewer)
+        texts_undo = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        self.assertIn("これは", texts_undo)
+        self.assertIn("テストです", texts_undo)
+        viewer.history.redo(viewer)
+        texts_redo = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        self.assertIn("これはテストです", texts_redo)
+        self.assertNotIn("これは", texts_redo)
+
+    def test_redaction_still_removes_invisible_text(self):
+        from core.pdf_engine import PDFDocumentManager
+
+        path = self._open_ocr()
+        win = self.window
+        viewer = win.viewer
+        frag = self._fragments()
+        joined = join_span_texts([sp["text"] for sp in frag])
+        self.assertTrue(win._apply_text_data_replacement(0, frag, joined))
+
+        # 保存して実テキスト化した後、その領域を墨消しすれば
+        # 不可視テキストも通常の文字と同じく除去される
+        out = str(Path(self._tmp.name) / "saved.pdf")
+        PDFDocumentManager.save_safely(
+            viewer.current_pdf, viewer.page_annotations, out, path
+        )
+        sdoc = fitz.open(out)
+        try:
+            page = sdoc[0]
+            self.assertIn("これはテストです", page.get_text())
+            bbox = _span_bbox(page, "これはテストです")
+            self.assertIsNotNone(bbox)
+            PDFDocumentManager.apply_text_only_redactions_to_page(
+                page, [bbox]
+            )
+            self.assertNotIn("これはテストです", page.get_text())
+            self.assertIn("関係ない文字", page.get_text())
+        finally:
+            sdoc.close()
+
+    def test_born_digital_apply_stays_visible(self):
+        path = Path(self._tmp.name) / "frag.pdf"
+        path.write_bytes(_make_jp_pdf_bytes())
+        self._open(str(path))
+        win = self.window
+        viewer = win.viewer
+
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        frag = [
+            sp for sp in spans[0] if sp["text"] in ("これは", "テストです")
+        ]
+        self.assertEqual(len(frag), 2)
+        joined = join_span_texts([sp["text"] for sp in frag])
+        self.assertTrue(win._apply_text_data_replacement(0, frag, joined))
+        self.assertFalse(win._last_text_data_apply_invisible)
+
+        anns = viewer.page_annotations[0]
+        text_anns = [a for a in anns if a.get("type") == "text"]
+        self.assertEqual(len(text_anns), 1)
+        self.assertFalse(text_anns[0].get("invisible"))
+        redact_anns = [a for a in anns if a.get("type") == "text_redact"]
+        self.assertTrue(redact_anns)
+        self.assertTrue(all(not a.get("keep_image") for a in redact_anns))
+
+
+class TestVisibleReplacementControl(unittest.TestCase):
+    """対照実験: 可視の置換注釈を明示的に組んだ場合は、従来どおり
+    画像側の字形が消え、新しい文字が描かれる（二重表示防止の維持）。"""
+
+    def test_visible_annotations_still_replace_visibly(self):
+        from core import build_text_annotation
+        from core.pdf_engine import PDFDocumentManager
+
+        doc = fitz.open(stream=_ocr_pdf_bytes(), filetype="pdf")
+        self.addCleanup(doc.close)
+        page = doc[0]
+        frag1 = _span_bbox(page, "これは")
+        frag2 = _span_bbox(page, "テストです")
+        self.assertIsNotNone(frag1)
+        self.assertIsNotNone(frag2)
+        src_pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        dark2_before = _dark_pixel_count(src_pix, frag2, 2)
+        self.assertGreater(dark2_before, 0)
+
+        spans = extract_page_spans(doc)[0]
+        frag = [
+            sp for sp in spans if sp["text"] in ("これは", "テストです")
+        ]
+        self.assertEqual(len(frag), 2)
+        first = frag[0]
+        anns = [
+            {"type": "text_redact", "rect": tuple(sp["raw_rect"])}
+            for sp in frag
+        ]
+        anns.append(
+            build_text_annotation(
+                text="これはテストです",
+                pos=first["pos"],
+                baseline_pos=first["baseline_pos"],
+                fontsize=float(first["fontsize"]),
+                color=first["color"],
+                rotation=int(first["rotation"]),
+            )
+        )
+        baked = PDFDocumentManager.extract_pages_as_doc(doc, [0], {0: anns})
+        try:
+            pix = baked[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            # 断片2の場所は画像の字形まで消え、断片1の場所に連結文が描かれる
+            self.assertEqual(_dark_pixel_count(pix, frag2, 2), 0)
+            self.assertGreater(_dark_pixel_count(pix, frag1, 2), 0)
+            self.assertEqual(baked[0].get_text().count("これはテストです"), 1)
+        finally:
+            baked.close()
+
+
+class TestDialogInvisibleStatusMessage(_QtTestBase):
+    """不可視の反映では、ダイアログの完了メッセージがその旨を伝えること。"""
+
+    def test_status_message_mentions_invisible(self):
+        from ui.text_data_dialog import TextDataDialog
+
+        class FakeOwner:
+            _last_text_data_apply_invisible = True
+
+            def apply(self, page_idx, spans, joined):
+                return True
+
+        owner = FakeOwner()
+        joined_span = _fake_span("これはテストです", 20, 40)
+        spans = [[_fake_span("これは", 20, 40), _fake_span("テストです", 20, 70)]]
+        dlg = TextDataDialog(
+            ["これは\nテストです"],
+            page_spans=spans,
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+            session_state={},
+            apply_handler=owner.apply,
+            refresh_handler=lambda: (["これはテストです"], [[joined_span]]),
+        )
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.layout_canvas.set_selected({0, 1})
+            dlg.btn_layout_join.click()
+            dlg.btn_apply.click()
+            self.assertIn("画像の上には表示されず", dlg.lbl_status.text())
+            self.assertIn("文字データだけ直しました", dlg.lbl_status.text())
+        finally:
+            dlg.close()
+
+
+class TestTokenEditInvisible(_WindowTestBase):
+    """「PDF内の文字を編集」経路でも、OCRトークンの置換は不可視になること。"""
+
+    def test_quick_recolor_ocr_token_flags_invisible(self):
+        from core.pdf_engine import PDFDocumentManager
+
+        path = Path(self._tmp.name) / "ocr.pdf"
+        path.write_bytes(_ocr_pdf_bytes())
+        self._open(str(path))
+        viewer = self.window.viewer
+
+        tokens = viewer._get_page_pdf_text_tokens(page_idx=0)
+        target = [t for t in tokens if t["text"] == "これは"]
+        self.assertEqual(len(target), 1)
+        token = target[0]
+
+        # このフィクスチャは回転0なので raw_rect = 表示矩形として使える
+        src_pix = viewer.current_pdf[0].get_pixmap(
+            matrix=fitz.Matrix(2, 2), alpha=False
+        )
+        dark_before = _dark_pixel_count(src_pix, token["raw_rect"], 2)
+        self.assertGreater(dark_before, 0)
+
+        self.assertTrue(
+            viewer.quick_recolor_existing_pdf_token(token, (1.0, 0.0, 0.0))
+        )
+        ann = viewer.page_annotations[0][-1]
+        self.assertEqual(ann["type"], "text")
+        self.assertTrue(ann.get("invisible"))
+
+        # 焼き込み: 画像は元のまま（穴も開かず、色付き文字も描かれない）
+        baked = PDFDocumentManager.extract_pages_as_doc(
+            viewer.current_pdf, [0], viewer.page_annotations
+        )
+        try:
+            self.assertIn("これは", baked[0].get_text())
+            pix = baked[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            self.assertEqual(
+                _dark_pixel_count(pix, token["raw_rect"], 2), dark_before
+            )
+        finally:
+            baked.close()
+
+    def test_quick_recolor_born_digital_token_stays_visible(self):
+        path = Path(self._tmp.name) / "frag.pdf"
+        path.write_bytes(_make_jp_pdf_bytes())
+        self._open(str(path))
+        viewer = self.window.viewer
+
+        tokens = viewer._get_page_pdf_text_tokens(page_idx=0)
+        target = [t for t in tokens if t["text"] == "これは"]
+        self.assertEqual(len(target), 1)
+        self.assertTrue(
+            viewer.quick_recolor_existing_pdf_token(
+                target[0], (1.0, 0.0, 0.0)
+            )
+        )
+        ann = viewer.page_annotations[0][-1]
+        self.assertEqual(ann["type"], "text")
+        self.assertFalse(ann.get("invisible"))

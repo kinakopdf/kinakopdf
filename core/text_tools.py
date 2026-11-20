@@ -212,6 +212,67 @@ def extract_page_spans(doc, page_annotations=None):
             return result
 
 
+def page_image_rects(page):
+    """ページ内の画像ブロックの矩形（生座標）を返す。
+
+    get_text("dict") の画像ブロック（type=1）の bbox で、
+    同じ呼び出しで得られる文字スパンの bbox と同じ座標系になる
+    （apply_text_only_redactions_to_page の画像重なり判定と同じ流儀）。
+    """
+    rects = []
+    if page is None:
+        return rects
+    try:
+        data = page.get_text("dict")
+    except Exception:
+        return rects
+    for block in data.get("blocks", []):
+        if block.get("type") != 1:
+            continue
+        r = fitz.Rect(block.get("bbox", (0, 0, 0, 0)))
+        if not r.is_empty:
+            rects.append(r)
+    return rects
+
+
+def rect_image_coverage(rect, image_rects):
+    """rect の面積のうち image_rects に覆われる割合（0.0〜1.0）を返す。"""
+    r = fitz.Rect(rect)
+    r.normalize()
+    area = r.width * r.height
+    if area <= 0:
+        return 0.0
+    covered = 0.0
+    for ir in image_rects:
+        inter = r & ir
+        if not inter.is_empty:
+            covered += inter.width * inter.height
+    return min(1.0, covered / area)
+
+
+def spans_are_scan_overlay(page, raw_rects, coverage_threshold=0.5):
+    """すべての矩形がページ内の画像に実質的に覆われていれば True。
+
+    スキャン/写真の上に乗ったOCR文字（見た目は画像、文字は内部データ）
+    かどうかの判定に使う。画像が1つもないページ（通常のPDF）では
+    常に False になる。raw_rects は生座標系で渡すこと。
+    """
+    if page is None or not raw_rects:
+        return False
+    with FITZ_LOCK:
+        image_rects = page_image_rects(page)
+        if not image_rects:
+            return False
+        for rr in raw_rects:
+            r = fitz.Rect(rr)
+            r.normalize()
+            if r.is_empty:
+                return False
+            if rect_image_coverage(r, image_rects) < coverage_threshold:
+                return False
+        return True
+
+
 def get_page_view_rects(doc):
     """各ページの表示座標系の矩形 (x0, y0, x1, y1) を返す（注釈の影響を受けない）。"""
     if doc is None:

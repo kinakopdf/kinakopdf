@@ -10,7 +10,7 @@ import fitz
 from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QImage
 
-from core import collect_text_only_redact_raw_rects, logger
+from core import split_text_only_redact_raw_rects, logger
 from core.geometry import (
     MAX_RENDER_PIXELS,
     clamp_render_scales,
@@ -190,7 +190,7 @@ class SpreadLayoutEngine:
         redact_page_callback: Optional[Callable] = None,
         fitz_lock=None,
     ) -> Dict[str, Any]:
-        text_redact_rects = collect_text_only_redact_raw_rects(ann_list)
+        text_redact_rects, keep_image_rects = split_text_only_redact_raw_rects(ann_list)
         render_zoom = min(2.5, max(1.0, float(zoom)))
         eff_dpr = max(1.0, float(dpr))
 
@@ -211,14 +211,17 @@ class SpreadLayoutEngine:
             rot = page.rotation % 360
             redacted_cleanly = False
 
-            if text_redact_rects and redact_page_callback is not None:
+            if (text_redact_rects or keep_image_rects) and redact_page_callback is not None:
                 temp_doc = fitz.open()
                 try:
                     temp_doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
                     temp_page = temp_doc[0]
                     temp_page.set_rotation(0)
                     temp_page.set_cropbox(temp_page.mediabox)
-                    redact_page_callback(temp_page, text_redact_rects)
+                    try:
+                        redact_page_callback(temp_page, text_redact_rects, keep_image_rects)
+                    except TypeError:
+                        redact_page_callback(temp_page, text_redact_rects)
                     if temp_page.rotation != rot:
                         temp_page.set_rotation(rot)
                     if crop_r != temp_page.mediabox:

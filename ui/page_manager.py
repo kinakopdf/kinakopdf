@@ -53,7 +53,7 @@ from core import (
     HIGHLIGHT_OPACITY,
     TEXT_LINE_SPACING,
     clip_stroke_by_rects,
-    collect_text_only_redact_raw_rects,
+    split_text_only_redact_raw_rects,
     get_later_user_erase_rects,
     is_rect_substantially_erased,
     logger,
@@ -433,15 +433,17 @@ class ThumbnailTask(QRunnable):
                 page_rect = fitz.Rect(page.rect)
                 page_rot = page.rotation % 360
                 crop_rect = get_effective_cropbox(page)
-                text_redact_rects = collect_text_only_redact_raw_rects(self.ann_list)
-                if text_redact_rects:
+                text_redact_rects, keep_image_rects = (
+                    split_text_only_redact_raw_rects(self.ann_list)
+                )
+                if text_redact_rects or keep_image_rects:
                     temp_doc = fitz.open()
                     try:
                         temp_doc.insert_pdf(self.doc, from_page=self.page_idx, to_page=self.page_idx)
                         temp_page = temp_doc[0]
                         temp_page.set_rotation(0)
                         temp_page.set_cropbox(temp_page.mediabox)
-                        PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, text_redact_rects)
+                        PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, text_redact_rects, keep_image_rects)
                         if temp_page.rotation != page_rot:
                             temp_page.set_rotation(page_rot)
                         if crop_rect != temp_page.mediabox:
@@ -733,7 +735,8 @@ class PageManager(QDockWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         if not skip_text_redact_fill:
-            for r_raw in collect_text_only_redact_raw_rects(ann_list):
+            # 画像を残す消去（OCR文字の不可視置換）は白塗りしない
+            for r_raw in split_text_only_redact_raw_rects(ann_list)[0]:
                 vr = raw_rect_to_view_rect_from_geom(crop_rect, page_rect, page_rot, r_raw)
                 qrect = QRectF(
                     (vr.x0 - page_rect.x0) * sx,
@@ -833,6 +836,9 @@ class PageManager(QDockWidget):
                     painter.drawPath(path)
 
             elif ann["type"] == "text":
+                # 不可視テキスト（OCRレイヤーの置換）は字形を描かない
+                if ann.get("invisible"):
+                    continue
                 text_bbox = estimate_text_bbox_in_pdf(ann)
                 if is_rect_substantially_erased(text_bbox, later_erases):
                     continue

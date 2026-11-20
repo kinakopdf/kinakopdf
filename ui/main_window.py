@@ -85,6 +85,7 @@ from core.text_tools import (
     get_page_view_rects,
     render_page_png_bytes,
     save_image_only_pdf,
+    spans_are_scan_overlay,
 )
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
@@ -124,6 +125,9 @@ class MainWindow(QMainWindow):
         # 文書が差し替わったら破棄する。
         self._text_data_session = {"pages": {}, "all": None, "join": {}}
         self._text_data_session_doc = None
+        # 直近の「PDFに反映」が不可視（OCRレイヤー型）だったか。
+        # 文字データ画面が完了メッセージの出し分けに使う。
+        self._last_text_data_apply_invisible = False
 
         self.viewer = PDFViewer()
         self.setCentralWidget(self.viewer)
@@ -2516,6 +2520,10 @@ class MainWindow(QMainWindow):
           （redact_rect を持つ注釈は、元の消去を引き継ぐため text_redact に変える）。
         - つなげた文は、断片の先頭位置・代表フォントサイズで1件の text 注釈として
           入れる（収まらない場合はフォントを縮める）。
+        - 断片がすべてスキャン画像の上に乗ったOCR文字の場合は、つなげた文を
+          不可視テキスト（レンダリングモード3）として入れ、断片の消去でも
+          背景画像のピクセルを消さない。見た目は元の画像のままで、
+          内部の文字データだけが差し替わる。
         全体を ReplacePageAnnotationsCommand 1件で積むため、1回の Undo で戻せる。
         成功したら True、対象を特定できず安全に置き換えられない場合は False。
         """
@@ -2534,6 +2542,22 @@ class MainWindow(QMainWindow):
             if r.is_empty:
                 return False
             span_rects.append(r)
+
+        # 断片がすべてスキャン画像の上に乗ったOCR文字なら、置換後の文字は
+        # 画像の上に表示せず、文字データだけを差し替える（通常のOCR
+        # レイヤーと同じ不可視テキストにする）。判定はダイアログのスパン
+        # 抽出元と同じ焼き込み済みページで行う。
+        invisible = False
+        try:
+            baked_doc = PDFDocumentManager.extract_pages_as_doc(
+                doc, [page_idx], viewer.page_annotations
+            )
+            try:
+                invisible = spans_are_scan_overlay(baked_doc[0], span_rects)
+            finally:
+                baked_doc.close()
+        except Exception:
+            invisible = False
 
         # 注釈由来の断片を特定する: スパンの文字が注釈のいずれかの行と一致し、
         # スパン中心がその注釈の推定BBox（少し拡大）に入っているもの。
@@ -2565,25 +2589,30 @@ class MainWindow(QMainWindow):
             for idx, ann in enumerate(ann_list)
             if idx not in matched_ann_indices
         ]
-        # 取り除く注釈が元の文字を消していた場合は、その消去を引き継ぐ
+        # 取り除く注釈が元の文字を消していた場合は、その消去を引き継ぐ。
+        # 元の文字が見えないOCR文字だった（または今回の置換が不可視になる）
+        # 場合は、背景画像を傷つけないよう keep_image を引き継ぐ。
         for idx in sorted(matched_ann_indices):
             redact_rect = ann_list[idx].get("redact_rect")
             if redact_rect:
-                new_list.append(
-                    {
-                        "type": "text_redact",
-                        "rect": tuple(float(v) for v in redact_rect),
-                    }
-                )
-        # 元のPDF文字の断片は、断片の矩形ちょうどで個別に消す
+                redact_ann = {
+                    "type": "text_redact",
+                    "rect": tuple(float(v) for v in redact_rect),
+                }
+                if invisible or ann_list[idx].get("invisible"):
+                    redact_ann["keep_image"] = True
+                new_list.append(redact_ann)
+        # 元のPDF文字の断片は、断片の矩形ちょうどで個別に消す。
+        # 不可視の置換では、画像側の字形を消さないよう keep_image を付ける。
         for sp, matched in zip(spans, span_ann_match):
             if matched is None:
-                new_list.append(
-                    {
-                        "type": "text_redact",
-                        "rect": tuple(float(v) for v in sp["raw_rect"]),
-                    }
-                )
+                redact_ann = {
+                    "type": "text_redact",
+                    "rect": tuple(float(v) for v in sp["raw_rect"]),
+                }
+                if invisible:
+                    redact_ann["keep_image"] = True
+                new_list.append(redact_ann)
 
         first = spans[0]
         union = span_rects[0]
@@ -2605,8 +2634,10 @@ class MainWindow(QMainWindow):
                 color=first["color"],
                 rotation=int(first["rotation"]),
                 updated_after=len(new_list),
+                invisible=invisible,
             )
         )
+        self._last_text_data_apply_invisible = invisible
 
         old_snapshot = copy.deepcopy(ann_list)
         if new_list:
