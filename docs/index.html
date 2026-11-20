@@ -18,23 +18,26 @@ body{font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;line-height:
 header,section,footer{max-width:780px;margin:0 auto;padding:28px 22px}
 header{background:linear-gradient(180deg,#fdf6e3,#fffaf0);text-align:center;border-bottom:3px solid var(--line)}
 header img.icon{width:120px;height:120px;border-radius:28px;box-shadow:0 4px 16px rgba(0,0,0,.15)}
-h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em}
-.tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px}
+h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em;text-align:center}
+.tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px;text-align:center;text-indent:0}
 .btn{display:inline-block;background:var(--red);color:#fff;padding:15px 34px;border-radius:999px;text-decoration:none;font-weight:bold;margin:14px 0 6px;box-shadow:0 3px 10px rgba(192,57,43,.35)}
 .btn:hover{opacity:.9}
-h2{font-size:1.25em;border:none;margin:0 0 10px;padding-left:12px;border-left:6px solid var(--red)}
+p{text-align:left;text-indent:1em;margin:12px 0}
+.center{text-align:center;text-indent:0}
+h2{font-size:1.35em;text-align:center;margin:0 0 14px;padding-bottom:8px;border-bottom:3px solid var(--line)}
 .card{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:18px 0}
 .note{background:#f6f6f6;border-left:4px solid var(--red);padding:12px 16px;border-radius:0 12px 12px 0}
-.slot{border:2px dashed #bbb;padding:16px;margin:16px 0;color:#555;border-radius:12px;background:#fff}
 ul{padding-left:1.2em}
 li{margin:8px 0}
 small{color:var(--muted)}
 footer{text-align:center;color:var(--muted);border-top:1px solid var(--line)}
+footer p{text-align:center;text-indent:0}
 a{color:var(--red)}
 .story{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;margin:18px 0}
 .story p{margin:10px 0}
 .pill{display:inline-block;background:#fbeee8;color:var(--red);border-radius:999px;padding:2px 12px;font-size:.85em;font-weight:bold;margin-right:6px}
-.trial{background:#f4f1ea;border:1px dashed #b9a98a;border-radius:12px;padding:12px 16px;margin:16px 0;font-size:.95em}
+.trial{background:#f4f1ea;border:1px dashed #b9a98a;border-radius:12px;padding:12px 16px;margin:16px 0;font-size:.85em;line-height:1.8}
+.trial p{margin:8px 0}
 </style>
 </head>
 <body>
@@ -43,18 +46,14 @@ a{color:var(--red)}
 <h1>きなこPDF</h1>
 <p class="tagline">無料PDF編集ソフト・完全ローカルで安全</p>
 <p>無料のPDFフリーソフトです。安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。無料でPDF編集ができます。</p>
-<a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.4/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
-<p><small>インストール不要。ダウンロードしてダブルクリックするだけで起動します。USBメモリに入れて持ち運ぶこともできます。<br>
-exe 版は GitHub Actions で自動ビルドしています。</small></p>
-<p><a href="chromebook.html">Chromebookの方はこちら →</a></p>
+<p class="center"><a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.4/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a></p>
+<p><small>現在の安定版は v1.0.4（2026-11-20公開）です。インストール不要。ダウンロードしてダブルクリックするだけで起動します。USBメモリに入れて持ち運ぶこともできます。exe 版は GitHub Actions で自動ビルドしています。</small></p>
+<p class="center"><a href="chromebook.html">Chromebookの方はこちら →</a></p>
 <div class="trial">
-<p><strong>ベータ版</strong> — 安定版の次の機能を先に試せる実験版です。ベータ版は2つあります。安定版とは別のファイルです。</p>
-<p>・<strong>第1弾</strong> — フォルダ一括読み込みで読み込んだ複数ファイルのページ並べ替え・削除と、選択したページだけを抽出して保存する機能に加えて、見開きリーダーの強化（続きから開くレジュームと履歴、右開き／左開き、全画面など）と、「📝 文字データ」機能が入っています。文字データが元のページと同じ配置で見え、バラバラになった文を選んで「くっつける」と、PDFの文字データ自体を置き換えて保存できます（AIが読む中身そのものを直せます）。スキャンや写真のPDF（OCR）では、画像はそのままに内部の文字データだけを差し替えるので、表面に文字は出ません。見た目を残して文字データだけを消した「画像だけのPDFとして保存」もできます。複数ファイルから作ったドキュメントは、元のファイルを守るため上書き保存はできず、別名保存のみの安全仕様です。<br>
-<a href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.10-beta/KinakoPDF.exe">ベータ版（第1弾）をダウンロード（KinakoPDF.exe）</a></p>
-<p>・<strong>第2弾</strong> — 第1弾の内容すべてに、「ボタン整理」を加えたお試し版です。たまに使う機能（Excel出力・フォルダ読込・新規など）を「🧰 その他」ボタンの中に、消すための道具（マーカー消去・範囲墨消し・消しゴム・テキスト消去）を「🧽 消去」ボタンの中にまとめました。機能は今まで通り全部使えます。<br>
-<a href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.11-beta/KinakoPDF.exe">ベータ版（第2弾）をダウンロード（KinakoPDF.exe）</a></p>
-<p><strong>多機能版</strong> — 安定版にない機能を試せる実験版です。機能の一覧と開発中の注意書きは、別ページにまとめました。<br>
-<a href="trial-multi.html">多機能版はこちら →</a></p>
+<p><strong>ベータ版（お試し）</strong> — 安定版の次の機能を先に試せる実験版です。安定版とは別のファイルです。</p>
+<p>・<strong>第1弾</strong> — 見開きリーダーの強化と「📝 文字データ」機能などが入っています。<a href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.10-beta/KinakoPDF.exe">ベータ版（第1弾）をダウンロード</a></p>
+<p>・<strong>第2弾</strong> — 第1弾に「ボタン整理」を加えたお試し版です。<a href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.11-beta/KinakoPDF.exe">ベータ版（第2弾）をダウンロード</a></p>
+<p><strong>多機能版</strong> — 安定版にない機能を試せる実験版です。<a href="trial-multi.html">多機能版はこちら →</a></p>
 </div>
 </header>
 
@@ -112,18 +111,16 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <li>PDFを開いて、墨消しや編集をする</li>
 </ol>
 <p><small>ソースコード版を使う場合：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）が必要です。<code>python secure_local_pdf_editor.pyw</code> で起動します。新しいライブラリは追加していません。</small></p>
-<p><small>※ Windowsでの起動は、2026-11-16に確認しました。</small></p>
+<p><small>※ 安定版 v1.0.4 を公開中です（2026-11-20）。</small></p>
 </div>
 </section>
 
 <section>
-<h2>会計事務所向け（近日公開）</h2>
-<p>今はPDFソフトのみ公開中です。会計事務所向けのページに育てていきます。</p>
-<p><strong>確定申告シミュレーター（試作中）</strong> — 特定口座（源泉徴収あり）の確定申告で、申告したほうが得かどうかを世帯全体で試算できます（名古屋市・尾張旭市対応）。<br>
+<h2>会計事務所向け</h2>
+<p>会計のお仕事に役立つ道具も、少しずつ公開しています。</p>
+<p><strong>確定申告シミュレーター（試作中）</strong> — 特定口座（源泉徴収あり）の確定申告で、申告したほうが得かどうかを世帯全体で試算できます（名古屋市・尾張旭市・東京23区・横浜市・大阪市・京都市・神戸市・福岡市対応）。<br>
 <a href="shinkoku-simulator.html">確定申告シミュレーター（試作中）を開く →</a><br>
-<small>まだ作成中です。計算結果について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。</small></p>
-<div class="slot">会計ソフトのおすすめ — アフィリエイト枠（ASP・商品未定。登録済みのASPがあれば差し替え）</div>
-<div class="slot">伝票印刷のおすすめ — アフィリエイト枠（ASP・商品未定）</div>
+<small>試作中です。計算結果について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。</small></p>
 </section>
 
 <section>
