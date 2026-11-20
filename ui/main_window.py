@@ -89,6 +89,7 @@ from core.text_tools import (
 )
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
+from ui.toolbar_layout_dialog import DEFAULT_TITLES, ToolbarLayoutDialog
 from ui.pdf_viewer import PDFViewer
 from ui.region_ocr_ext import DirectViewerRegionOCRController
 from ui.reader_store import ReaderStore
@@ -244,10 +245,32 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         QTimer.singleShot(0, self._ensure_within_screen)
 
+    # ツールバーの配置カスタマイズ（「🛠 バーを編集」）で使う配置先キー
+    _LAYOUT_LOCATIONS = ("bar", "more", "save", "erase", "hidden")
+
+    def _register_movable(self, key, action, label, default, toolbar, anchor):
+        """配置変更できる項目をレジストリに登録する。
+
+        toolbar/anchor は「バーに表示」のときの戻り先（固定要素のアンカーの
+        直前に挿入する）。実際の配置は _apply_toolbar_layout() が行うので、
+        ここではツールバーやメニューへは追加しない。
+        """
+        self._movable_items[key] = {
+            "action": action,
+            "label": label,
+            "default": default,
+            "toolbar": toolbar,
+            "anchor": anchor,
+        }
+
     def init_toolbar(self):
         top_toolbar = QToolBar("ファイル・表示ツールバー")
         top_toolbar.setMovable(False)
         self.addToolBar(top_toolbar)
+        self.top_toolbar = top_toolbar
+        # 配置カスタマイズ対象の項目レジストリと、バーに戻すときのアンカー
+        self._movable_items = {}
+        self._layout_anchors = {}
 
         act_open = self.add_action(top_toolbar, "📁 開く", self.open_file)
         act_open.setShortcut(QKeySequence.StandardKey.Open)
@@ -261,55 +284,101 @@ class MainWindow(QMainWindow):
         top_toolbar.addWidget(self.btn_recent_files)
         self._update_recent_files_menu()
 
-        act_save = self.add_action(top_toolbar, "💾 保存", self.save_file)
-        act_save.setShortcut(QKeySequence.StandardKey.Save)
+        # 「💾 保存」はドロップダウン付きボタンにする:
+        # 本体クリック = 保存、右側の矢印クリック = メニュー（既定では別名保存）
+        self.act_save = QAction("💾 保存", self)
+        self.act_save.setShortcut(QKeySequence.StandardKey.Save)
+        self.act_save.triggered.connect(self.save_file)
+        self.addAction(self.act_save)  # Ctrl+S をウィンドウ全体で効かせる
 
-        act_save_as = self.add_action(top_toolbar, "💾 別名保存", self.save_as)
+        self.btn_save = QToolButton(self)
+        self.btn_save.setText(DEFAULT_TITLES["save"])
+        self.btn_save.setToolTip("保存します (Ctrl+S)。右側の▼から「別名保存」も選べます")
+        self.btn_save.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.menu_save = QMenu(self)
+        self.btn_save.setMenu(self.menu_save)
+        self.btn_save.clicked.connect(self.save_file)
+        top_toolbar.addWidget(self.btn_save)
+
+        act_save_as = QAction("💾 別名保存", self)
+        act_save_as.triggered.connect(self.save_as)
         act_save_as.setShortcut(QKeySequence.StandardKey.SaveAs)
+        self.act_save_as = act_save_as
+        self._register_movable(
+            "save_as", act_save_as, "💾 別名保存", "save", top_toolbar, "more_btn"
+        )
 
-        act_print = self.add_action(top_toolbar, "🖨 印刷", self.print_file)
+        act_print = QAction("🖨 印刷", self)
+        act_print.triggered.connect(self.print_file)
         act_print.setShortcut(QKeySequence.StandardKey.Print)
         act_print.setToolTip("現在編集中のPDFを印刷します (Ctrl+P)")
+        self.act_print = act_print
+        self._register_movable(
+            "print", act_print, "🖨 印刷", "bar", top_toolbar, "more_btn"
+        )
 
         # たまに使う機能は「🧰 その他」メニューにまとめてツールバーをすっきりさせる
         self.btn_more_features = QToolButton(self)
-        self.btn_more_features.setText("🧰 その他")
+        self.btn_more_features.setText(DEFAULT_TITLES["more"])
         self.btn_more_features.setToolTip("たまに使う機能はこちらにまとめました（Excel出力・フォルダ読込・新規ウィンドウなど）")
         self.btn_more_features.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.menu_more_features = QMenu(self)
         self.btn_more_features.setMenu(self.menu_more_features)
-        top_toolbar.addWidget(self.btn_more_features)
+        self._layout_anchors["more_btn"] = top_toolbar.addWidget(self.btn_more_features)
 
         act_excel = QAction("📊 Excel出力", self)
         act_excel.triggered.connect(self.export_to_excel)
         act_excel.setToolTip("PDF内の表や文字データを追加ライブラリなしでExcel(.xlsx)に変換して保存します")
-        self.menu_more_features.addAction(act_excel)
         self.act_excel = act_excel
+        self._register_movable(
+            "excel", act_excel, "📊 Excel出力", "more", top_toolbar, "more_btn"
+        )
 
         act_new_window = QAction("🗔 新規", self)
         act_new_window.triggered.connect(self.spawn_new_window)
         act_new_window.setToolTip("新しいウィンドウを開きます")
-        self.menu_more_features.addAction(act_new_window)
-
-        act_read = self.add_action(top_toolbar, "📖 見開き", self.open_fullscreen_reader)
-        act_read.setShortcut(QKeySequence("F5"))
-        act_read.setToolTip("現在のPDFを全画面見開きモードで閲覧します (F5)")
+        self.act_new_window = act_new_window
+        self._register_movable(
+            "new_window", act_new_window, "🗔 新規", "more", top_toolbar, "more_btn"
+        )
 
         act_folder = QAction("📚 フォルダ読込", self)
         act_folder.triggered.connect(self.open_pdf_folder)
         act_folder.setToolTip("フォルダ内の複数PDFをまとめて1つの本として読み込みます")
-        self.menu_more_features.addAction(act_folder)
         self.act_folder = act_folder
+        self._register_movable(
+            "folder", act_folder, "📚 フォルダ読込", "more", top_toolbar, "more_btn"
+        )
 
-        act_ocr = self.add_action(top_toolbar, "🧼 色抜き・OCR", self.open_scan_clean_ocr_dialog)
+        act_read = QAction("📖 見開き", self)
+        act_read.triggered.connect(self.open_fullscreen_reader)
+        act_read.setShortcut(QKeySequence("F5"))
+        act_read.setToolTip("現在のPDFを全画面見開きモードで閲覧します (F5)")
+        self.act_read = act_read
+        self._register_movable(
+            "read", act_read, "📖 見開き", "bar", top_toolbar, "text_sep"
+        )
+
+        # OCR系は「🧰 その他」メニューにまとめる（ショートカットは維持される）
+        act_ocr = QAction("🧼 色抜き・OCR", self)
+        act_ocr.triggered.connect(self.open_scan_clean_ocr_dialog)
         act_ocr.setShortcut(QKeySequence("Ctrl+Shift+O"))
         act_ocr.setToolTip("スキャンした明細から黄・赤・青の背景や点々を消し、Windows標準OCRで文字認識します (Ctrl+Shift+O)")
+        self.act_ocr = act_ocr
+        self._register_movable(
+            "ocr", act_ocr, "🧼 色抜き・OCR", "more", top_toolbar, "text_sep"
+        )
 
-        self.act_text_data = self.add_action(top_toolbar, "📝 文字データ", self.open_text_data_dialog)
+        self.act_text_data = QAction("📝 文字データ", self)
+        self.act_text_data.triggered.connect(self.open_text_data_dialog)
         self.act_text_data.setToolTip("PDFに埋め込まれている文字データをそのまま表示します（AIや検索が読む中身の確認・手直し・コピー用）")
         self.act_text_data.setEnabled(False)
+        self._register_movable(
+            "text_data", self.act_text_data, "📝 文字データ", "bar",
+            top_toolbar, "text_sep",
+        )
 
-        top_toolbar.addSeparator()
+        self._layout_anchors["text_sep"] = top_toolbar.addSeparator()
 
         self.add_action(top_toolbar, "◀ 前へ", self.viewer.go_prev_page)
         self.lbl_page_info = QLabel(" 0 / 0 ")
@@ -347,11 +416,16 @@ class MainWindow(QMainWindow):
         self.add_action(top_toolbar, "🔎 縮小", self.viewer.zoom_out)
         self.add_action(top_toolbar, "全体表示", self.viewer.fit_page)
 
-        self.act_scroll_mode = self.add_action(top_toolbar, "📜 スクロール表示", self.toggle_scroll_mode)
+        self.act_scroll_mode = QAction("📜 スクロール表示", self)
+        self.act_scroll_mode.triggered.connect(self.toggle_scroll_mode)
         self.act_scroll_mode.setCheckable(True)
         self.act_scroll_mode.setToolTip("通常画面でページを上下スクロールして表示します（ダブルクリックで1ページ表示に戻ります）")
+        self._register_movable(
+            "scroll", self.act_scroll_mode, "📜 スクロール表示", "bar",
+            top_toolbar, "scroll_sep",
+        )
 
-        top_toolbar.addSeparator()
+        self._layout_anchors["scroll_sep"] = top_toolbar.addSeparator()
 
         lbl_search = QLabel(" 🔎 検索:")
         lbl_search.setStyleSheet("font-weight: bold; padding-left: 4px;")
@@ -403,14 +477,31 @@ class MainWindow(QMainWindow):
             act_default_app = QAction("⚙ 既定アプリに設定", self)
             act_default_app.triggered.connect(self.setup_as_default_pdf_app)
             act_default_app.setToolTip("Windowsの既定のPDFアプリに登録します")
-            self.menu_more_features.addAction(act_default_app)
             self.act_default_app = act_default_app
+            self._register_movable(
+                "default_app", act_default_app, "⚙ 既定アプリに設定", "more",
+                top_toolbar, "more_btn",
+            )
+
+        # 「🧰 その他」メニューの末尾には、配置を自分で変えるための
+        # 「🛠 バーを編集...」を固定で置く（移動・非表示の対象にしない）。
+        # 可動項目はこのセパレータの直前へ挿入されるので、常に末尾に残る。
+        self._sep_before_edit_layout = self.menu_more_features.addSeparator()
+        self.act_edit_toolbar_layout = QAction("🛠 バーを編集...", self)
+        self.act_edit_toolbar_layout.setToolTip(
+            "ボタンの題名や置き場所を自分好みに変えられます"
+        )
+        self.act_edit_toolbar_layout.triggered.connect(
+            self.open_toolbar_layout_dialog
+        )
+        self.menu_more_features.addAction(self.act_edit_toolbar_layout)
 
         self.addToolBarBreak()
 
         edit_toolbar = QToolBar("編集・スタイルツールバー")
         edit_toolbar.setMovable(False)
         self.addToolBar(edit_toolbar)
+        self.edit_toolbar = edit_toolbar
 
         self.mode_group = QActionGroup(self)
         self.mode_group.setExclusive(True)
@@ -430,11 +521,23 @@ class MainWindow(QMainWindow):
             ("🎯 範囲OCR", "region_ocr"),
         ]
 
-        # 消去系のモードは「🧽 消去」メニューにまとめて、編集ツールバーをすっきりさせる
+        # 消去系のモードは「🧽 消去」メニューにまとめて、編集ツールバーをすっきりさせる。
+        # 「🧽 消去」ボタン自体は固定で、消去系モードがあった位置に置く。
+        # モードの実際の配置は _apply_toolbar_layout() がレジストリに従って行う。
         erase_modes = {"highlight_erase", "box_erase", "erase", "text_erase"}
-        self.btn_erase_modes = None
-        self.menu_erase_modes = None
+        self.btn_erase_modes = QToolButton(self)
+        self.btn_erase_modes.setText(DEFAULT_TITLES["erase"])
+        self.btn_erase_modes.setToolTip("消すための道具はこちらにまとめました（マーカー消去・範囲墨消し・消しゴム・テキスト消去）")
+        self.btn_erase_modes.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.menu_erase_modes = QMenu(self)
+        self.btn_erase_modes.setMenu(self.menu_erase_modes)
+        self._layout_anchors["erase_btn"] = edit_toolbar.addWidget(self.btn_erase_modes)
+        self._layout_anchors["modes_sep"] = edit_toolbar.addSeparator()
 
+        self.mode_actions = {}
+        # 「🧽 消去」ボタンより前に並ぶモードは erase_btn を、
+        # それ以降のモードは modes_sep を、バーに戻るときのアンカーにする
+        pre_erase_modes = {"view", "text_select", "crop", "fold", "draw", "highlight"}
         for name, mode in modes:
             action = QAction(name, self)
             action.setCheckable(True)
@@ -460,20 +563,18 @@ class MainWindow(QMainWindow):
                 )
             action.triggered.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_group.addAction(action)
+            self.mode_actions[mode] = action
             if mode in erase_modes:
-                if self.btn_erase_modes is None:
-                    self.btn_erase_modes = QToolButton(self)
-                    self.btn_erase_modes.setText("🧽 消去")
-                    self.btn_erase_modes.setToolTip("消すための道具はこちらにまとめました（マーカー消去・範囲墨消し・消しゴム・テキスト消去）")
-                    self.btn_erase_modes.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-                    self.menu_erase_modes = QMenu(self)
-                    self.btn_erase_modes.setMenu(self.menu_erase_modes)
-                    edit_toolbar.addWidget(self.btn_erase_modes)
-                self.menu_erase_modes.addAction(action)
+                default_loc = "erase"
+            elif mode == "region_ocr":
+                # 範囲OCRは OCR系として「🧰 その他」メニューにまとめる
+                default_loc = "more"
             else:
-                edit_toolbar.addAction(action)
-
-        edit_toolbar.addSeparator()
+                default_loc = "bar"
+            anchor = "erase_btn" if mode in pre_erase_modes else "modes_sep"
+            self._register_movable(
+                f"mode:{mode}", action, name, default_loc, edit_toolbar, anchor
+            )
 
         lbl_color = QLabel(" 🎨 色:")
         lbl_color.setStyleSheet("padding-left: 4px; font-weight: bold;")
@@ -539,6 +640,105 @@ class MainWindow(QMainWindow):
         self.btn_clear_sum.clicked.connect(self.viewer.clear_calc_selection)
         self.btn_clear_sum.setEnabled(False)
         edit_toolbar.addWidget(self.btn_clear_sum)
+
+        # 保存済みの配置（なければ既定配置）を反映する
+        self._apply_toolbar_layout()
+
+    # ---------------------------------------------------------------
+    # ツールバー配置のカスタマイズ（「🛠 バーを編集...」）
+    # ---------------------------------------------------------------
+    def _load_toolbar_layout(self):
+        """QSettings からボタンの題名と項目の配置を読み込む。
+
+        戻り値: (titles, places)
+          titles: {"more": str, "erase": str, "save": str}（"" は既定名）
+          places: {item_key: 配置先キー}（未保存の項目は既定配置）
+        """
+        settings = self._get_settings()
+        settings.beginGroup("toolbar_layout")
+        titles = {}
+        for key in DEFAULT_TITLES:
+            value = settings.value(f"title_{key}", "")
+            titles[key] = value if isinstance(value, str) else ""
+        places = {}
+        for key, item in self._movable_items.items():
+            loc = settings.value(f"place_{key}", item["default"])
+            if loc not in self._LAYOUT_LOCATIONS:
+                loc = item["default"]
+            places[key] = loc
+        settings.endGroup()
+        return titles, places
+
+    def _save_toolbar_layout(self, titles, places):
+        settings = self._get_settings()
+        settings.beginGroup("toolbar_layout")
+        for key, value in titles.items():
+            settings.setValue(f"title_{key}", value)
+        for key, value in places.items():
+            settings.setValue(f"place_{key}", value)
+        settings.endGroup()
+        settings.sync()
+
+    def _clear_toolbar_layout(self):
+        """保存済みの配置を消して既定配置に戻す。"""
+        settings = self._get_settings()
+        settings.beginGroup("toolbar_layout")
+        settings.remove("")
+        settings.endGroup()
+        settings.sync()
+
+    def _apply_toolbar_layout(self):
+        """題名と項目の配置をツールバー／メニューへ反映する（再起動不要）。"""
+        titles, places = self._load_toolbar_layout()
+
+        self.btn_more_features.setText(titles["more"] or DEFAULT_TITLES["more"])
+        self.btn_erase_modes.setText(titles["erase"] or DEFAULT_TITLES["erase"])
+        self.btn_save.setText(titles["save"] or DEFAULT_TITLES["save"])
+
+        containers = [
+            self.top_toolbar,
+            self.edit_toolbar,
+            self.menu_more_features,
+            self.menu_save,
+            self.menu_erase_modes,
+        ]
+        # まず全ての可動項目を現在の置き場所から外す
+        for item in self._movable_items.values():
+            action = item["action"]
+            for container in containers:
+                if action in container.actions():
+                    container.removeAction(action)
+        # レジストリの順番どおりに配置し直す（メニュー内の並びも安定する）
+        for key, item in self._movable_items.items():
+            action = item["action"]
+            loc = places.get(key, item["default"])
+            if loc == "bar":
+                anchor = self._layout_anchors[item["anchor"]]
+                item["toolbar"].insertAction(anchor, action)
+            elif loc == "more":
+                # 「🛠 バーを編集...」とその手前のセパレータは常に末尾に残す
+                self.menu_more_features.insertAction(
+                    self._sep_before_edit_layout, action
+                )
+            elif loc == "save":
+                self.menu_save.addAction(action)
+            elif loc == "erase":
+                self.menu_erase_modes.addAction(action)
+            # "hidden" のときはどこにも置かない
+
+    def open_toolbar_layout_dialog(self):
+        titles, places = self._load_toolbar_layout()
+        items = [
+            (key, item["label"], item["default"])
+            for key, item in self._movable_items.items()
+        ]
+        dialog = ToolbarLayoutDialog(self, items, titles, places)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._save_toolbar_layout(
+                dialog.result_titles(), dialog.result_places()
+            )
+            self._apply_toolbar_layout()
+            self.statusBar().showMessage("ツールバーの配置を変更しました")
 
     def _focus_search_box(self):
         self.edit_search.setFocus()
