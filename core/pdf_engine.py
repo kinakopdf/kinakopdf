@@ -117,8 +117,13 @@ class PDFDocumentManager:
         if not view_rects:
             return
 
-        # OCR透明テキスト(0x010101〜0x030303)またはスキャン画像上の透明テキスト領域は
-        # ベクター罫線を維持したまま背景のスキャン文字ピクセルも白塗り消去して重なりを防ぐ
+        # OCRマーカー色のテキスト、またはスキャン画像の上に乗ったテキスト領域は
+        # ベクター罫線を維持したまま背景のスキャン文字ピクセルも白塗り消去して重なりを防ぐ。
+        # 画像上のテキストは、文字レイヤー側を消しても画像側に同じ字形が焼き付いて
+        # 残るため、置換後の文字と二重に表示されてしまう。字形が画像に残るかどうかは
+        # 文字色とは無関係なので、色で対象を絞らず、画像と重なるスパンは一律に対象とする
+        # （以前はマーカー色と黒系のレイヤーだけが対象で、それ以外の色のレイヤーでは
+        # 画像の字形だけが消え残っていた）。
         try:
             from core.ocr_cleaner import OCR_TEXT_MARKER_SRGB_INTS
             ocr_pixel_erase_rects = []
@@ -140,7 +145,6 @@ class PDFDocumentManager:
                         is_ocr_marker = sp_color in OCR_TEXT_MARKER_SRGB_INTS
                         is_scan_overlay_text = (
                             has_page_images
-                            and sp_color in (0, 0x010101, 0x020202, 0x030303)
                             and any(ir.intersects(sp_rect) for ir in image_rects)
                         )
                         if is_ocr_marker or is_scan_overlay_text:

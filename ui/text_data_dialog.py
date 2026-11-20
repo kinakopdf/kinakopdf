@@ -47,8 +47,10 @@ HINT_TEXT = (
 )
 LAYOUT_HINT_TEXT = (
 "クリックで文字のかたまり（スパン）を選んだり外したりできます。"
+"ドラッグで範囲選択（Shiftを押しながら離すと今の選択に追加）、"
+"Space+ドラッグで表示位置を動かせます。"
 "バラバラになった文のかたまりを全部選んで「くっつける」を押してください。"
-"拡大・縮小ボタンや Ctrl+ホイールで大きくでき、ドラッグで表示位置を動かせます。"
+"拡大・縮小ボタンや Ctrl+ホイールで大きくでき、ホイールで表示位置をスクロールできます。"
 "「見開きで見比べ」では元の画像と文字データを並べて同じ倍率・位置で見比べられます。"
 )
 APPLY_NOTE_TEXT = (
@@ -101,8 +103,10 @@ class LayoutCanvas(QWidget):
 
     ページ画像の代わりに、抽出された文字データだけを同じ位置・大きさで描く。
     クリックでスパンの選択/解除ができ、選択中はハイライトする。
-    全体表示を基準に 0.5〜4 倍までズームでき、はみ出した部分はドラッグで
-    表示位置を動かして見られる（パン）。文字はベクタ描画なので、
+    各スパンには薄い枠を描くので、文字データがどこで区切れているか一目で分かる。
+    左ドラッグは矩形の範囲選択（ラバーバンド）で、表示位置の移動（パン）は
+    Space+左ドラッグ・中ボタンドラッグ・ホイールで行う。
+    全体表示を基準に 0.5〜4 倍までズームでき、文字はベクタ描画なので、
     拡大してもぼやけない。
     """
 
@@ -112,6 +116,9 @@ class LayoutCanvas(QWidget):
     MIN_ZOOM = 0.5
     MAX_ZOOM = 4.0
 
+    # ドラッグとみなす移動量（px）。これ以下ならクリックとして扱う
+    DRAG_THRESHOLD = 5.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._page_rect = (0.0, 0.0, 1.0, 1.0)
@@ -119,15 +126,24 @@ class LayoutCanvas(QWidget):
         self._selected = set()
         self._underlay = None
         self._show_underlay = False
+        # スパンごとの区切り枠を描くかどうか（既定は表示）
+        self._show_span_outlines = True
         # 下敷き画像だけをずらす微調整量（ページ座標 pt、スパンには影響しない）
         self._underlay_offset = QPointF(0.0, 0.0)
         self._zoom = 1.0
         self._pan = QPointF(0.0, 0.0)
         self._press_pos = None
         self._press_span = None
-        self._panning = False
+        self._press_button = None
+        # ドラッグ中の動作: None（未確定）/ "pan"（表示位置の移動）/ "band"（範囲選択）
+        self._drag_mode = None
+        self._band_current = None
+        self._space_down = False
         self._last_pos = None
+        # 左ドラッグで範囲選択を行うかどうか（画像ペインでは従来どおりパンにする）
+        self._band_select_enabled = True
         self.setMinimumSize(440, 300)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_page(self, page_rect, spans):
         if page_rect and len(page_rect) == 4:
@@ -136,6 +152,12 @@ class LayoutCanvas(QWidget):
         self._selected = set()
         # ページが替わったら表示位置だけ戻す（ズーム倍率は維持する）
         self._pan = QPointF(0.0, 0.0)
+        self._press_pos = None
+        self._press_span = None
+        self._press_button = None
+        self._drag_mode = None
+        self._band_current = None
+        self._last_pos = None
         self.update()
 
     def set_underlay(self, pixmap):
@@ -153,6 +175,33 @@ class LayoutCanvas(QWidget):
 
     def underlay_offset(self):
         return QPointF(self._underlay_offset)
+
+    def set_show_span_outlines(self, show):
+        """スパンごとの区切り枠を描くかどうかを設定する。"""
+        self._show_span_outlines = bool(show)
+        self.update()
+
+    def show_span_outlines(self):
+        return self._show_span_outlines
+
+    def spans_in_rect(self, rect):
+        """画面座標の矩形 rect と重なるスパンの番号一覧を返す（範囲選択用）。"""
+        if rect is None or not self._spans:
+            return []
+        area, scale = self._page_area()
+        band = QRectF(rect).normalized()
+        return [
+            idx
+            for idx, span in enumerate(self._spans)
+            if self._span_widget_rect(span, area, scale).intersects(band)
+        ]
+
+    def band_rect(self):
+        """範囲選択中のラバーバンド矩形（画面座標）。選択中でなければ None。"""
+        if self._drag_mode != "band" or self._press_pos is None:
+            return None
+        current = self._band_current if self._band_current is not None else self._press_pos
+        return QRectF(self._press_pos, current).normalized()
 
     def selected_indices(self):
         return sorted(self._selected)
@@ -342,6 +391,10 @@ class LayoutCanvas(QWidget):
                 painter.fillRect(wrect, QColor(0, 102, 204, 55))
                 painter.setPen(QPen(QColor(0, 102, 204), 1))
                 painter.drawRect(wrect)
+            elif self._show_span_outlines:
+                # 文字データの区切りが分かるよう、各スパンに薄い枠を描く
+                painter.setPen(QPen(QColor(70, 130, 200, 150), 1))
+                painter.drawRect(wrect)
 
             font = QFont()
             font.setPixelSize(max(6, int(round(float(span["fontsize"]) * scale))))
@@ -355,6 +408,14 @@ class LayoutCanvas(QWidget):
                 ),
                 str(span["text"]),
             )
+
+        band = self.band_rect()
+        if band is not None:
+            painter.fillRect(band, QColor(0, 102, 204, 40))
+            painter.setPen(
+                QPen(QColor(0, 102, 204), 1, Qt.PenStyle.DashLine)
+            )
+            painter.drawRect(band)
         painter.end()
 
     def _hit_span(self, pos):
@@ -367,45 +428,109 @@ class LayoutCanvas(QWidget):
                 return idx
         return None
 
-    def mousePressEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
+    # --- ドラッグ操作（範囲選択とパン）と Space キーの追跡 ---
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            # Space を押している間の左ドラッグは、範囲選択ではなくパンにする
+            self._space_down = True
+            if self._band_select_enabled and self._drag_mode != "pan":
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
             return
-        # 選択の確定はリリース時。ドラッグしたらパンに切り替える
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_down = False
+            if self._drag_mode != "pan":
+                self.unsetCursor()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event):
+        # フォーカスを失ったら Space の押し下げ状態を取りこぼさないよう戻す
+        self._space_down = False
+        super().focusOutEvent(event)
+
+    def _wants_pan(self):
+        """今回のドラッグを表示位置の移動（パン）として扱うかどうか。"""
+        if not self._band_select_enabled:
+            return True
+        if self._press_button == Qt.MouseButton.MiddleButton:
+            return True
+        return self._space_down
+
+    def mousePressEvent(self, event):
+        if event.button() not in (
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.MiddleButton,
+        ):
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            # キャンバスにフォーカスを移し、Space+ドラッグのパンを効かせる
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+        # 選択・パンの確定はリリース時。ここでは押し始めの状態だけ記録する
         self._press_pos = event.position()
         self._last_pos = event.position()
         self._press_span = self._hit_span(event.position())
-        self._panning = False
+        self._press_button = event.button()
+        self._drag_mode = None
+        self._band_current = None
 
     def mouseMoveEvent(self, event):
-        if self._press_pos is None:
+        if self._press_pos is None or self._press_button is None:
             return
-        if not (event.buttons() & Qt.MouseButton.LeftButton):
+        if not (event.buttons() & self._press_button):
             return
         pos = event.position()
-        if not self._panning:
-            if (pos - self._press_pos).manhattanLength() <= 5.0:
+        if self._drag_mode is None:
+            if (pos - self._press_pos).manhattanLength() <= self.DRAG_THRESHOLD:
                 self._last_pos = pos
                 return
-            self._panning = True
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        self._pan += pos - self._last_pos
-        self._last_pos = pos
-        self._clamp_pan()
-        self.update()
-        # 見比べモードで相手ペインを追随させるため、パンでも通知する
-        self.viewChanged.emit()
+            # しきい値を超えたらドラッグ開始。Space/中ボタン/画像ペインではパン、
+            # それ以外（文字ペインの左ドラッグ）は範囲選択にする
+            self._drag_mode = "pan" if self._wants_pan() else "band"
+            if self._drag_mode == "pan":
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            else:
+                self._band_current = pos
+        if self._drag_mode == "pan":
+            self._pan += pos - self._last_pos
+            self._last_pos = pos
+            self._clamp_pan()
+            self.update()
+            # 見比べモードで相手ペインを追随させるため、パンでも通知する
+            self.viewChanged.emit()
+        else:
+            self._band_current = pos
+            self._last_pos = pos
+            self.update()
 
     def mouseReleaseEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
+        if self._press_button is None or event.button() != self._press_button:
             return
-        was_panning = self._panning
+        mode = self._drag_mode
         press_span = self._press_span
+        band = self.band_rect()
         self._press_pos = None
         self._press_span = None
+        self._press_button = None
         self._last_pos = None
-        self._panning = False
+        self._drag_mode = None
+        self._band_current = None
         self.unsetCursor()
-        if was_panning or press_span is None:
+        if mode == "band":
+            if band is None:
+                return
+            indices = self.spans_in_rect(band)
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Shift を押しながら離した場合は、今の選択へ追加する
+                indices = sorted(set(self._selected) | set(indices))
+            self.set_selected(indices)
+            return
+        if mode == "pan" or press_span is None:
             return
         # 押し始めと離した場所が同じスパンの上ならクリックとみなす
         if self._hit_span(event.position()) != press_span:
@@ -453,6 +578,8 @@ class PageImageCanvas(LayoutCanvas):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._image = None
+        # 画像ペインでは範囲選択をせず、左ドラッグは従来どおりパンにする
+        self._band_select_enabled = False
 
     def set_image(self, pixmap):
         self._image = pixmap
@@ -626,6 +753,16 @@ class TextDataDialog(QDialog):
         )
         self.cmb_view_mode.currentIndexChanged.connect(self._on_view_mode_changed)
         zoom_row.addWidget(self.cmb_view_mode)
+        self.chk_span_outlines = QCheckBox("文字の区切りを表示")
+        self.chk_span_outlines.setChecked(True)
+        self.chk_span_outlines.setToolTip(
+            "文字データのかたまり（スパン）ごとに薄い枠を表示します。"
+            "文字がどこで途切れているか一目で分かります"
+        )
+        self.chk_span_outlines.toggled.connect(
+            self.layout_canvas.set_show_span_outlines
+        )
+        zoom_row.addWidget(self.chk_span_outlines)
         v.addLayout(zoom_row)
 
         # 重ね表示のときだけ使う、下敷き画像の微調整行

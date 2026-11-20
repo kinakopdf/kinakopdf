@@ -564,6 +564,152 @@ class TestApplyTextReplacement(_WindowTestBase):
         self.assertIsNone(win._text_data_session["all"])
 
 
+def _scan_pdf_bytes(text_color):
+    """スキャン風PDFのバイト列を作る: 文字を画像化して全面に貼り、
+    その上に同じ位置・大きさの文字レイヤーを text_color で重ねたもの。"""
+    src = fitz.open()
+    sp = src.new_page(width=400, height=400)
+    sp.insert_text((20, 40), "これは", fontsize=12, fontname="japan")
+    sp.insert_text((20, 70), "テストです", fontsize=12, fontname="japan")
+    sp.insert_text((20, 200), "関係ない文字", fontsize=12, fontname="japan")
+    img = sp.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False).tobytes("png")
+    src.close()
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_image(page.rect, stream=img)
+    page.insert_text(
+        (20, 40), "これは", fontsize=12, fontname="japan", color=text_color
+    )
+    page.insert_text(
+        (20, 70), "テストです", fontsize=12, fontname="japan", color=text_color
+    )
+    page.insert_text(
+        (20, 200), "関係ない文字", fontsize=12, fontname="japan", color=text_color
+    )
+    try:
+        return doc.tobytes()
+    finally:
+        doc.close()
+
+
+def _dark_pixel_count(pix, rect, zoom):
+    """fitz.Pixmap の rect(pt) 内にある暗いピクセルの数を返す。"""
+    x0 = max(0, int(rect[0] * zoom))
+    y0 = max(0, int(rect[1] * zoom))
+    x1 = min(pix.width, int(rect[2] * zoom))
+    y1 = min(pix.height, int(rect[3] * zoom))
+    cnt = 0
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            i = (y * pix.width + x) * pix.n
+            if (
+                pix.samples[i] < 100
+                and pix.samples[i + 1] < 100
+                and pix.samples[i + 2] < 100
+            ):
+                cnt += 1
+    return cnt
+
+
+def _span_bbox(page, text):
+    for blk in page.get_text("dict").get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            for sp in ln.get("spans", []):
+                if sp.get("text") == text:
+                    return fitz.Rect(sp["bbox"])
+    return None
+
+
+class TestTextOnlyRedactionOverImage(unittest.TestCase):
+    """画像上の文字レイヤーをテキスト墨消ししたとき、画像側の字形も消えること。
+
+    以前はレイヤーの文字色がアプリ自身のOCRマーカー色か黒系のときだけ
+    画像ピクセルが消去され、それ以外の色（例: 濃灰）では画像の字形だけが
+    残って、置換した文字と二重に表示されていた。
+    """
+
+    def test_nonblack_layer_over_image_erases_pixels(self):
+        from core.pdf_engine import PDFDocumentManager
+
+        doc = fitz.open(stream=_scan_pdf_bytes((0.2, 0.2, 0.2)), filetype="pdf")
+        self.addCleanup(doc.close)
+        page = doc[0]
+        bbox = _span_bbox(page, "テストです")
+        self.assertIsNotNone(bbox)
+        # 消す前は、画像側にも字形がある
+        pix_before = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        self.assertGreater(_dark_pixel_count(pix_before, bbox, 2), 0)
+
+        PDFDocumentManager.apply_text_only_redactions_to_page(page, [bbox])
+
+        self.assertNotIn("テストです", page.get_text())
+        pix_after = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        # 画像ピクセル側の字形も残っていないこと
+        self.assertEqual(_dark_pixel_count(pix_after, bbox, 2), 0)
+        # 対象外の文字は画像・レイヤーとも残ること
+        keep_bbox = _span_bbox(page, "関係ない文字")
+        self.assertIsNotNone(keep_bbox)
+        self.assertGreater(_dark_pixel_count(pix_after, keep_bbox, 2), 0)
+
+
+class TestScanReplacementRender(_WindowTestBase):
+    """画像＋文字レイヤーのPDFで「PDFに反映」した後の描画レベル確認。
+
+    反映後の保存PDF・焼き込み描画で、元の断片の字形（画像ピクセル）が
+    残らず、つなげた文が1回だけ現れること。
+    """
+
+    def test_gray_layer_apply_leaves_no_doubled_glyphs(self):
+        from core.pdf_engine import PDFDocumentManager
+
+        path = Path(self._tmp.name) / "scan_gray.pdf"
+        path.write_bytes(_scan_pdf_bytes((0.2, 0.2, 0.2)))
+        self._open(str(path))
+        viewer = self.window.viewer
+
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        frag = [
+            sp for sp in spans[0] if sp["text"] in ("これは", "テストです")
+        ]
+        self.assertEqual(len(frag), 2)
+        frag1_rect = frag[0]["rect"]
+        frag2_rect = frag[1]["rect"]
+        joined = join_span_texts([sp["text"] for sp in frag])
+        self.assertTrue(
+            self.window._apply_text_data_replacement(0, frag, joined)
+        )
+
+        # 焼き込み描画（ダイアログの下敷き・見比べ画像と同じ経路）:
+        # 断片2の場所に元の字形が残らず、断片1の場所に連結文が描かれる
+        baked = PDFDocumentManager.extract_pages_as_doc(
+            viewer.current_pdf, [0], viewer.page_annotations
+        )
+        try:
+            pix = baked[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            self.assertEqual(_dark_pixel_count(pix, frag2_rect, 2), 0)
+            self.assertGreater(_dark_pixel_count(pix, frag1_rect, 2), 0)
+        finally:
+            baked.close()
+
+        # 保存したPDFでも同じこと（文字レイヤーでも連結文は1回だけ）
+        out = str(Path(self._tmp.name) / "saved.pdf")
+        PDFDocumentManager.save_safely(
+            viewer.current_pdf, viewer.page_annotations, out, str(path)
+        )
+        sdoc = fitz.open(out)
+        try:
+            text = sdoc[0].get_text()
+            self.assertEqual(text.count("これはテストです"), 1)
+            self.assertEqual(text.count("テストです"), 1)
+            pix = sdoc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            self.assertEqual(_dark_pixel_count(pix, frag2_rect, 2), 0)
+            self.assertGreater(_dark_pixel_count(pix, frag1_rect, 2), 0)
+        finally:
+            sdoc.close()
+
+
 class TestLargeDialogSize(_QtTestBase):
     def test_helper_is_large_but_within_screen(self):
         from PyQt6.QtGui import QGuiApplication
@@ -593,16 +739,18 @@ class TestLargeDialogSize(_QtTestBase):
             dlg.close()
 
 
-def _send_mouse(canvas, kind, pos, button, buttons):
+def _send_mouse(canvas, kind, pos, button, buttons, modifiers=None):
     from PyQt6.QtCore import QEvent, QPointF, Qt
     from PyQt6.QtGui import QMouseEvent
 
+    if modifiers is None:
+        modifiers = Qt.KeyboardModifier.NoModifier
     event = QMouseEvent(
         kind,
         QPointF(pos),
         button,
         buttons,
-        Qt.KeyboardModifier.NoModifier,
+        modifiers,
     )
     if kind == QEvent.Type.MouseButtonPress:
         canvas.mousePressEvent(event)
@@ -610,6 +758,17 @@ def _send_mouse(canvas, kind, pos, button, buttons):
         canvas.mouseMoveEvent(event)
     else:
         canvas.mouseReleaseEvent(event)
+
+
+def _send_canvas_key(canvas, kind, key):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    event = QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier)
+    if kind == QEvent.Type.KeyPress:
+        canvas.keyPressEvent(event)
+    else:
+        canvas.keyReleaseEvent(event)
 
 
 class TestLayoutCanvasZoom(_QtTestBase):
@@ -675,7 +834,35 @@ class TestLayoutCanvasZoom(_QtTestBase):
         self._click(canvas, center)
         self.assertEqual(canvas.selected_indices(), [0])
 
-    def test_drag_pans_instead_of_selecting(self):
+    def test_space_drag_pans_instead_of_selecting(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+
+        canvas = self._canvas(spans=[_fake_span("中央の文字", 180, 200)])
+        canvas.set_zoom(2.0)
+        start = self._span_center(canvas, 0)
+        before = canvas.pan_offset()
+        _send_canvas_key(canvas, QEvent.Type.KeyPress, Qt.Key.Key_Space)
+        try:
+            _send_mouse(
+                canvas, QEvent.Type.MouseButtonPress, start,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            )
+            moved = start + QPointF(60.0, 0.0)
+            _send_mouse(
+                canvas, QEvent.Type.MouseMove, moved,
+                Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+            )
+            _send_mouse(
+                canvas, QEvent.Type.MouseButtonRelease, moved,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            )
+        finally:
+            _send_canvas_key(canvas, QEvent.Type.KeyRelease, Qt.Key.Key_Space)
+        self.assertEqual(canvas.selected_indices(), [])
+        self.assertAlmostEqual(canvas.pan_offset().x(), before.x() + 60.0, places=0)
+        self.assertAlmostEqual(canvas.pan_offset().y(), before.y(), places=0)
+
+    def test_middle_drag_pans_instead_of_selecting(self):
         from PyQt6.QtCore import QEvent, QPointF, Qt
 
         canvas = self._canvas(spans=[_fake_span("中央の文字", 180, 200)])
@@ -684,20 +871,180 @@ class TestLayoutCanvasZoom(_QtTestBase):
         before = canvas.pan_offset()
         _send_mouse(
             canvas, QEvent.Type.MouseButtonPress, start,
-            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.MouseButton.MiddleButton, Qt.MouseButton.MiddleButton,
         )
-        moved = start + QPointF(60.0, 0.0)
+        moved = start + QPointF(0.0, 45.0)
         _send_mouse(
             canvas, QEvent.Type.MouseMove, moved,
-            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton, Qt.MouseButton.MiddleButton,
         )
         _send_mouse(
             canvas, QEvent.Type.MouseButtonRelease, moved,
-            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            Qt.MouseButton.MiddleButton, Qt.MouseButton.NoButton,
         )
         self.assertEqual(canvas.selected_indices(), [])
-        self.assertAlmostEqual(canvas.pan_offset().x(), before.x() + 60.0, places=0)
-        self.assertAlmostEqual(canvas.pan_offset().y(), before.y(), places=0)
+        self.assertAlmostEqual(canvas.pan_offset().x(), before.x(), places=0)
+        self.assertAlmostEqual(canvas.pan_offset().y(), before.y() + 45.0, places=0)
+
+
+class TestSpanOutlinesAndBandSelection(_QtTestBase):
+    """スパンの区切り枠（既定ON）と、ドラッグでの範囲選択のテスト。"""
+
+    def _canvas(self, spans=None):
+        from ui.text_data_dialog import LayoutCanvas
+
+        canvas = LayoutCanvas()
+        canvas.resize(400, 300)
+        if spans is None:
+            spans = [
+                _fake_span("これは", 20, 40),
+                _fake_span("テストです", 20, 70),
+                _fake_span("関係ない文字", 20, 200),
+            ]
+        canvas.set_page((0.0, 0.0, 400.0, 400.0), spans)
+        return canvas
+
+    def _span_rect(self, canvas, idx):
+        area, scale = canvas._page_area()
+        return canvas._span_widget_rect(canvas._spans[idx], area, scale)
+
+    def _drag(self, canvas, start, end, modifiers=None, button=None):
+        from PyQt6.QtCore import QEvent, Qt
+
+        if button is None:
+            button = Qt.MouseButton.LeftButton
+        _send_mouse(
+            canvas, QEvent.Type.MouseButtonPress, start, button, button, modifiers
+        )
+        _send_mouse(
+            canvas, QEvent.Type.MouseMove, end,
+            Qt.MouseButton.NoButton, button, modifiers,
+        )
+        _send_mouse(
+            canvas, QEvent.Type.MouseButtonRelease, end,
+            button, Qt.MouseButton.NoButton, modifiers,
+        )
+
+    def test_outlines_default_on_and_toggle(self):
+        from ui.text_data_dialog import LayoutCanvas, TextDataDialog
+
+        canvas = LayoutCanvas()
+        try:
+            self.assertTrue(canvas.show_span_outlines())
+            canvas.set_show_span_outlines(False)
+            self.assertFalse(canvas.show_span_outlines())
+            canvas.set_show_span_outlines(True)
+            self.assertTrue(canvas.show_span_outlines())
+        finally:
+            canvas.close()
+
+        dlg = TextDataDialog(
+            ["本文"],
+            page_spans=[[_fake_span("本文", 20, 40)]],
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+        )
+        try:
+            # ダイアログ側のチェックボックスも既定ONで、キャンバスと連動する
+            self.assertTrue(dlg.chk_span_outlines.isChecked())
+            self.assertTrue(dlg.layout_canvas.show_span_outlines())
+            dlg.chk_span_outlines.setChecked(False)
+            self.assertFalse(dlg.layout_canvas.show_span_outlines())
+            dlg.chk_span_outlines.setChecked(True)
+            self.assertTrue(dlg.layout_canvas.show_span_outlines())
+        finally:
+            dlg.close()
+
+    def test_spans_in_rect_helper(self):
+        from PyQt6.QtCore import QPointF, QRectF
+
+        canvas = self._canvas()
+        try:
+            r0 = self._span_rect(canvas, 0)
+            r1 = self._span_rect(canvas, 1)
+            band = QRectF(
+                r0.topLeft() - QPointF(3.0, 3.0),
+                r1.bottomRight() + QPointF(3.0, 3.0),
+            )
+            self.assertEqual(canvas.spans_in_rect(band), [0, 1])
+            # どのスパンとも重ならない矩形は空
+            self.assertEqual(
+                canvas.spans_in_rect(QRectF(350.0, 260.0, 40.0, 30.0)), []
+            )
+            # 1つだけを囲めば、その1つだけが返る
+            self.assertEqual(
+                canvas.spans_in_rect(self._span_rect(canvas, 2)), [2]
+            )
+        finally:
+            canvas.close()
+
+    def test_drag_band_selects_spans(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+
+        canvas = self._canvas()
+        try:
+            r0 = self._span_rect(canvas, 0)
+            r1 = self._span_rect(canvas, 1)
+            start = r0.topLeft() - QPointF(5.0, 5.0)
+            end = r1.bottomRight() + QPointF(5.0, 5.0)
+            _send_mouse(
+                canvas, QEvent.Type.MouseButtonPress, start,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            )
+            _send_mouse(
+                canvas, QEvent.Type.MouseMove, end,
+                Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+            )
+            # ドラッグ中はラバーバンドが見えている
+            self.assertIsNotNone(canvas.band_rect())
+            _send_mouse(
+                canvas, QEvent.Type.MouseButtonRelease, end,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            )
+            self.assertEqual(canvas.selected_indices(), [0, 1])
+            self.assertIsNone(canvas.band_rect())
+            # 範囲選択のドラッグでは表示位置は動かない
+            self.assertEqual(canvas.pan_offset(), QPointF(0.0, 0.0))
+        finally:
+            canvas.close()
+
+    def test_shift_drag_adds_and_plain_drag_replaces(self):
+        from PyQt6.QtCore import QPointF, Qt
+
+        canvas = self._canvas()
+        try:
+            canvas.set_selected({2})
+            r0 = self._span_rect(canvas, 0)
+            self._drag(
+                canvas,
+                r0.topLeft() - QPointF(4.0, 4.0),
+                r0.bottomRight() + QPointF(4.0, 4.0),
+                modifiers=Qt.KeyboardModifier.ShiftModifier,
+            )
+            # Shift+ドラッグは今の選択へ追加する
+            self.assertEqual(canvas.selected_indices(), [0, 2])
+
+            r1 = self._span_rect(canvas, 1)
+            self._drag(
+                canvas,
+                r1.topLeft() - QPointF(4.0, 4.0),
+                r1.bottomRight() + QPointF(4.0, 4.0),
+            )
+            # 修飾なしのドラッグは選択を置き換える
+            self.assertEqual(canvas.selected_indices(), [1])
+        finally:
+            canvas.close()
+
+    def test_small_drag_is_click_not_band(self):
+        canvas = self._canvas()
+        try:
+            center = self._span_rect(canvas, 0).center()
+            # しきい値以下の動きはクリックとして扱われ、トグルになる
+            self._drag(canvas, center, center)
+            self.assertEqual(canvas.selected_indices(), [0])
+            self._drag(canvas, center, center)
+            self.assertEqual(canvas.selected_indices(), [])
+        finally:
+            canvas.close()
 
 
 class TestUnderlayZoomBucket(_QtTestBase):
