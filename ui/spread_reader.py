@@ -2032,15 +2032,11 @@ class FullscreenSpreadReader(QWidget):
     def _view_click_goes_next(self, pos: QPointF, button) -> bool:
         """閲覧モードのクリックが「次の見開きへ」かどうかを返す。
 
-        クリックした側で判定する: 右開きでは左半分が「次へ」側、
-        左開きでは右半分が「次へ」側。右ボタンは左ボタンと逆方向。
+        左ボタンは常に「次へ」、右ボタンは常に「前へ」。
+        クリックした位置（左半分／右半分）や綴じ方向には依存しない。
+        （2026-11-20 MIWA の希望で、綴じ方向連動のクリック判定から戻した）
         """
-        next_is_left_side = self.right_to_left
-        clicked_left_side = pos.x() < self.width() / 2.0
-        side_is_next = clicked_left_side == next_is_left_side
-        if button == Qt.MouseButton.RightButton:
-            return not side_is_next
-        return side_is_next
+        return button != Qt.MouseButton.RightButton
 
     def mousePressEvent(self, event: QMouseEvent):
         pos = event.position()

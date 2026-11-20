@@ -285,7 +285,7 @@ class TestReaderDirection(_ReaderTestBase):
         )
         self.assertFalse(self.store.get_prefs()["right_to_left"])
 
-    def test_click_zones_follow_direction(self):
+    def test_click_buttons_always_next_prev(self):
         from PyQt6.QtCore import QEvent, QPointF, Qt
         from PyQt6.QtGui import QMouseEvent
 
@@ -304,27 +304,27 @@ class TestReaderDirection(_ReaderTestBase):
             )
             reader.mousePressEvent(ev)
 
-        # 左開き: 右半分クリックで次へ、左半分で前へ
+        # 左ボタンは押す場所によらず常に次へ、右ボタンは常に前へ
         self.assertEqual(reader.current_spread_idx, 0)
         press(w * 0.8)
         self.assertEqual(reader.current_spread_idx, 1)
-        press(w * 0.8)
+        press(w * 0.2)  # 左半分でも次へ
         self.assertEqual(reader.current_spread_idx, 2)
-        press(w * 0.2)
+        press(w * 0.2, Qt.MouseButton.RightButton)  # 左半分でも前へ
         self.assertEqual(reader.current_spread_idx, 1)
-        # 右ボタンは押した側の逆方向（左側の右ボタン＝次へ）
-        press(w * 0.2, Qt.MouseButton.RightButton)
-        self.assertEqual(reader.current_spread_idx, 2)
+        press(w * 0.8, Qt.MouseButton.RightButton)  # 右半分でも前へ
+        self.assertEqual(reader.current_spread_idx, 0)
 
-        # 右開きにすると「次へ」側が左半分に入れ替わる
+        # 綴じ方向を右開きに変えてもクリックの進む／戻るは変わらない
         reader._toggle_reading_direction()
-        press(w * 0.8)  # 右半分＝前へ側
+        press(w * 0.8)
         self.assertEqual(reader.current_spread_idx, 1)
-        press(w * 0.2)  # 左半分＝次へ側
+        press(w * 0.2)
         self.assertEqual(reader.current_spread_idx, 2)
-        # 右ボタンは押した側の逆方向（左半分の右ボタン＝前へ）
         press(w * 0.2, Qt.MouseButton.RightButton)
         self.assertEqual(reader.current_spread_idx, 1)
+        press(w * 0.8, Qt.MouseButton.RightButton)
+        self.assertEqual(reader.current_spread_idx, 0)
 
 
 class TestReaderBlankPages(_ReaderTestBase):
