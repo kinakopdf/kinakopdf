@@ -26,6 +26,7 @@ p{text-align:left;text-indent:1em;margin:12px 0}
 .center{text-align:center;text-indent:0}
 .catch{text-align:center;text-indent:0;font-size:1.05em;line-height:2.1;margin:14px 0 4px}
 h2{font-size:1.35em;text-align:center;margin:0 0 14px;padding-bottom:8px;border-bottom:3px solid var(--line)}
+h3{font-size:1.08em;text-align:left;margin:20px 0 6px;padding-left:10px;border-left:5px solid var(--red)}
 .card{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:18px 0}
 .note{background:#f6f6f6;border-left:4px solid var(--red);padding:12px 16px;border-radius:0 12px 12px 0}
 ul{padding-left:1.2em}
@@ -113,6 +114,52 @@ a{color:var(--red)}
 </ol>
 <p><small>ソースコード版を使う場合：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）が必要です。<code>python secure_local_pdf_editor.pyw</code> で起動します。新しいライブラリは追加していません。</small></p>
 <p><small>※ 安定版 v1.0.4 を公開中です（2026-11-20）。</small></p>
+</div>
+</section>
+
+<section>
+<h2>はじめての きなこPDF</h2>
+<div class="card">
+<h3>きなこPDFって、なに？</h3>
+<p>無料で使えるPDFの編集ソフトです。いちばんの特徴は「ぜんぶ自分のパソコンの中でやる」こと。インターネットにファイルを送らないので、名前や住所、カード番号の入った書類でも安心して使えます。</p>
+<p>インストールはいりません。ダウンロードしてダブルクリックするだけ。Windowsのパソコンで使えます。</p>
+
+<h3>はじめの5分</h3>
+<ol>
+<li>ホームページの「無料ダウンロード（KinakoPDF.exe）」からダウンロードする</li>
+<li>ダウンロードした exe をダブルクリックする</li>
+<li>PDFを開く（ドラッグ＆ドロップでも開けます）</li>
+<li>まずはコピーを作って試すのがおすすめです。大事な原本はそのまま残しておけます</li>
+</ol>
+<p><small>※ Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。個人のソフトには出やすいもので、ウイルスということではありません。不安な方は、ソースコードを公開しているので中身を確認できます。</small></p>
+
+<h3>まず覚えたい3つのこと</h3>
+<p><strong>1. 墨消し — 消したい文字を、データごと消す</strong></p>
+<p>名前や住所など、見せたくない部分を選びます。上から塗りつぶすのではなく、文字のデータそのものを消すので、保存したあと他のソフトで開いても復活しません。AIに書類を渡す前に、ここで個人情報を消しておくのが、きなこPDFのいちばんの使い方です。</p>
+<p><strong>2. 文字の書き換え — 数字や文字を直す</strong></p>
+<p>PDFの中の文字をそのまま書き換えたり、新しい文字を足したりできます。ドラッグで文字を選ぶと「📋 コピー」ボタンが出て、押すとコピーして画面が閉じます。</p>
+<p><strong>3. 見開きで読む — 本みたいに読む</strong></p>
+<p>F5キーで見開きの全画面リーダーになります。左クリックで次へ、右クリックで前へ進みます。表紙あり・なしも選べます。ふつうに縦にスクロールして読む表示もあります。</p>
+
+<h3>あると便利なもの</h3>
+<ul>
+<li><strong>フォルダ一括読込</strong> — 複数のPDFをまとめて1冊の本として読む</li>
+<li><strong>Excel出力</strong> — PDFの表をExcel（.xlsx）に書き出す</li>
+<li><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計する</li>
+<li><strong>OCR（Windows専用）</strong> — スキャンした書類の文字を読み取る。範囲OCRは Ctrl+Alt+O</li>
+<li><strong>文字検索・印刷・最近開いたファイル</strong></li>
+</ul>
+
+<h3>気をつけること</h3>
+<ul>
+<li>墨消しは元に戻せません。消す前は、かならずコピーを取っておいてください。</li>
+<li>墨消ししたあと、文字が本当に残っていないか自動で確かめる機能があります。でも大切な部分は、保存後に自分の目でも確かめてください。</li>
+<li>OCRはWindowsに標準で入っている機能だけを使っています。手書きや、かすれた文字・小さな文字はうまく読めないことがあります。結果はかならず目で確認してください。</li>
+<li>パスワード付きPDFを上書き保存すると、暗号化が解除される場合があります。保存時の確認ダイアログをよく読んでから選んでください。</li>
+</ul>
+
+<h3>もっと試したい人へ（ベータ版）</h3>
+<p>ホームページの上のほうにある「ベータ版」には、まだ試作中の機能があります。文字データの表示・修正や、ボタンをまとめて見やすくした版などです。試作中なので、気になるところがあれば感想フォームから教えてください。</p>
 </div>
 </section>
 
