@@ -719,7 +719,7 @@ class TestUnderlayZoomBucket(_QtTestBase):
         try:
             dlg.page_combo.setCurrentIndex(1)
             dlg.layout_canvas.resize(800, 600)
-            dlg.chk_underlay.setChecked(True)
+            dlg.cmb_view_mode.setCurrentIndex(1)  # 重ねて表示
             # 全体表示（実効倍率1.5）では従来どおり2倍で要求される
             self.assertIn((0, 2.0), calls)
             calls.clear()
@@ -730,5 +730,322 @@ class TestUnderlayZoomBucket(_QtTestBase):
             # 同じバケットではキャッシュを使い、取り直さない
             dlg._refresh_underlay()
             self.assertEqual(calls, [(0, 6.0)])
+        finally:
+            dlg.close()
+
+
+class TestRotatedSpanAlignment(unittest.TestCase):
+    """回転したページでも、スパン矩形が描画画像（表示座標）と一致すること。
+
+    get_text の座標は回転前の座標系で返るため、rotation_matrix で
+    表示座標にそろえないと、下敷き画像と文字が系統的にずれる。
+    """
+
+    def _rotated_doc(self, rotation):
+        doc = fitz.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 200), "HELLO", fontsize=20)
+        page.set_rotation(rotation)
+        return doc
+
+    def _dark_bbox_pt(self, doc, page_idx=0, zoom=2.0):
+        from core.text_tools import render_page_png_bytes
+
+        data = render_page_png_bytes(doc, page_idx, zoom=zoom)
+        pix = fitz.Pixmap(data)
+        n = pix.n
+        samples = pix.samples
+        w, h = pix.width, pix.height
+        minx, miny, maxx, maxy = w, h, -1, -1
+        for y in range(h):
+            row = y * w * n
+            for x in range(w):
+                if samples[row + x * n] < 100:
+                    minx = min(minx, x)
+                    maxx = max(maxx, x)
+                    miny = min(miny, y)
+                    maxy = max(maxy, y)
+        self.assertGreaterEqual(maxx, 0)
+        return (minx / zoom, miny / zoom, (maxx + 1) / zoom, (maxy + 1) / zoom)
+
+    def test_span_rect_matches_rendered_image_for_rotated_pages(self):
+        from core.text_tools import get_page_view_rects
+
+        for rotation in (90, 180, 270):
+            doc = self._rotated_doc(rotation)
+            self.addCleanup(doc.close)
+            spans = extract_page_spans(doc)[0]
+            self.assertEqual(len(spans), 1)
+            rect = fitz.Rect(spans[0]["rect"])
+            view_rect = fitz.Rect(get_page_view_rects(doc)[0])
+            # スパン矩形は表示ページの内側にあり、描画された文字を包む
+            self.assertTrue(view_rect.contains(rect))
+            dark = fitz.Rect(self._dark_bbox_pt(doc))
+            self.assertTrue(rect.contains(dark))
+
+    def test_unrotated_span_rect_is_get_text_bbox(self):
+        doc = self._rotated_doc(0)
+        self.addCleanup(doc.close)
+        spans = extract_page_spans(doc)[0]
+        raw = doc[0].get_text("dict")["blocks"][0]["lines"][0]["spans"][0]
+        self.assertEqual(spans[0]["rect"], tuple(raw["bbox"]))
+
+
+def _send_key(dlg, key, modifiers=None):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    if modifiers is None:
+        modifiers = Qt.KeyboardModifier.NoModifier
+    event = QKeyEvent(QEvent.Type.KeyPress, key, modifiers)
+    dlg.keyPressEvent(event)
+
+
+class TestDialogFullscreen(_QtTestBase):
+    def _dialog(self):
+        from ui.text_data_dialog import TextDataDialog
+
+        return TextDataDialog(
+            ["本文"],
+            page_spans=[[_fake_span("本文", 20, 40)]],
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+        )
+
+    def test_toggle_fullscreen_and_button_sync(self):
+        dlg = self._dialog()
+        try:
+            dlg.show()
+            self.assertFalse(dlg.isFullScreen())
+            dlg.toggle_fullscreen()
+            self.assertTrue(dlg.isFullScreen())
+            self.assertTrue(dlg.btn_fullscreen.isChecked())
+            dlg.toggle_fullscreen()
+            self.assertFalse(dlg.isFullScreen())
+            self.assertFalse(dlg.btn_fullscreen.isChecked())
+        finally:
+            dlg.close()
+
+    def test_esc_in_fullscreen_exits_fullscreen_only(self):
+        from PyQt6.QtCore import Qt
+
+        dlg = self._dialog()
+        try:
+            dlg.show()
+            dlg.set_fullscreen(True)
+            self.assertTrue(dlg.isFullScreen())
+            _send_key(dlg, Qt.Key.Key_Escape)
+            # 全画面は解除されるが、ダイアログは閉じない
+            self.assertFalse(dlg.isFullScreen())
+            self.assertTrue(dlg.isVisible())
+        finally:
+            dlg.close()
+
+    def test_f_key_toggles_fullscreen(self):
+        from PyQt6.QtCore import Qt
+
+        dlg = self._dialog()
+        try:
+            dlg.show()
+            _send_key(dlg, Qt.Key.Key_F)
+            self.assertTrue(dlg.isFullScreen())
+            _send_key(dlg, Qt.Key.Key_F)
+            self.assertFalse(dlg.isFullScreen())
+        finally:
+            dlg.close()
+
+    def test_normal_geometry_is_restored(self):
+        dlg = self._dialog()
+        try:
+            dlg.show()
+            before = dlg.geometry()
+            dlg.set_fullscreen(True)
+            dlg.set_fullscreen(False)
+            self.assertEqual(dlg.geometry(), before)
+        finally:
+            dlg.close()
+
+
+class TestCompareMode(_QtTestBase):
+    def _dialog(self):
+        from PyQt6.QtGui import QColor, QPixmap
+
+        from ui.text_data_dialog import TextDataDialog
+
+        calls = []
+
+        def provider(page_idx, zoom=2.0):
+            calls.append((page_idx, zoom))
+            pix = QPixmap(80, 100)
+            pix.fill(QColor("#cccccc"))
+            return pix
+
+        dlg = TextDataDialog(
+            ["本文"],
+            page_spans=[[_fake_span("本文", 180, 200)]],
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+            image_provider=provider,
+        )
+        return dlg, calls
+
+    def _enter_compare(self, dlg):
+        dlg.page_combo.setCurrentIndex(1)
+        dlg.layout_canvas.resize(400, 300)
+        dlg.image_canvas.resize(400, 300)
+        dlg.cmb_view_mode.setCurrentIndex(2)  # 見開きで見比べ
+
+    def test_compare_builds_both_panes(self):
+        dlg, calls = self._dialog()
+        try:
+            self.assertTrue(dlg.image_canvas.isHidden())
+            self._enter_compare(dlg)
+            # 左ペイン（画像）が表示され、画像が取得されている
+            self.assertFalse(dlg.image_canvas.isHidden())
+            self.assertTrue(calls)
+            self.assertIsNotNone(dlg.image_canvas._image)
+            # 文字ペイン側に下敷きは敷かない
+            self.assertFalse(dlg.layout_canvas._show_underlay)
+        finally:
+            dlg.close()
+
+    def test_zoom_syncs_between_panes(self):
+        dlg, _calls = self._dialog()
+        try:
+            self._enter_compare(dlg)
+            dlg.layout_canvas.set_zoom(2.0)
+            self.assertEqual(dlg.image_canvas.zoom_factor(), 2.0)
+            self.assertAlmostEqual(
+                dlg.image_canvas.effective_scale(),
+                dlg.layout_canvas.effective_scale(),
+            )
+            # 画像ペイン側のズームも文字ペインへ同期する
+            dlg.image_canvas.set_zoom(3.0)
+            self.assertEqual(dlg.layout_canvas.zoom_factor(), 3.0)
+        finally:
+            dlg.close()
+
+    def test_drag_on_image_pane_pans_both(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+
+        dlg, _calls = self._dialog()
+        try:
+            self._enter_compare(dlg)
+            dlg.image_canvas.set_zoom(2.0)
+            before = dlg.layout_canvas.pan_offset()
+            start = QPointF(200.0, 150.0)
+            moved = start + QPointF(40.0, 0.0)
+            _send_mouse(
+                dlg.image_canvas, QEvent.Type.MouseButtonPress, start,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            )
+            _send_mouse(
+                dlg.image_canvas, QEvent.Type.MouseMove, moved,
+                Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+            )
+            _send_mouse(
+                dlg.image_canvas, QEvent.Type.MouseButtonRelease, moved,
+                Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            )
+            self.assertAlmostEqual(
+                dlg.image_canvas.pan_offset().x(), before.x() + 40.0, places=0
+            )
+            # 文字ペインも同じ表示位置に追随する
+            self.assertEqual(
+                dlg.layout_canvas.pan_offset(), dlg.image_canvas.pan_offset()
+            )
+        finally:
+            dlg.close()
+
+    def test_mode_switching(self):
+        dlg, _calls = self._dialog()
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            self.assertEqual(dlg._view_mode(), "text")
+            self.assertFalse(dlg.layout_canvas._show_underlay)
+            self.assertTrue(dlg.nudge_row_widget.isHidden())
+
+            dlg.cmb_view_mode.setCurrentIndex(1)  # 重ねて表示
+            self.assertEqual(dlg._view_mode(), "overlay")
+            self.assertTrue(dlg.layout_canvas._show_underlay)
+            self.assertFalse(dlg.nudge_row_widget.isHidden())
+            self.assertTrue(dlg.image_canvas.isHidden())
+
+            dlg.cmb_view_mode.setCurrentIndex(2)  # 見開きで見比べ
+            self.assertEqual(dlg._view_mode(), "compare")
+            self.assertFalse(dlg.layout_canvas._show_underlay)
+            self.assertTrue(dlg.nudge_row_widget.isHidden())
+            self.assertFalse(dlg.image_canvas.isHidden())
+
+            dlg.cmb_view_mode.setCurrentIndex(0)  # 文字データのみ
+            self.assertEqual(dlg._view_mode(), "text")
+            self.assertTrue(dlg.image_canvas.isHidden())
+        finally:
+            dlg.close()
+
+
+class TestUnderlayNudge(_QtTestBase):
+    def _dialog(self):
+        from ui.text_data_dialog import TextDataDialog
+
+        dlg = TextDataDialog(
+            ["本文"],
+            page_spans=[[_fake_span("本文", 180, 200)]],
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+        )
+        dlg.page_combo.setCurrentIndex(1)
+        dlg.cmb_view_mode.setCurrentIndex(1)  # 重ねて表示
+        return dlg
+
+    def test_buttons_shift_offset_by_half_point(self):
+        dlg = self._dialog()
+        try:
+            self.assertEqual(dlg.underlay_offset(), (0.0, 0.0))
+            dlg.btn_nudge_right.click()
+            self.assertEqual(dlg.underlay_offset(), (0.5, 0.0))
+            dlg.btn_nudge_up.click()
+            self.assertEqual(dlg.underlay_offset(), (0.5, -0.5))
+            dlg.btn_nudge_left.click()
+            dlg.btn_nudge_down.click()
+            self.assertEqual(dlg.underlay_offset(), (0.0, 0.0))
+            # キャンバス側にも同じずれが渡り、表示ラベルも追随する
+            dlg.btn_nudge_right.click()
+            from PyQt6.QtCore import QPointF
+
+            self.assertEqual(
+                dlg.layout_canvas.underlay_offset(), QPointF(0.5, 0.0)
+            )
+            self.assertIn("+0.5", dlg.lbl_nudge.text())
+        finally:
+            dlg.close()
+
+    def test_nudge_does_not_move_spans(self):
+        dlg = self._dialog()
+        try:
+            canvas = dlg.layout_canvas
+            area_before, _ = canvas._page_area()
+            rect_before = canvas._span_widget_rect(
+                canvas._spans[0], *canvas._page_area()
+            )
+            dlg._nudge_underlay(3.0, -2.0)
+            area_after, _ = canvas._page_area()
+            rect_after = canvas._span_widget_rect(
+                canvas._spans[0], *canvas._page_area()
+            )
+            # ページ配置とスパン位置は変わらず、下敷き側だけがずれる
+            self.assertEqual(area_before, area_after)
+            self.assertEqual(rect_before, rect_after)
+            self.assertEqual(dlg.underlay_offset(), (3.0, -2.0))
+        finally:
+            dlg.close()
+
+    def test_nudge_clamps_and_resets(self):
+        dlg = self._dialog()
+        try:
+            dlg._nudge_underlay(100.0, -100.0)
+            self.assertEqual(dlg.underlay_offset(), (30.0, -30.0))
+            dlg._nudge_underlay(-100.0, 100.0)
+            self.assertEqual(dlg.underlay_offset(), (-30.0, 30.0))
+            dlg.btn_nudge_reset.click()
+            self.assertEqual(dlg.underlay_offset(), (0.0, 0.0))
+            self.assertIn("+0.0", dlg.lbl_nudge.text())
         finally:
             dlg.close()

@@ -36,9 +36,9 @@ from core.text_tools import join_fragments, join_span_texts
 NO_TEXT_MESSAGE = "（このページに文字データはありません。画像だけのPDFです）"
 NOTE_TEXT = (
 "PDFに埋め込まれている文字データそのものです。AIや検索が読むのはこの中身です。"
-"では元の場所のまま文字が見えます。バラバラになった部分を選んで"
+"配置表示では元の場所のまま文字が見えます。バラバラになった部分を選んで"
 "「くっつける」→確認して「PDFに反映」を押すと、PDFの文字データ自体を直せます。"
-"では文章として確認・手直し・コピーができます。"
+"テキスト表示では文章として確認・手直し・コピーができます。"
 )
 HINT_TEXT = (
 "OCRや文字の取り出しでバラバラになった文は、行を選んで「くっつける」を押すと"
@@ -49,6 +49,7 @@ LAYOUT_HINT_TEXT = (
 "クリックで文字のかたまり（スパン）を選んだり外したりできます。"
 "バラバラになった文のかたまりを全部選んで「くっつける」を押してください。"
 "拡大・縮小ボタンや Ctrl+ホイールで大きくでき、ドラッグで表示位置を動かせます。"
+"「見開きで見比べ」では元の画像と文字データを並べて同じ倍率・位置で見比べられます。"
 )
 APPLY_NOTE_TEXT = (
 "「PDFに反映」を押すと、選んだ部分の元の文字は消えて、つなげた文が同じ場所に"
@@ -118,6 +119,8 @@ class LayoutCanvas(QWidget):
         self._selected = set()
         self._underlay = None
         self._show_underlay = False
+        # 下敷き画像だけをずらす微調整量（ページ座標 pt、スパンには影響しない）
+        self._underlay_offset = QPointF(0.0, 0.0)
         self._zoom = 1.0
         self._pan = QPointF(0.0, 0.0)
         self._press_pos = None
@@ -142,6 +145,14 @@ class LayoutCanvas(QWidget):
     def set_show_underlay(self, show):
         self._show_underlay = bool(show)
         self.update()
+
+    def set_underlay_offset(self, offset):
+        """下敷き画像だけの表示ずれ（ページ座標 pt）を設定する。"""
+        self._underlay_offset = QPointF(offset)
+        self.update()
+
+    def underlay_offset(self):
+        return QPointF(self._underlay_offset)
 
     def selected_indices(self):
         return sorted(self._selected)
@@ -172,6 +183,21 @@ class LayoutCanvas(QWidget):
 
     def set_pan_offset(self, offset):
         self._pan = QPointF(offset)
+        self._clamp_pan()
+        self.update()
+
+    def set_view_state(self, zoom, pan):
+        """ズームと表示位置を外部からそろえる（見比べモードの同期用）。
+
+        viewChanged は出さない（同期のループを防ぐため）。呼び出し側が
+        片方のキャンバスの viewChanged を受けて、もう片方へ反映する。
+        """
+        try:
+            new_zoom = float(zoom)
+        except (TypeError, ValueError):
+            return
+        self._zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, new_zoom))
+        self._pan = QPointF(pan)
         self._clamp_pan()
         self.update()
 
@@ -293,7 +319,14 @@ class LayoutCanvas(QWidget):
         ):
             painter.save()
             painter.setOpacity(0.22)
-            painter.drawPixmap(area.toRect(), self._underlay)
+            # 微調整は下敷き画像だけに効かせる（スパンの位置は動かさない）
+            target = QRectF(
+                area.x() + self._underlay_offset.x() * scale,
+                area.y() + self._underlay_offset.y() * scale,
+                area.width(),
+                area.height(),
+            )
+            painter.drawPixmap(target, self._underlay, QRectF(self._underlay.rect()))
             painter.restore()
 
         if not self._spans:
@@ -359,6 +392,8 @@ class LayoutCanvas(QWidget):
         self._last_pos = pos
         self._clamp_pan()
         self.update()
+        # 見比べモードで相手ペインを追随させるため、パンでも通知する
+        self.viewChanged.emit()
 
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -397,6 +432,7 @@ class LayoutCanvas(QWidget):
             self._pan += QPointF(delta.x() * 0.5, delta.y() * 0.5)
             self._clamp_pan()
             self.update()
+            self.viewChanged.emit()
             event.accept()
 
     def resizeEvent(self, event):
@@ -404,6 +440,42 @@ class LayoutCanvas(QWidget):
         self._clamp_pan()
         # 全体表示の倍率が変わるので、下敷き解像度などの追随用に通知する
         self.viewChanged.emit()
+
+
+class PageImageCanvas(LayoutCanvas):
+    """見比べモードの左ペイン: 元のページ画像だけを表示するキャンバス。
+
+    ズーム/パンの仕組みは LayoutCanvas と共通で、表示状態はダイアログ側が
+    文字データ側と同期させる。スパンは持たないのでクリック選択は起きず、
+    ドラッグでのパンと Ctrl+ホイールでのズームだけが効く。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._image = None
+
+    def set_image(self, pixmap):
+        self._image = pixmap
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor("#e8eaed"))
+
+        area, _scale = self._page_area()
+        painter.fillRect(area, QColor("#ffffff"))
+        painter.setPen(QPen(QColor("#9aa0a6"), 1))
+        painter.drawRect(area)
+
+        if self._image is not None and not self._image.isNull():
+            painter.drawPixmap(area, self._image, QRectF(self._image.rect()))
+        else:
+            painter.setPen(QPen(QColor("#666666")))
+            painter.drawText(
+                area, Qt.AlignmentFlag.AlignCenter, "（ページ画像がありません）"
+            )
+        painter.end()
 
 
 class TextDataDialog(QDialog):
@@ -444,6 +516,13 @@ class TextDataDialog(QDialog):
         self._image_provider = image_provider
         self._image_cache = {}
         self._loading = False
+        # 全画面表示の状態（Fキーとボタンで切り替える）
+        self._is_fullscreen = False
+        self._normal_geometry = None
+        # 見比べモードで左右ペインの表示状態を同期する際のループ防止
+        self._syncing_view = False
+        # 重ね表示の下敷き画像だけをずらす微調整量（pt、ダイアログ内のみ保持）
+        self._underlay_offset = QPointF(0.0, 0.0)
         # ズーム変更が連続したときに、下敷き画像の取り直しをまとめるタイマー
         self._underlay_timer = QTimer(self)
         self._underlay_timer.setSingleShot(True)
@@ -473,6 +552,14 @@ class TextDataDialog(QDialog):
         self.page_combo.currentIndexChanged.connect(self._on_page_changed)
         top_row.addWidget(self.page_combo)
         top_row.addStretch(1)
+        self.btn_fullscreen = QPushButton("全画面")
+        self.btn_fullscreen.setCheckable(True)
+        self.btn_fullscreen.setToolTip(
+            "全画面表示にします（Fキーでも切り替えられます。全画面中の Esc は"
+            "通常表示に戻るだけで、画面は閉じません）"
+        )
+        self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
+        top_row.addWidget(self.btn_fullscreen)
         layout.addLayout(top_row)
 
         self.tabs = QTabWidget()
@@ -504,6 +591,10 @@ class TextDataDialog(QDialog):
 
         self.layout_canvas = LayoutCanvas()
         self.layout_canvas.viewChanged.connect(self._on_canvas_view_changed)
+        # 見比べモードの左ペイン（元のページ画像）。通常は隠れている
+        self.image_canvas = PageImageCanvas()
+        self.image_canvas.viewChanged.connect(self._on_canvas_view_changed)
+        self.image_canvas.setVisible(False)
 
         zoom_row = QHBoxLayout()
         self.btn_zoom_in = QPushButton("拡大")
@@ -523,15 +614,57 @@ class TextDataDialog(QDialog):
         self.lbl_zoom = QLabel("100%")
         zoom_row.addWidget(self.lbl_zoom)
         zoom_row.addStretch(1)
-        self.chk_underlay = QCheckBox("元の画像を薄く重ねる")
-        self.chk_underlay.setToolTip(
-            "ページの画像を薄く下に敷いて、文字データの位置と見比べられます"
+        zoom_row.addWidget(QLabel("表示:"))
+        self.cmb_view_mode = QComboBox()
+        self.cmb_view_mode.addItem("文字データのみ", "text")
+        self.cmb_view_mode.addItem("重ねて表示", "overlay")
+        self.cmb_view_mode.addItem("見開きで見比べ", "compare")
+        self.cmb_view_mode.setToolTip(
+            "重ねて表示: ページの画像を薄く下に敷いて位置を見比べられます\n"
+            "見開きで見比べ: 左に元の画像、右に文字データを並べ、"
+            "拡大や移動が連動します"
         )
-        self.chk_underlay.toggled.connect(self._on_underlay_toggled)
-        zoom_row.addWidget(self.chk_underlay)
+        self.cmb_view_mode.currentIndexChanged.connect(self._on_view_mode_changed)
+        zoom_row.addWidget(self.cmb_view_mode)
         v.addLayout(zoom_row)
 
-        v.addWidget(self.layout_canvas, 1)
+        # 重ね表示のときだけ使う、下敷き画像の微調整行
+        self.nudge_row_widget = QWidget()
+        nudge_row = QHBoxLayout(self.nudge_row_widget)
+        nudge_row.setContentsMargins(0, 0, 0, 0)
+        nudge_row.addWidget(QLabel("重ね位置の微調整（画像だけをずらす）:"))
+        self.btn_nudge_up = QPushButton("↑")
+        self.btn_nudge_up.setToolTip("下敷き画像を 0.5pt 上へずらします")
+        self.btn_nudge_up.clicked.connect(lambda: self._nudge_underlay(0.0, -0.5))
+        nudge_row.addWidget(self.btn_nudge_up)
+        self.btn_nudge_down = QPushButton("↓")
+        self.btn_nudge_down.setToolTip("下敷き画像を 0.5pt 下へずらします")
+        self.btn_nudge_down.clicked.connect(lambda: self._nudge_underlay(0.0, 0.5))
+        nudge_row.addWidget(self.btn_nudge_down)
+        self.btn_nudge_left = QPushButton("←")
+        self.btn_nudge_left.setToolTip("下敷き画像を 0.5pt 左へずらします")
+        self.btn_nudge_left.clicked.connect(lambda: self._nudge_underlay(-0.5, 0.0))
+        nudge_row.addWidget(self.btn_nudge_left)
+        self.btn_nudge_right = QPushButton("→")
+        self.btn_nudge_right.setToolTip("下敷き画像を 0.5pt 右へずらします")
+        self.btn_nudge_right.clicked.connect(lambda: self._nudge_underlay(0.5, 0.0))
+        nudge_row.addWidget(self.btn_nudge_right)
+        self.lbl_nudge = QLabel("(+0.0, +0.0) pt")
+        nudge_row.addWidget(self.lbl_nudge)
+        self.btn_nudge_reset = QPushButton("リセット")
+        self.btn_nudge_reset.setToolTip("ずらした量を (0, 0) に戻します")
+        self.btn_nudge_reset.clicked.connect(self._reset_underlay_offset)
+        nudge_row.addWidget(self.btn_nudge_reset)
+        nudge_row.addStretch(1)
+        self.nudge_row_widget.setVisible(False)
+        v.addWidget(self.nudge_row_widget)
+
+        panes = QWidget()
+        panes_layout = QHBoxLayout(panes)
+        panes_layout.setContentsMargins(0, 0, 0, 0)
+        panes_layout.addWidget(self.image_canvas, 1)
+        panes_layout.addWidget(self.layout_canvas, 1)
+        v.addWidget(panes, 1)
 
         opt_row = QHBoxLayout()
         opt_row.addStretch(1)
@@ -714,11 +847,14 @@ class TextDataDialog(QDialog):
         page_idx = self._layout_page_idx()
         if page_idx is None:
             self.layout_canvas.set_page((0.0, 0.0, 1.0, 1.0), [])
+            self.image_canvas.set_page((0.0, 0.0, 1.0, 1.0), [])
             self._set_join_preview("")
             return
         self.layout_canvas.set_page(
             self._page_rects[page_idx], self._page_spans[page_idx]
         )
+        # 見比べの左ペインも同じページに切り替える
+        self.image_canvas.set_page(self._page_rects[page_idx], [])
         saved = self._session.get("join", {}).get(page_idx)
         self._set_join_preview(saved if saved is not None else "")
         self._refresh_underlay()
@@ -737,27 +873,118 @@ class TextDataDialog(QDialog):
         if page_idx is not None:
             self._session["join"][page_idx] = self.join_preview.toPlainText()
 
-    def _on_underlay_toggled(self, checked):
+    # --- 全画面表示 ---
+
+    def _sync_fs_button(self):
+        btn = getattr(self, "btn_fullscreen", None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(self._is_fullscreen)
+            btn.blockSignals(False)
+
+    def set_fullscreen(self, on):
+        """全画面と通常表示を切り替える（見開きリーダーと同じ流儀）。
+
+        通常表示に戻るときは、全画面にする前の位置と大きさに戻す。
+        """
+        on = bool(on)
+        if on == self._is_fullscreen:
+            self._sync_fs_button()
+            return
+        self._is_fullscreen = on
+        if on:
+            self._normal_geometry = self.geometry()
+            self.showFullScreen()
+            self.lbl_status.setText(
+                "全画面表示です（Esc または Fキーで通常表示に戻ります）"
+            )
+        else:
+            self.showNormal()
+            if self._normal_geometry is not None:
+                self.setGeometry(self._normal_geometry)
+            self.lbl_status.setText("通常表示に戻りました")
+        self._sync_fs_button()
+
+    def toggle_fullscreen(self):
+        self.set_fullscreen(not self._is_fullscreen)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        mods = event.modifiers()
+        if key == Qt.Key.Key_Escape and self._is_fullscreen:
+            # 全画面のときは Esc で全画面を抜けるだけ（ダイアログは閉じない）
+            self.set_fullscreen(False)
+            event.accept()
+            return
+        if key == Qt.Key.Key_F and not (
+            mods
+            & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier
+            )
+        ):
+            self.toggle_fullscreen()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    # --- 配置表示のモード（文字のみ／重ね／見比べ）と下敷き画像 ---
+
+    def _view_mode(self):
+        """配置表示の見せ方: "text"（文字のみ）/ "overlay"（重ね）/ "compare"（見比べ）。"""
+        cmb = getattr(self, "cmb_view_mode", None)
+        if cmb is None:
+            return "text"
+        return cmb.currentData() or "text"
+
+    def _on_view_mode_changed(self):
+        mode = self._view_mode()
+        self.image_canvas.setVisible(mode == "compare")
+        self.nudge_row_widget.setVisible(mode == "overlay")
+        if mode == "compare":
+            # 見比べに入るときは、文字データ側の表示状態を画像側へ写す
+            self.image_canvas.set_view_state(
+                self.layout_canvas.zoom_factor(),
+                self.layout_canvas.pan_offset(),
+            )
         self._refresh_underlay()
 
+    def _sync_peer_view(self, src, dst):
+        """見比べモードで、片方の表示状態（ズームと位置）をもう片方へ写す。"""
+        if self._syncing_view:
+            return
+        self._syncing_view = True
+        try:
+            dst.set_view_state(src.zoom_factor(), src.pan_offset())
+        finally:
+            self._syncing_view = False
+
     def _on_canvas_view_changed(self):
+        # 見比べモードでは左右ペインの表示状態をそろえる。
+        # 画像ペインが隠れている間はそちらの古い状態を写さない。
+        src = self.sender()
+        if src is self.layout_canvas:
+            self._sync_peer_view(self.layout_canvas, self.image_canvas)
+        elif src is self.image_canvas and self._view_mode() == "compare":
+            self._sync_peer_view(self.image_canvas, self.layout_canvas)
         lbl = getattr(self, "lbl_zoom", None)
         if lbl is not None:
             percent = int(round(self.layout_canvas.zoom_factor() * 100))
             lbl.setText(f"{percent}%")
-        chk = getattr(self, "chk_underlay", None)
-        if chk is not None and chk.isChecked():
-            # ズーム操作は連続するので、少し待ってから下敷きを取り直す
+        if self._view_mode() in ("overlay", "compare"):
+            # ズーム操作は連続するので、少し待ってから下敷き画像を取り直す
             self._underlay_timer.start(250)
 
-    def _underlay_bucket(self):
-        """現在の表示倍率に見合う、下敷き画像の描画ズーム（2/3/4/6）を返す。
+    def _underlay_bucket(self, canvas=None):
+        """表示倍率に見合う、ページ画像の描画ズーム（2/3/4/6）を返す。
 
         画面に出る大きさ × デバイスピクセル比ぶんの解像度が要るので、
         実効倍率を満たす一番小さい段階を選ぶ（上限は6倍）。
         """
-        need = self.layout_canvas.effective_scale()
-        need *= self.layout_canvas.devicePixelRatioF() or 1.0
+        canvas = canvas if canvas is not None else self.layout_canvas
+        need = canvas.effective_scale()
+        need *= canvas.devicePixelRatioF() or 1.0
         for bucket in (2.0, 3.0, 4.0, 6.0):
             if need <= bucket:
                 return bucket
@@ -775,15 +1002,57 @@ class TextDataDialog(QDialog):
         except Exception:
             return None
 
+    def _fetch_page_image(self, page_idx, canvas):
+        """指定ページの画像を、表示倍率に見合う解像度で取得する（キャッシュ共用）。"""
+        if page_idx is None or self._image_provider is None:
+            return None
+        key = (page_idx, self._underlay_bucket(canvas))
+        if key not in self._image_cache:
+            self._image_cache[key] = self._request_underlay(key[0], key[1])
+        return self._image_cache.get(key)
+
     def _refresh_underlay(self):
-        show = self.chk_underlay.isChecked()
+        mode = self._view_mode()
         page_idx = self._layout_page_idx()
-        if show and page_idx is not None and self._image_provider is not None:
-            key = (page_idx, self._underlay_bucket())
-            if key not in self._image_cache:
-                self._image_cache[key] = self._request_underlay(key[0], key[1])
-            self.layout_canvas.set_underlay(self._image_cache.get(key))
-        self.layout_canvas.set_show_underlay(show)
+        # 重ね表示のときだけ、文字データ側に薄い下敷きを敷く
+        if mode == "overlay":
+            pix = self._fetch_page_image(page_idx, self.layout_canvas)
+            self.layout_canvas.set_underlay(pix)
+        self.layout_canvas.set_show_underlay(mode == "overlay")
+        # 見比べモードでは、左ペインに元の画像をそのまま出す
+        if mode == "compare":
+            pix = self._fetch_page_image(page_idx, self.image_canvas)
+            self.image_canvas.set_image(pix)
+
+    # --- 重ね表示の微調整（下敷き画像だけをずらす） ---
+
+    NUDGE_LIMIT_PT = 30.0
+
+    def underlay_offset(self):
+        """下敷き画像の微調整量 (dx, dy)（ページ座標 pt）を返す。"""
+        return (self._underlay_offset.x(), self._underlay_offset.y())
+
+    def _nudge_underlay(self, dx, dy):
+        """下敷き画像だけを (dx, dy) pt ずらす（±30pt までに制限）。"""
+        limit = self.NUDGE_LIMIT_PT
+        new_x = max(-limit, min(limit, self._underlay_offset.x() + float(dx)))
+        new_y = max(-limit, min(limit, self._underlay_offset.y() + float(dy)))
+        self._underlay_offset = QPointF(new_x, new_y)
+        self.layout_canvas.set_underlay_offset(self._underlay_offset)
+        self._update_nudge_label()
+
+    def _reset_underlay_offset(self):
+        self._underlay_offset = QPointF(0.0, 0.0)
+        self.layout_canvas.set_underlay_offset(self._underlay_offset)
+        self._update_nudge_label()
+
+    def _update_nudge_label(self):
+        lbl = getattr(self, "lbl_nudge", None)
+        if lbl is not None:
+            lbl.setText(
+                f"({self._underlay_offset.x():+.1f}, "
+                f"{self._underlay_offset.y():+.1f}) pt"
+            )
 
     def _on_layout_join_clicked(self):
         spans = self.layout_canvas.selected_spans()

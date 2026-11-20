@@ -115,6 +115,12 @@ def _span_record(page, line, span):
     座標系は PDF内文字トークン（PDFViewer._get_page_pdf_text_tokens）と同じ流儀:
     - rect / origin: 表示座標（ページの見た目どおり。配置表示の描画に使う）
     - raw_rect / pos / baseline_pos: 回転なしの生座標（注釈・墨消しに使う）
+
+    注意: get_text の bbox / origin は「回転を適用する前」の座標系
+    （CropBox の左上が原点）で返る一方、ページ矩形（page.rect）や
+    描画した画像（pixmap）は回転後の表示座標になる。回転のあるページでは
+    そのまま描くと画像と文字が系統的にずれるため、表示座標は
+    page.rotation_matrix で回転後の座標にそろえる（回転0では恒等変換）。
     """
     text = str(span.get("text", ""))
     if not text.strip():
@@ -135,24 +141,30 @@ def _span_record(page, line, span):
 
     origin = span.get("origin")
     if origin:
-        view_base = fitz.Point(float(origin[0]), float(origin[1]))
+        text_base = fitz.Point(float(origin[0]), float(origin[1]))
     else:
-        view_base = fitz.Point(
+        text_base = fitz.Point(
             bbox.x0 - dy * size * 0.88,
             bbox.y0 + dx * size * 0.88,
         )
-    view_top = fitz.Point(
-        view_base.x + dy * size * 0.88,
-        view_base.y - dx * size * 0.88,
+    text_top = fitz.Point(
+        text_base.x + dy * size * 0.88,
+        text_base.y - dx * size * 0.88,
     )
 
-    raw_rect = view_rect_to_raw_rect(page, bbox)
+    # 回転前の座標（text_base / text_top / bbox）を表示座標へそろえる
+    rot_matrix = page.rotation_matrix
+    view_bbox = bbox * rot_matrix
+    view_base = text_base * rot_matrix
+    view_top = text_top * rot_matrix
+
+    raw_rect = view_rect_to_raw_rect(page, view_bbox)
     raw_base = view_point_to_raw_pdf(page, view_base)
     raw_top = view_point_to_raw_pdf(page, view_top)
 
     return {
         "text": text,
-        "rect": (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+        "rect": (view_bbox.x0, view_bbox.y0, view_bbox.x1, view_bbox.y1),
         "raw_rect": (raw_rect.x0, raw_rect.y0, raw_rect.x1, raw_rect.y1),
         "origin": (view_base.x, view_base.y),
         "fontsize": round(max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, size)), 1),
