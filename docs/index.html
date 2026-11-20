@@ -46,7 +46,7 @@ a{color:var(--red)}
 <img class="icon" src="assets/kinako_pdf.png" alt="きなこPDFのアイコン">
 <h1>きなこPDF</h1>
 <p class="tagline">無料PDF編集ソフト・完全ローカルで安全</p>
-<p class="catch">無料で使えるPDF編集ソフトです。<br>クラウドへのアップロードは、一切ありません。<br>PDFの処理はすべて、自分のパソコンの中で行います。</p>
+<p class="catch">無料で使えるPDF編集ソフトです。<br>完全ローカルで、書類を外に送らない安心設計。<br>PDFの処理はすべて、自分のパソコンの中で完結します。</p>
 <p class="center"><a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.4/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a></p>
 <p><small>現在の安定版は v1.0.4（2026-11-20公開）です。インストール不要。ダウンロードしてダブルクリックするだけで起動します。USBメモリに入れて持ち運ぶこともできます。exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <p class="center"><a href="chromebook.html">Chromebookの方はこちら →</a></p>
@@ -63,17 +63,17 @@ a{color:var(--red)}
 <h2>なぜ作ったのか</h2>
 <p>個人情報の流出のニュースは、あとを絶ちません。便利なAIに書類をアップロードすれば、面倒な作業は一瞬で片付きます。しかし、その書類の中には、名前や住所、金額など、大切な個人情報が入っています。</p>
 <p>きなこPDFは、そんな不安から生まれました。<strong>AIにアップロードする前に、自分のパソコンの中で個人情報を消しておくためのソフト</strong>です。墨消しで名前や住所を物理的に消してからアップロードすれば、大切な情報を外に出さずにすみます。</p>
-<p>作ったのは大きな会社ではなく、個人です。だからこそ「自分の大切な書類を、自分で守れる道具」を目指しました。派手な機能はありませんが、安心して使えることをいちばんに考えて作っています。</p>
+<p>作ったのは大きな会社ではなく、個人です。だからこそ「自分の大切な書類を、自分で守れる道具」を目指しました。機能の派手さよりも、安心して使えることをいちばんに考えて作っています。</p>
 </div>
 
 <div class="card">
 <h2>安心して使える理由</h2>
 <ul>
-<li><strong>完全ローカル</strong> — PDFの処理はすべて自分のパソコンの中で完結します。書類が外部のサーバーに送られることはありません。</li>
+<li><strong>完全ローカル</strong> — PDFの処理はすべて自分のパソコンの中で完結する設計です。</li>
 <li><strong>オープンソース</strong> — ソースコードをすべて公開しています。中身がどうなっているか、誰でも確認できます。</li>
 <li><strong>使う部品は2つだけ</strong> — 使う部品（ライブラリ）は、画面を作る PyQt6 と、PDFを扱う PyMuPDF の2つだけに絞っています。部品が少なければ、余計なものが混ざる心配も少なくなります。</li>
 </ul>
-<p><small>個人制作のソフトのため、Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。これは、まだ広く知られていない個人のソフトに出やすいもので、ウイルスということではありません。不安な方は、上の「オープンソース」のソースコードをご確認ください。</small></p>
+<p><small>個人制作のソフトのため、Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。これは、まだ広く知られていない個人のソフトに出やすい表示で、ウイルス感染の警告とは別ものです。不安な方は、上の「オープンソース」のソースコードをご確認ください。</small></p>
 </div>
 </section>
 
@@ -81,11 +81,11 @@ a{color:var(--red)}
 <h2>できること</h2>
 <div class="card">
 <ul>
-<li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 文字を上から塗りつぶすのではありません。選んだ文字や画像のデータを完全に削除し、復旧できないようにします。だから、保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
+<li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 上から塗りつぶす方式とは違い、選んだ文字や画像のデータを完全に削除し、復旧できないようにします。だから、保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
 <li><span class="pill">編集</span><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
 <li><span class="pill">編集</span><strong>ペン・マーカー・トリミング・回転・折りたたみ表示</strong> — ページの並べ替え・挿入・削除も。折りたたみ表示は、ページの一部の帯を隠して詰めて表示する機能です（表示だけ・PDFは変わりません）</li>
 <li><span class="pill">読む</span><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます（表紙の有無も選べます）。通常画面で全ページを縦にスクロールして読む表示もあります</li>
-<li><span class="pill">OCR</span><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、文字を外部のサービスに送ることはありません。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
+<li><span class="pill">OCR</span><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、処理はパソコンの中で完結します。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
 <li><span class="pill">計算</span><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
 <li><span class="pill">便利</span><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
 <li><span class="pill">便利</span><strong>Excel出力</strong> — PDFの表をExcel（.xlsx）に書き出せます</li>
@@ -139,7 +139,7 @@ a{color:var(--red)}
 <h2>ライセンス・ソースコード公開</h2>
 <p>きなこPDFはオープンソース（AGPL-3.0）で公開しています。使っている PyQt6（GPLv3）と PyMuPDF（AGPLv3）の条件に合わせ、ソースコードとライセンス表示を一緒に配布しています。</p>
 <p><a href="https://github.com/kinakopdf/kinakopdf">ソースコード（GitHub）</a> / <a href="https://github.com/kinakopdf/kinakopdf/blob/main/LICENSE">ライセンス・サードパーティ表示</a></p>
-<p><small>詳しくは配布物に同梱の THIRD_PARTY_NOTICES をご覧ください。これは法律相談ではありません。</small></p>
+<p><small>詳しくは配布物に同梱の THIRD_PARTY_NOTICES をご覧ください。</small></p>
 </section>
 
 <footer>
