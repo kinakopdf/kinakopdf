@@ -2452,12 +2452,12 @@ class MainWindow(QMainWindow):
                 extract_page_spans(doc, annotations),
             )
 
-        def _image(page_idx):
+        def _image(page_idx, zoom=2.0):
             from PyQt6.QtGui import QPixmap
 
             try:
                 data = render_page_png_bytes(
-                    doc, page_idx, self.viewer.page_annotations
+                    doc, page_idx, self.viewer.page_annotations, zoom=zoom
                 )
             except Exception:
                 return None

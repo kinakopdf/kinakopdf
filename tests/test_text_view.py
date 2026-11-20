@@ -562,3 +562,173 @@ class TestApplyTextReplacement(_WindowTestBase):
         self.assertEqual(win._text_data_session["pages"], {})
         self.assertEqual(win._text_data_session["join"], {})
         self.assertIsNone(win._text_data_session["all"])
+
+
+class TestLargeDialogSize(_QtTestBase):
+    def test_helper_is_large_but_within_screen(self):
+        from PyQt6.QtGui import QGuiApplication
+
+        from ui.text_data_dialog import large_dialog_size
+
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        size = large_dialog_size()
+        self.assertLessEqual(size.width(), avail.width())
+        self.assertLessEqual(size.height(), avail.height())
+        self.assertGreaterEqual(size.width(), int(avail.width() * 0.7))
+        self.assertGreaterEqual(size.height(), int(avail.height() * 0.7))
+
+    def test_dialog_opens_large(self):
+        from PyQt6.QtGui import QGuiApplication
+
+        from ui.text_data_dialog import TextDataDialog
+
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        dlg = TextDataDialog(["本文"])
+        try:
+            self.assertGreaterEqual(dlg.width(), int(avail.width() * 0.7))
+            self.assertGreaterEqual(dlg.height(), int(avail.height() * 0.7))
+            self.assertLessEqual(dlg.width(), avail.width())
+            self.assertLessEqual(dlg.height(), avail.height())
+        finally:
+            dlg.close()
+
+
+def _send_mouse(canvas, kind, pos, button, buttons):
+    from PyQt6.QtCore import QEvent, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+
+    event = QMouseEvent(
+        kind,
+        QPointF(pos),
+        button,
+        buttons,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    if kind == QEvent.Type.MouseButtonPress:
+        canvas.mousePressEvent(event)
+    elif kind == QEvent.Type.MouseMove:
+        canvas.mouseMoveEvent(event)
+    else:
+        canvas.mouseReleaseEvent(event)
+
+
+class TestLayoutCanvasZoom(_QtTestBase):
+    def _canvas(self, spans=None):
+        from ui.text_data_dialog import LayoutCanvas
+
+        canvas = LayoutCanvas()
+        canvas.resize(400, 300)
+        if spans is None:
+            spans = [_fake_span("これは", 20, 40), _fake_span("テストです", 20, 70)]
+        canvas.set_page((0.0, 0.0, 400.0, 400.0), spans)
+        return canvas
+
+    def _click(self, canvas, point):
+        from PyQt6.QtCore import QEvent, Qt
+
+        _send_mouse(
+            canvas, QEvent.Type.MouseButtonPress, point,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        )
+        _send_mouse(
+            canvas, QEvent.Type.MouseButtonRelease, point,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        )
+
+    def _span_center(self, canvas, idx):
+        area, scale = canvas._page_area()
+        rect = canvas._span_widget_rect(canvas._spans[idx], area, scale)
+        return rect.center()
+
+    def test_zoom_changes_effective_scale_and_clamps(self):
+        from PyQt6.QtCore import QPointF
+
+        canvas = self._canvas()
+        base = canvas.effective_scale()
+        self.assertGreater(base, 0)
+        canvas.set_zoom(2.0)
+        self.assertEqual(canvas.zoom_factor(), 2.0)
+        self.assertAlmostEqual(canvas.effective_scale(), base * 2.0)
+        canvas.set_zoom(100.0)
+        self.assertEqual(canvas.zoom_factor(), canvas.MAX_ZOOM)
+        canvas.set_zoom(0.01)
+        self.assertEqual(canvas.zoom_factor(), canvas.MIN_ZOOM)
+        canvas.zoom_fit()
+        self.assertEqual(canvas.zoom_factor(), 1.0)
+        self.assertEqual(canvas.pan_offset(), QPointF(0.0, 0.0))
+
+    def test_click_selects_span_at_fit(self):
+        canvas = self._canvas()
+        self._click(canvas, self._span_center(canvas, 1))
+        self.assertEqual(canvas.selected_indices(), [1])
+        self._click(canvas, self._span_center(canvas, 1))
+        self.assertEqual(canvas.selected_indices(), [])
+
+    def test_hit_testing_at_zoomed_and_panned_state(self):
+        from PyQt6.QtCore import QPointF
+
+        canvas = self._canvas(spans=[_fake_span("中央の文字", 180, 200)])
+        canvas.set_zoom(2.0)
+        canvas.set_pan_offset(QPointF(35.0, 25.0))
+        center = self._span_center(canvas, 0)
+        self.assertTrue(canvas.rect().contains(center.toPoint()))
+        self._click(canvas, center)
+        self.assertEqual(canvas.selected_indices(), [0])
+
+    def test_drag_pans_instead_of_selecting(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+
+        canvas = self._canvas(spans=[_fake_span("中央の文字", 180, 200)])
+        canvas.set_zoom(2.0)
+        start = self._span_center(canvas, 0)
+        before = canvas.pan_offset()
+        _send_mouse(
+            canvas, QEvent.Type.MouseButtonPress, start,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        )
+        moved = start + QPointF(60.0, 0.0)
+        _send_mouse(
+            canvas, QEvent.Type.MouseMove, moved,
+            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton,
+        )
+        _send_mouse(
+            canvas, QEvent.Type.MouseButtonRelease, moved,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+        )
+        self.assertEqual(canvas.selected_indices(), [])
+        self.assertAlmostEqual(canvas.pan_offset().x(), before.x() + 60.0, places=0)
+        self.assertAlmostEqual(canvas.pan_offset().y(), before.y(), places=0)
+
+
+class TestUnderlayZoomBucket(_QtTestBase):
+    def test_provider_receives_bucketed_zoom(self):
+        from ui.text_data_dialog import TextDataDialog
+
+        calls = []
+
+        def provider(page_idx, zoom=2.0):
+            calls.append((page_idx, zoom))
+            return None
+
+        dlg = TextDataDialog(
+            ["本文"],
+            page_spans=[[_fake_span("本文", 180, 200)]],
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+            image_provider=provider,
+        )
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.layout_canvas.resize(800, 600)
+            dlg.chk_underlay.setChecked(True)
+            # 全体表示（実効倍率1.5）では従来どおり2倍で要求される
+            self.assertIn((0, 2.0), calls)
+            calls.clear()
+            # 4倍ズームで実効倍率が6になるので、上限バケット6で要求される
+            dlg.layout_canvas.set_zoom(4.0)
+            dlg._refresh_underlay()
+            self.assertEqual(calls, [(0, 6.0)])
+            # 同じバケットではキャッシュを使い、取り直さない
+            dlg._refresh_underlay()
+            self.assertEqual(calls, [(0, 6.0)])
+        finally:
+            dlg.close()

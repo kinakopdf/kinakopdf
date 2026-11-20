@@ -15,8 +15,8 @@ session_state にページ単位で保持され、ダイアログを閉じても
 文字の取り出しは core/text_tools が担当し、このファイルは fitz に依存しない
 （単体テストしやすくするため）。
 """
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import QPointF, QRectF, QSize, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen
 from PyQt6.QtWidgets import (
 QApplication,
 QCheckBox,
@@ -48,6 +48,7 @@ HINT_TEXT = (
 LAYOUT_HINT_TEXT = (
 "クリックで文字のかたまり（スパン）を選んだり外したりできます。"
 "バラバラになった文のかたまりを全部選んで「くっつける」を押してください。"
+"拡大・縮小ボタンや Ctrl+ホイールで大きくでき、ドラッグで表示位置を動かせます。"
 )
 APPLY_NOTE_TEXT = (
 "「PDFに反映」を押すと、選んだ部分の元の文字は消えて、つなげた文が同じ場所に"
@@ -79,14 +80,36 @@ _DIALOG_STYLE = (
 )
 
 
+def large_dialog_size(fraction=0.92):
+    """ダイアログの初期サイズとして、画面の利用可能領域の fraction 倍を返す。
+
+    配置表示でページ全体を小さく押し込むと文字が読めなくなるため、
+    画面いっぱいに近く大きく開く。小さい画面では画面サイズまでに抑える。
+    """
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return QSize(1100, 800)
+    avail = screen.availableGeometry()
+    width = min(avail.width(), max(1024, int(avail.width() * fraction)))
+    height = min(avail.height(), max(720, int(avail.height() * fraction)))
+    return QSize(width, height)
+
+
 class LayoutCanvas(QWidget):
     """1ページ分のスパンを元の配置のまま描くキャンバス。
 
     ページ画像の代わりに、抽出された文字データだけを同じ位置・大きさで描く。
     クリックでスパンの選択/解除ができ、選択中はハイライトする。
+    全体表示を基準に 0.5〜4 倍までズームでき、はみ出した部分はドラッグで
+    表示位置を動かして見られる（パン）。文字はベクタ描画なので、
+    拡大してもぼやけない。
     """
 
     selectionChanged = pyqtSignal()
+    viewChanged = pyqtSignal()
+
+    MIN_ZOOM = 0.5
+    MAX_ZOOM = 4.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,6 +118,12 @@ class LayoutCanvas(QWidget):
         self._selected = set()
         self._underlay = None
         self._show_underlay = False
+        self._zoom = 1.0
+        self._pan = QPointF(0.0, 0.0)
+        self._press_pos = None
+        self._press_span = None
+        self._panning = False
+        self._last_pos = None
         self.setMinimumSize(440, 300)
 
     def set_page(self, page_rect, spans):
@@ -102,6 +131,8 @@ class LayoutCanvas(QWidget):
             self._page_rect = tuple(float(v) for v in page_rect)
         self._spans = list(spans or [])
         self._selected = set()
+        # ページが替わったら表示位置だけ戻す（ズーム倍率は維持する）
+        self._pan = QPointF(0.0, 0.0)
         self.update()
 
     def set_underlay(self, pixmap):
@@ -131,16 +162,108 @@ class LayoutCanvas(QWidget):
             self.update()
             self.selectionChanged.emit()
 
-    def _page_area(self):
-        """ウィジェット内に収まるページ表示矩形 (QRectF) と倍率を返す。"""
+    # --- ズームとパン ---
+
+    def zoom_factor(self):
+        return self._zoom
+
+    def pan_offset(self):
+        return QPointF(self._pan)
+
+    def set_pan_offset(self, offset):
+        self._pan = QPointF(offset)
+        self._clamp_pan()
+        self.update()
+
+    def _fit_scale(self):
+        """全体表示（ズーム1倍）のときの、ページ座標→画面ピクセルの倍率。"""
         x0, y0, x1, y1 = self._page_rect
         pw = max(1.0, x1 - x0)
         ph = max(1.0, y1 - y0)
-        scale = min(self.width() / pw, self.height() / ph)
+        return min(self.width() / pw, self.height() / ph)
+
+    def effective_scale(self):
+        """実効倍率（全体表示の倍率 × ズーム）。下敷き画像の解像度決定に使う。"""
+        return self._fit_scale() * self._zoom
+
+    def set_zoom(self, zoom, center=None):
+        """ズーム倍率を変える。center（画面座標）の下にある場所を中心に拡縮する。"""
+        try:
+            new_zoom = float(zoom)
+        except (TypeError, ValueError):
+            return
+        new_zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, new_zoom))
+        if center is None:
+            center = QPointF(self.width() / 2.0, self.height() / 2.0)
+        old_area, old_scale = self._page_area()
+        page_x = page_y = 0.0
+        if old_scale > 0:
+            page_x = (center.x() - old_area.x()) / old_scale
+            page_y = (center.y() - old_area.y()) / old_scale
+        self._zoom = new_zoom
+        new_scale = self.effective_scale()
+        x0, y0, x1, y1 = self._page_rect
+        pw = max(1.0, x1 - x0)
+        ph = max(1.0, y1 - y0)
+        base_ox = (self.width() - pw * new_scale) / 2.0
+        base_oy = (self.height() - ph * new_scale) / 2.0
+        self._pan = QPointF(
+            center.x() - page_x * new_scale - base_ox,
+            center.y() - page_y * new_scale - base_oy,
+        )
+        self._clamp_pan()
+        self.update()
+        self.viewChanged.emit()
+
+    def zoom_in(self):
+        self.set_zoom(self._zoom * 1.25)
+
+    def zoom_out(self):
+        self.set_zoom(self._zoom / 1.25)
+
+    def zoom_fit(self):
+        """全体表示に戻し、表示位置も中央に戻す。"""
+        self._zoom = 1.0
+        self._pan = QPointF(0.0, 0.0)
+        self.update()
+        self.viewChanged.emit()
+
+    def _clamp_pan(self):
+        """ページが画面から消え切らない範囲に表示位置を収める。"""
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        scale = self.effective_scale()
+        x0, y0, x1, y1 = self._page_rect
+        pw = max(1.0, x1 - x0)
+        ph = max(1.0, y1 - y0)
         disp_w = pw * scale
         disp_h = ph * scale
-        ox = (self.width() - disp_w) / 2.0
-        oy = (self.height() - disp_h) / 2.0
+        margin = 48.0
+        base_ox = (self.width() - disp_w) / 2.0
+        base_oy = (self.height() - disp_h) / 2.0
+        min_px = (margin - disp_w) - base_ox
+        max_px = (self.width() - margin) - base_ox
+        min_py = (margin - disp_h) - base_oy
+        max_py = (self.height() - margin) - base_oy
+        self._pan = QPointF(
+            max(min_px, min(max_px, self._pan.x())),
+            max(min_py, min(max_py, self._pan.y())),
+        )
+
+    def _page_area(self):
+        """ウィジェット内のページ表示矩形 (QRectF) と実効倍率を返す。
+
+        ズームとパンを込みで計算するので、描画とクリック判定は
+        常にこの結果を共有してずれない。
+        """
+        x0, y0, x1, y1 = self._page_rect
+        pw = max(1.0, x1 - x0)
+        ph = max(1.0, y1 - y0)
+        scale = self._fit_scale() * self._zoom
+        disp_w = pw * scale
+        disp_h = ph * scale
+        ox = (self.width() - disp_w) / 2.0 + self._pan.x()
+        oy = (self.height() - disp_h) / 2.0 + self._pan.y()
         return QRectF(ox, oy, disp_w, disp_h), scale
 
     def _span_widget_rect(self, span, area, scale):
@@ -201,22 +324,86 @@ class LayoutCanvas(QWidget):
             )
         painter.end()
 
-    def mousePressEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
+    def _hit_span(self, pos):
+        """画面座標 pos の下にあるスパンの番号を返す（なければ None）。"""
         area, scale = self._page_area()
-        pos = event.position()
         # 後ろに描かれたスパンほど手前にあるものとして、逆順に判定する
         for idx in range(len(self._spans) - 1, -1, -1):
             wrect = self._span_widget_rect(self._spans[idx], area, scale)
             if wrect.adjusted(-2, -2, 2, 2).contains(pos):
-                if idx in self._selected:
-                    self._selected.discard(idx)
-                else:
-                    self._selected.add(idx)
-                self.update()
-                self.selectionChanged.emit()
+                return idx
+        return None
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        # 選択の確定はリリース時。ドラッグしたらパンに切り替える
+        self._press_pos = event.position()
+        self._last_pos = event.position()
+        self._press_span = self._hit_span(event.position())
+        self._panning = False
+
+    def mouseMoveEvent(self, event):
+        if self._press_pos is None:
+            return
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        pos = event.position()
+        if not self._panning:
+            if (pos - self._press_pos).manhattanLength() <= 5.0:
+                self._last_pos = pos
                 return
+            self._panning = True
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        self._pan += pos - self._last_pos
+        self._last_pos = pos
+        self._clamp_pan()
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        was_panning = self._panning
+        press_span = self._press_span
+        self._press_pos = None
+        self._press_span = None
+        self._last_pos = None
+        self._panning = False
+        self.unsetCursor()
+        if was_panning or press_span is None:
+            return
+        # 押し始めと離した場所が同じスパンの上ならクリックとみなす
+        if self._hit_span(event.position()) != press_span:
+            return
+        if press_span in self._selected:
+            self._selected.discard(press_span)
+        else:
+            self._selected.add(press_span)
+        self.update()
+        self.selectionChanged.emit()
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            steps = event.angleDelta().y() / 120.0
+            if steps:
+                self.set_zoom(
+                    self._zoom * (1.2 ** steps), center=event.position()
+                )
+            event.accept()
+            return
+        delta = event.angleDelta()
+        if delta.x() or delta.y():
+            # 通常のホイールは表示位置のスクロール（パン）として扱う
+            self._pan += QPointF(delta.x() * 0.5, delta.y() * 0.5)
+            self._clamp_pan()
+            self.update()
+            event.accept()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._clamp_pan()
+        # 全体表示の倍率が変わるので、下敷き解像度などの追随用に通知する
+        self.viewChanged.emit()
 
 
 class TextDataDialog(QDialog):
@@ -257,9 +444,17 @@ class TextDataDialog(QDialog):
         self._image_provider = image_provider
         self._image_cache = {}
         self._loading = False
+        # ズーム変更が連続したときに、下敷き画像の取り直しをまとめるタイマー
+        self._underlay_timer = QTimer(self)
+        self._underlay_timer.setSingleShot(True)
+        self._underlay_timer.timeout.connect(self._refresh_underlay)
 
         self.setWindowTitle("文字データ")
-        self.setMinimumSize(640, 560)
+        default_size = large_dialog_size()
+        self.resize(default_size)
+        self.setMinimumSize(
+            min(1024, default_size.width()), min(720, default_size.height())
+        )
         self.setStyleSheet(_DIALOG_STYLE)
 
         layout = QVBoxLayout(self)
@@ -284,7 +479,7 @@ class TextDataDialog(QDialog):
         self.tabs.addTab(self._build_layout_tab(), "配置表示")
         self.tabs.addTab(self._build_text_tab(), "テキスト表示")
         self.tabs.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self.tabs)
+        layout.addWidget(self.tabs, 1)
 
         bottom_row = QHBoxLayout()
         self.lbl_status = QLabel("")
@@ -308,15 +503,37 @@ class TextDataDialog(QDialog):
         v.addWidget(hint)
 
         self.layout_canvas = LayoutCanvas()
-        v.addWidget(self.layout_canvas, 1)
+        self.layout_canvas.viewChanged.connect(self._on_canvas_view_changed)
 
-        opt_row = QHBoxLayout()
+        zoom_row = QHBoxLayout()
+        self.btn_zoom_in = QPushButton("拡大")
+        self.btn_zoom_in.setToolTip(
+            "文字を大きく表示します（キャンバス上で Ctrl+ホイールでも拡大できます）"
+        )
+        self.btn_zoom_in.clicked.connect(self.layout_canvas.zoom_in)
+        zoom_row.addWidget(self.btn_zoom_in)
+        self.btn_zoom_out = QPushButton("縮小")
+        self.btn_zoom_out.setToolTip("表示を小さくします")
+        self.btn_zoom_out.clicked.connect(self.layout_canvas.zoom_out)
+        zoom_row.addWidget(self.btn_zoom_out)
+        self.btn_zoom_fit = QPushButton("全体表示")
+        self.btn_zoom_fit.setToolTip("ページ全体が見える大きさと位置に戻します")
+        self.btn_zoom_fit.clicked.connect(self.layout_canvas.zoom_fit)
+        zoom_row.addWidget(self.btn_zoom_fit)
+        self.lbl_zoom = QLabel("100%")
+        zoom_row.addWidget(self.lbl_zoom)
+        zoom_row.addStretch(1)
         self.chk_underlay = QCheckBox("元の画像を薄く重ねる")
         self.chk_underlay.setToolTip(
             "ページの画像を薄く下に敷いて、文字データの位置と見比べられます"
         )
         self.chk_underlay.toggled.connect(self._on_underlay_toggled)
-        opt_row.addWidget(self.chk_underlay)
+        zoom_row.addWidget(self.chk_underlay)
+        v.addLayout(zoom_row)
+
+        v.addWidget(self.layout_canvas, 1)
+
+        opt_row = QHBoxLayout()
         opt_row.addStretch(1)
         self.btn_layout_join = QPushButton("くっつける")
         self.btn_layout_join.setToolTip(
@@ -523,16 +740,49 @@ class TextDataDialog(QDialog):
     def _on_underlay_toggled(self, checked):
         self._refresh_underlay()
 
+    def _on_canvas_view_changed(self):
+        lbl = getattr(self, "lbl_zoom", None)
+        if lbl is not None:
+            percent = int(round(self.layout_canvas.zoom_factor() * 100))
+            lbl.setText(f"{percent}%")
+        chk = getattr(self, "chk_underlay", None)
+        if chk is not None and chk.isChecked():
+            # ズーム操作は連続するので、少し待ってから下敷きを取り直す
+            self._underlay_timer.start(250)
+
+    def _underlay_bucket(self):
+        """現在の表示倍率に見合う、下敷き画像の描画ズーム（2/3/4/6）を返す。
+
+        画面に出る大きさ × デバイスピクセル比ぶんの解像度が要るので、
+        実効倍率を満たす一番小さい段階を選ぶ（上限は6倍）。
+        """
+        need = self.layout_canvas.effective_scale()
+        need *= self.layout_canvas.devicePixelRatioF() or 1.0
+        for bucket in (2.0, 3.0, 4.0, 6.0):
+            if need <= bucket:
+                return bucket
+        return 6.0
+
+    def _request_underlay(self, page_idx, zoom):
+        try:
+            return self._image_provider(page_idx, zoom)
+        except TypeError:
+            # ズーム引数に未対応の提供側（従来形式）でも動くようにする
+            try:
+                return self._image_provider(page_idx)
+            except Exception:
+                return None
+        except Exception:
+            return None
+
     def _refresh_underlay(self):
         show = self.chk_underlay.isChecked()
         page_idx = self._layout_page_idx()
         if show and page_idx is not None and self._image_provider is not None:
-            if page_idx not in self._image_cache:
-                try:
-                    self._image_cache[page_idx] = self._image_provider(page_idx)
-                except Exception:
-                    self._image_cache[page_idx] = None
-            self.layout_canvas.set_underlay(self._image_cache.get(page_idx))
+            key = (page_idx, self._underlay_bucket())
+            if key not in self._image_cache:
+                self._image_cache[key] = self._request_underlay(key[0], key[1])
+            self.layout_canvas.set_underlay(self._image_cache.get(key))
         self.layout_canvas.set_show_underlay(show)
 
     def _on_layout_join_clicked(self):
@@ -569,7 +819,8 @@ class TextDataDialog(QDialog):
         self._session["pages"].pop(page_idx, None)
         self._session["join"].pop(page_idx, None)
         self._session["all"] = None
-        self._image_cache.pop(page_idx, None)
+        for key in [k for k in self._image_cache if k[0] == page_idx]:
+            del self._image_cache[key]
         if self._refresh_handler is not None:
             try:
                 page_texts, page_spans = self._refresh_handler()
