@@ -440,15 +440,24 @@ def find_pdf_token_at_point(
     raw_pt: fitz.Point,
     padding: float = 1.5,
 ) -> Optional[Dict[str, Any]]:
-    """消去済み領域を除外した上で、PDF座標 raw_pt にヒットするPDF内文字トークンを返す"""
+    """消去済み領域を除外した上で、PDF座標 raw_pt にヒットするPDF内文字トークンを返す
+
+    注釈由来のトークン（ann_idx 付き）は、注釈自身の redact_rect を含む
+    消去矩形と重なって存在するのが正常なので、消去済みチェックの対象外
+    とし、元の文字のトークンより先に判定する（置換テキストを優先）。
+    """
     if not tokens:
         return None
     erased_rects = collect_all_erased_raw_rects(ann_list)
-    for token in tokens:
+    ordered = [t for t in tokens if t.get("ann_idx") is not None]
+    ordered += [t for t in tokens if t.get("ann_idx") is None]
+    for token in ordered:
         r = fitz.Rect(token["raw_rect"])
         r.normalize()
         center = fitz.Point((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5)
-        if any(er.contains(center) for er in erased_rects):
+        if token.get("ann_idx") is None and any(
+            er.contains(center) for er in erased_rects
+        ):
             continue
         hit_r = fitz.Rect(r.x0 - padding, r.y0 - padding, r.x1 + padding, r.y1 + padding)
         if hit_r.contains(raw_pt):
@@ -482,6 +491,10 @@ def find_text_targets_in_rect(
     erased_rects = collect_all_erased_raw_rects(ann_list)
     matched_tokens: List[Dict[str, Any]] = []
     for token in (tokens or []):
+        # 注釈由来のトークンは matched_ann_indices 側で処理されるので、
+        # ここで二重に数えない（余分な墨消しを足してしまうため）。
+        if token.get("ann_idx") is not None:
+            continue
         r = fitz.Rect(token["raw_rect"])
         r.normalize()
         center = fitz.Point((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5)

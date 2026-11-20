@@ -2197,3 +2197,342 @@ class TestTokenEditInvisible(_WindowTestBase):
         ann = viewer.page_annotations[0][-1]
         self.assertEqual(ann["type"], "text")
         self.assertFalse(ann.get("invisible"))
+
+
+# ==========================================
+# 置換テキストをテキスト編集コマンドで再び選べること
+# ==========================================
+
+
+class _FakeEditDialog:
+    """TextEditDeleteDialog の代役。開かれたときの内容を記録し、
+    next_action / next_text で指定した結果を返す。"""
+
+    ACTION_NONE = None
+    ACTION_UPDATE = "update"
+    ACTION_DELETE = "delete"
+
+    next_action = "update"
+    next_text = ""
+    instances = []
+
+    def __init__(self, text, fontsize, color, is_pdf_origin=False,
+                 is_new=False, parent=None):
+        self.result_action = self.next_action
+        self._text = self.next_text
+        self._fontsize = fontsize
+        self._color = color
+        type(self).instances.append(
+            {"text": text, "is_pdf_origin": is_pdf_origin}
+        )
+
+    def exec(self):
+        from PyQt6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Accepted
+
+    def get_clean_text(self):
+        return self._text
+
+    def get_fontsize(self):
+        return self._fontsize
+
+    def get_color(self):
+        return self._color
+
+
+class TestFindPdfTokenAtPointAnnTokens(unittest.TestCase):
+    """find_pdf_token_at_point: 注釈由来トークンは自身の消去矩形に
+    重なっていても除外されず、元の文字より優先されること。"""
+
+    def test_ann_token_not_excluded_by_own_redact_rect(self):
+        from core import build_text_annotation, find_pdf_token_at_point
+
+        ann = build_text_annotation(
+            text="置換文",
+            pos=(20.0, 30.0),
+            baseline_pos=(20.0, 40.0),
+            fontsize=12.0,
+            color=(0.0, 0.0, 0.0),
+            rotation=0,
+            redact_rect=(20.0, 28.0, 90.0, 42.0),
+            invisible=True,
+        )
+        ann_list = [
+            {
+                "type": "text_redact",
+                "rect": (20.0, 28.0, 56.0, 42.0),
+                "keep_image": True,
+            },
+            ann,
+        ]
+        ann_token = {
+            "text": "置換文",
+            "raw_rect": (20.0, 28.0, 90.0, 42.0),
+            "ann_idx": 1,
+        }
+        hit = find_pdf_token_at_point(
+            [ann_token], ann_list, fitz.Point(30.0, 35.0)
+        )
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["text"], "置換文")
+
+    def test_live_token_in_erased_rect_still_excluded(self):
+        from core import find_pdf_token_at_point
+
+        ann_list = [{"type": "text_redact", "rect": (20.0, 28.0, 56.0, 42.0)}]
+        live = {"text": "元の文字", "raw_rect": (20.0, 28.0, 56.0, 42.0)}
+        self.assertIsNone(
+            find_pdf_token_at_point([live], ann_list, fitz.Point(30.0, 35.0))
+        )
+
+
+class TestReplacementSelectableByTextEdit(_WindowTestBase):
+    """「PDFに反映」した置換テキストが、メイン画面のテキスト編集
+    コマンドでも選べて、注釈として編集・削除できること。"""
+
+    def _apply_fragments(self, pdf_bytes, name):
+        path = Path(self._tmp.name) / name
+        path.write_bytes(pdf_bytes)
+        self._open(str(path))
+        win = self.window
+        viewer = win.viewer
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        frag = [
+            sp for sp in spans[0] if sp["text"] in ("これは", "テストです")
+        ]
+        self.assertEqual(len(frag), 2)
+        joined = join_span_texts([sp["text"] for sp in frag])
+        self.assertEqual(joined, "これはテストです")
+        self.assertTrue(win._apply_text_data_replacement(0, frag, joined))
+        self._app.processEvents()
+        return frag
+
+    def _text_ann_idx(self):
+        anns = self.window.viewer.page_annotations[0]
+        idxs = [i for i, a in enumerate(anns) if a.get("type") == "text"]
+        self.assertEqual(len(idxs), 1)
+        return idxs[0]
+
+    def _scene_pos_at(self, view_rect):
+        from PyQt6.QtCore import QPointF
+
+        viewer = self.window.viewer
+        cx = (view_rect[0] + view_rect[2]) / 2.0
+        cy = (view_rect[1] + view_rect[3]) / 2.0
+        sx, sy = viewer.pdf_to_scene(fitz.Point(cx, cy))
+        return QPointF(sx, sy)
+
+    def _edit_token_with_fake_dialog(self, token, action, new_text=""):
+        _FakeEditDialog.instances = []
+        _FakeEditDialog.next_action = action
+        _FakeEditDialog.next_text = new_text
+        with mock.patch("ui.pdf_viewer.TextEditDeleteDialog", _FakeEditDialog):
+            self.window.viewer.edit_existing_pdf_token(token)
+        self._app.processEvents()
+        return _FakeEditDialog.instances
+
+    def test_invisible_replacement_lookup_edit_undo(self):
+        frag = self._apply_fragments(_ocr_pdf_bytes(), "ocr.pdf")
+        win = self.window
+        viewer = win.viewer
+        self.assertTrue(win._last_text_data_apply_invisible)
+        ann_idx = self._text_ann_idx()
+
+        # トークン一覧に注釈由来トークンが連結文で入っている
+        tokens = viewer._get_page_pdf_text_tokens()
+        ann_toks = [t for t in tokens if t.get("ann_idx") is not None]
+        self.assertEqual(len(ann_toks), 1)
+        self.assertEqual(ann_toks[0]["text"], "これはテストです")
+        self.assertEqual(ann_toks[0]["ann_idx"], ann_idx)
+        # 注釈と重なる元の断片はトークンとして残らない（関係ない文字は残る）。
+        # なお2行目の断片は注釈の推定BBoxと重ならないため一覧には残るが、
+        # そちらは消去済みチェックで選択対象から外れる（次項で確認）。
+        live_texts = [t["text"] for t in tokens if t.get("ann_idx") is None]
+        self.assertNotIn("これは", live_texts)
+        self.assertIn("関係ない文字", live_texts)
+
+        # 2行目の断片の場所でも、元トークンは選ばれない（消去済み）
+        pos2 = self._scene_pos_at(frag[1]["rect"])
+        self.assertIsNone(viewer._find_pdf_text_token_at_scene_pos(pos2))
+
+        # 置換テキストの場所ではトークンが引ける（以前は None だった）
+        pos = self._scene_pos_at(frag[0]["rect"])
+        token = viewer._find_pdf_text_token_at_scene_pos(pos)
+        self.assertIsNotNone(token)
+        self.assertEqual(token["text"], "これはテストです")
+        self.assertEqual(token["ann_idx"], ann_idx)
+
+        # 不可視なので字形アイテムは無いが、座標判定で注釈に届く
+        item, idx = viewer._find_text_item_at_scene_pos(pos)
+        self.assertIsNone(item)
+        self.assertEqual(idx, ann_idx)
+
+        # 編集: ダイアログには現在の連結文が渡り、注釈そのものが更新される
+        instances = self._edit_token_with_fake_dialog(
+            token, "update", "直した文です"
+        )
+        self.assertEqual(len(instances), 1)
+        self.assertEqual(instances[0]["text"], "これはテストです")
+
+        anns = viewer.page_annotations[0]
+        text_anns = [a for a in anns if a.get("type") == "text"]
+        self.assertEqual(len(text_anns), 1)
+        self.assertEqual(text_anns[0]["text"], "直した文です")
+        # 不可視のまま、断片の消去（keep_image）も維持される
+        self.assertTrue(text_anns[0].get("invisible"))
+        redact_anns = [a for a in anns if a.get("type") == "text_redact"]
+        self.assertEqual(len(redact_anns), 2)
+        self.assertTrue(all(a.get("keep_image") for a in redact_anns))
+
+        # 焼き込み（＝文字データ画面の抽出）でも直した文だけが見える
+        texts_after = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        self.assertIn("直した文です", texts_after)
+        self.assertNotIn("これはテストです", texts_after)
+
+        # Undoで連結文に戻り、Redoで再び直した文になる
+        viewer.history.undo(viewer)
+        anns = viewer.page_annotations[0]
+        text_anns = [a for a in anns if a.get("type") == "text"]
+        self.assertEqual(text_anns[0]["text"], "これはテストです")
+        self.assertTrue(text_anns[0].get("invisible"))
+        viewer.history.redo(viewer)
+        anns = viewer.page_annotations[0]
+        text_anns = [a for a in anns if a.get("type") == "text"]
+        self.assertEqual(text_anns[0]["text"], "直した文です")
+
+    def test_visible_replacement_lookup_and_edit(self):
+        frag = self._apply_fragments(_make_jp_pdf_bytes(), "frag.pdf")
+        win = self.window
+        viewer = win.viewer
+        self.assertFalse(win._last_text_data_apply_invisible)
+        ann_idx = self._text_ann_idx()
+
+        pos = self._scene_pos_at(frag[0]["rect"])
+        token = viewer._find_pdf_text_token_at_scene_pos(pos)
+        self.assertIsNotNone(token)
+        self.assertEqual(token["text"], "これはテストです")
+        self.assertEqual(token["ann_idx"], ann_idx)
+
+        # 可視の置換は従来どおり字形アイテムでもヒットする
+        item, idx = viewer._find_text_item_at_scene_pos(pos)
+        self.assertIsNotNone(item)
+        self.assertEqual(idx, ann_idx)
+
+        instances = self._edit_token_with_fake_dialog(
+            token, "update", "書き換えた文"
+        )
+        self.assertEqual(instances[0]["text"], "これはテストです")
+        anns = viewer.page_annotations[0]
+        text_anns = [a for a in anns if a.get("type") == "text"]
+        self.assertEqual(len(text_anns), 1)
+        self.assertEqual(text_anns[0]["text"], "書き換えた文")
+        self.assertFalse(text_anns[0].get("invisible"))
+        redact_anns = [a for a in anns if a.get("type") == "text_redact"]
+        self.assertTrue(redact_anns)
+        self.assertTrue(all(not a.get("keep_image") for a in redact_anns))
+
+        # 関係ない文字は従来どおり元トークンとして引ける
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        other = [sp for sp in spans[0] if sp["text"] == "関係ない文字"]
+        self.assertEqual(len(other), 1)
+        otok = viewer._find_pdf_text_token_at_scene_pos(
+            self._scene_pos_at(other[0]["rect"])
+        )
+        self.assertIsNotNone(otok)
+        self.assertEqual(otok["text"], "関係ない文字")
+        self.assertIsNone(otok.get("ann_idx"))
+
+    def test_delete_replacement_via_token(self):
+        self._apply_fragments(_ocr_pdf_bytes(), "ocr.pdf")
+        viewer = self.window.viewer
+        ann_idx = self._text_ann_idx()
+        token = {
+            "text": "これはテストです",
+            "ann_idx": ann_idx,
+            "raw_rect": (0.0, 0.0, 10.0, 10.0),
+            "pos": (0.0, 0.0),
+            "baseline_pos": (0.0, 0.0),
+            "fontsize": 12.0,
+            "color": (0.0, 0.0, 0.0),
+            "rotation": 0,
+        }
+
+        # ダイアログで削除 → 注釈の削除プラン（pop）で消える。
+        # 断片側の墨消しは残るので、元の断片も連結文も焼き込みに出ない。
+        instances = self._edit_token_with_fake_dialog(token, "delete")
+        self.assertEqual(instances[0]["text"], "これはテストです")
+        anns = viewer.page_annotations[0]
+        self.assertEqual(
+            [a for a in anns if a.get("type") == "text"], []
+        )
+        redact_anns = [a for a in anns if a.get("type") == "text_redact"]
+        self.assertEqual(len(redact_anns), 2)
+        self.assertTrue(all(a.get("keep_image") for a in redact_anns))
+        texts_after = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        self.assertNotIn("これはテストです", texts_after)
+        self.assertNotIn("これは", texts_after)
+        self.assertNotIn("テストです", texts_after)
+        self.assertIn("関係ない文字", texts_after)
+
+        # Undoで置換テキストが戻る
+        viewer.history.undo(viewer)
+        self._text_ann_idx()
+
+        # トークン経由の墨消し指定でも、注釈の削除として処理される
+        self.assertTrue(viewer.redact_existing_pdf_token(token))
+        anns = viewer.page_annotations[0]
+        self.assertEqual(
+            [a for a in anns if a.get("type") == "text"], []
+        )
+
+    def test_original_tokens_unaffected_without_replacement(self):
+        path = Path(self._tmp.name) / "frag.pdf"
+        path.write_bytes(_make_jp_pdf_bytes())
+        self._open(str(path))
+        viewer = self.window.viewer
+
+        tokens = viewer._get_page_pdf_text_tokens()
+        self.assertTrue(tokens)
+        self.assertTrue(all(t.get("ann_idx") is None for t in tokens))
+
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        frag = [sp for sp in spans[0] if sp["text"] == "これは"]
+        self.assertEqual(len(frag), 1)
+        token = viewer._find_pdf_text_token_at_scene_pos(
+            self._scene_pos_at(frag[0]["rect"])
+        )
+        self.assertIsNotNone(token)
+        self.assertEqual(token["text"], "これは")
+        self.assertIsNone(token.get("ann_idx"))
+
+    def test_drag_select_returns_joined_text(self):
+        from PyQt6.QtCore import QRectF
+
+        for pdf_bytes, name in (
+            (_ocr_pdf_bytes(), "ocr.pdf"),
+            (_make_jp_pdf_bytes(), "frag.pdf"),
+        ):
+            with self.subTest(name=name):
+                frag = self._apply_fragments(pdf_bytes, name)
+                viewer = self.window.viewer
+                union = fitz.Rect(frag[0]["rect"]) | fitz.Rect(frag[1]["rect"])
+                union.x0 -= 2.0
+                union.y0 -= 2.0
+                union.x1 += 2.0
+                union.y1 += 2.0
+                viewer._finish_text_selection(union, QRectF(0, 0, 10, 10))
+                try:
+                    self.assertEqual(viewer._text_sel_text, "これはテストです")
+                finally:
+                    viewer.clear_text_selection()
