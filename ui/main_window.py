@@ -271,17 +271,35 @@ class MainWindow(QMainWindow):
         act_print.setShortcut(QKeySequence.StandardKey.Print)
         act_print.setToolTip("現在編集中のPDFを印刷します (Ctrl+P)")
 
-        act_excel = self.add_action(top_toolbar, "📊 Excel出力", self.export_to_excel)
-        act_excel.setToolTip("PDF内の表や文字データを追加ライブラリなしでExcel(.xlsx)に変換して保存します")
+        # たまに使う機能は「🧰 その他」メニューにまとめてツールバーをすっきりさせる
+        self.btn_more_features = QToolButton(self)
+        self.btn_more_features.setText("🧰 その他")
+        self.btn_more_features.setToolTip("たまに使う機能はこちらにまとめました（Excel出力・フォルダ読込・新規ウィンドウなど）")
+        self.btn_more_features.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.menu_more_features = QMenu(self)
+        self.btn_more_features.setMenu(self.menu_more_features)
+        top_toolbar.addWidget(self.btn_more_features)
 
-        self.add_action(top_toolbar, "🗔 新規", self.spawn_new_window)
+        act_excel = QAction("📊 Excel出力", self)
+        act_excel.triggered.connect(self.export_to_excel)
+        act_excel.setToolTip("PDF内の表や文字データを追加ライブラリなしでExcel(.xlsx)に変換して保存します")
+        self.menu_more_features.addAction(act_excel)
+        self.act_excel = act_excel
+
+        act_new_window = QAction("🗔 新規", self)
+        act_new_window.triggered.connect(self.spawn_new_window)
+        act_new_window.setToolTip("新しいウィンドウを開きます")
+        self.menu_more_features.addAction(act_new_window)
 
         act_read = self.add_action(top_toolbar, "📖 見開き", self.open_fullscreen_reader)
         act_read.setShortcut(QKeySequence("F5"))
         act_read.setToolTip("現在のPDFを全画面見開きモードで閲覧します (F5)")
 
-        act_folder = self.add_action(top_toolbar, "📚 フォルダ読込", self.open_pdf_folder)
+        act_folder = QAction("📚 フォルダ読込", self)
+        act_folder.triggered.connect(self.open_pdf_folder)
         act_folder.setToolTip("フォルダ内の複数PDFをまとめて1つの本として読み込みます")
+        self.menu_more_features.addAction(act_folder)
+        self.act_folder = act_folder
 
         act_ocr = self.add_action(top_toolbar, "🧼 色抜き・OCR", self.open_scan_clean_ocr_dialog)
         act_ocr.setShortcut(QKeySequence("Ctrl+Shift+O"))
@@ -382,13 +400,11 @@ class MainWindow(QMainWindow):
         self.shortcut_escape.activated.connect(self._on_escape_pressed)
 
         if sys.platform == "win32":
-            top_toolbar.addSeparator()
-            act_default_app = self.add_action(
-                top_toolbar,
-                "⚙ 既定アプリに設定",
-                self.setup_as_default_pdf_app,
-            )
+            act_default_app = QAction("⚙ 既定アプリに設定", self)
+            act_default_app.triggered.connect(self.setup_as_default_pdf_app)
             act_default_app.setToolTip("Windowsの既定のPDFアプリに登録します")
+            self.menu_more_features.addAction(act_default_app)
+            self.act_default_app = act_default_app
 
         self.addToolBarBreak()
 
@@ -413,6 +429,11 @@ class MainWindow(QMainWindow):
             ("🧹 テキスト消去", "text_erase"),
             ("🎯 範囲OCR", "region_ocr"),
         ]
+
+        # 消去系のモードは「🧽 消去」メニューにまとめて、編集ツールバーをすっきりさせる
+        erase_modes = {"highlight_erase", "box_erase", "erase", "text_erase"}
+        self.btn_erase_modes = None
+        self.menu_erase_modes = None
 
         for name, mode in modes:
             action = QAction(name, self)
@@ -439,7 +460,18 @@ class MainWindow(QMainWindow):
                 )
             action.triggered.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_group.addAction(action)
-            edit_toolbar.addAction(action)
+            if mode in erase_modes:
+                if self.btn_erase_modes is None:
+                    self.btn_erase_modes = QToolButton(self)
+                    self.btn_erase_modes.setText("🧽 消去")
+                    self.btn_erase_modes.setToolTip("消すための道具はこちらにまとめました（マーカー消去・範囲墨消し・消しゴム・テキスト消去）")
+                    self.btn_erase_modes.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+                    self.menu_erase_modes = QMenu(self)
+                    self.btn_erase_modes.setMenu(self.menu_erase_modes)
+                    edit_toolbar.addWidget(self.btn_erase_modes)
+                self.menu_erase_modes.addAction(action)
+            else:
+                edit_toolbar.addAction(action)
 
         edit_toolbar.addSeparator()
 
