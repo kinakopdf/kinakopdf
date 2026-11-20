@@ -20,15 +20,28 @@ from core.geometry import (
 
 
 class SpreadItem:
-    """見開き1画面分（単ページまたは左右2ページ）を表すデータクラス"""
+    """見開き1画面分（単ページまたは左右2ページ）を表すデータクラス
 
-    def __init__(self, page_indices: List[int], is_landscape: bool):
+    page_indices は実ページ番号のみ（白紙スロットを含まない）。
+    slots は見開きを構成するスロット列で、実ページ番号か、
+    表示だけの白紙ページを表す None のどちらか。
+    """
+
+    def __init__(
+        self,
+        page_indices: List[int],
+        is_landscape: bool,
+        slots: Optional[List[Optional[int]]] = None,
+    ):
         self.page_indices = list(page_indices)
         self.is_landscape = bool(is_landscape)
+        self.slots: List[Optional[int]] = (
+            list(slots) if slots is not None else list(page_indices)
+        )
 
     @property
     def is_spread(self) -> bool:
-        return len(self.page_indices) == 2
+        return len(self.slots) == 2
 
 
 class SpreadLayoutEngine:
@@ -43,30 +56,85 @@ class SpreadLayoutEngine:
         rect = doc[page_idx].rect
         return rect.width > rect.height
 
+    @staticmethod
+    def build_slot_sequence(
+        page_count: int, blank_counts: Optional[Dict[int, int]] = None
+    ) -> List[Optional[int]]:
+        """ページ番号の列に、表示だけの白紙スロット（None）を差し込んだスロット列を返す。
+
+        blank_counts は {ページ番号: そのページの直前に差し込む白紙の枚数}。
+        PDF 自体は一切変更しない、表示上の並びだけを表す純粋関数。
+        """
+        slots: List[Optional[int]] = []
+        counts = blank_counts or {}
+        for i in range(max(0, int(page_count))):
+            for _ in range(max(0, int(counts.get(i, 0)))):
+                slots.append(None)
+            slots.append(i)
+        return slots
+
+    @classmethod
+    def _make_spread_item(
+        cls, doc: fitz.Document, chunk: List[Optional[int]], fitz_lock=None
+    ) -> SpreadItem:
+        pages = [s for s in chunk if s is not None]
+        is_land = (
+            len(chunk) == 1
+            and chunk[0] is not None
+            and cls.is_page_landscape(doc, chunk[0], fitz_lock)
+        )
+        return SpreadItem(pages, is_land, slots=list(chunk))
+
+    @classmethod
+    def build_spreads_from_slots(
+        cls,
+        doc: fitz.Document,
+        slots: List[Optional[int]],
+        cover_single: bool = True,
+        fitz_lock=None,
+    ) -> List[SpreadItem]:
+        """スロット列から見開きを組み立てる。
+
+        ルールは従来の build_spreads と同じで、白紙スロット（None）は
+        縦向きページと同じように扱う（横向きページは常に単独表示、
+        表紙モードでは先頭スロットが単独表示）。
+        """
+        spreads: List[SpreadItem] = []
+        total = len(slots)
+        i = 0
+        while i < total:
+            slot = slots[i]
+            if i == 0 and cover_single:
+                spreads.append(cls._make_spread_item(doc, [slot], fitz_lock))
+                i += 1
+            elif slot is not None and cls.is_page_landscape(doc, slot, fitz_lock):
+                spreads.append(cls._make_spread_item(doc, [slot], fitz_lock))
+                i += 1
+            else:
+                paired = False
+                if i + 1 < total:
+                    nxt = slots[i + 1]
+                    if nxt is None or not cls.is_page_landscape(doc, nxt, fitz_lock):
+                        spreads.append(
+                            cls._make_spread_item(doc, [slot, nxt], fitz_lock)
+                        )
+                        i += 2
+                        paired = True
+                if not paired:
+                    spreads.append(cls._make_spread_item(doc, [slot], fitz_lock))
+                    i += 1
+        return spreads
+
     @classmethod
     def build_spreads(
         cls, doc: fitz.Document, cover_single: bool = True, fitz_lock=None
     ) -> List[SpreadItem]:
-        spreads: List[SpreadItem] = []
-        total = len(doc)
-        i = 0
-        while i < total:
-            if i == 0 and cover_single:
-                spreads.append(
-                    SpreadItem([0], is_landscape=cls.is_page_landscape(doc, 0, fitz_lock))
-                )
-                i += 1
-            elif cls.is_page_landscape(doc, i, fitz_lock):
-                spreads.append(SpreadItem([i], is_landscape=True))
-                i += 1
-            else:
-                if i + 1 < total and not cls.is_page_landscape(doc, i + 1, fitz_lock):
-                    spreads.append(SpreadItem([i, i + 1], is_landscape=False))
-                    i += 2
-                else:
-                    spreads.append(SpreadItem([i], is_landscape=False))
-                    i += 1
-        return spreads
+        return cls.build_spreads_from_slots(
+            doc,
+            cls.build_slot_sequence(len(doc)),
+            cover_single=cover_single,
+            fitz_lock=fitz_lock,
+        )
 
     @staticmethod
     def apply_zoom_pan_to_entries(

@@ -82,6 +82,7 @@ from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
 from ui.pdf_viewer import PDFViewer
 from ui.region_ocr_ext import DirectViewerRegionOCRController
+from ui.reader_store import ReaderStore
 from ui.spread_reader import FullscreenSpreadReader
 
 
@@ -100,8 +101,13 @@ class MainWindow(QMainWindow):
         self._initial_positioned = False
         self._active_reader = None
         self._active_reader_closed_handler = None
-        # 全画面見開きの表紙の有無（次に開くときも同じ設定を使う）
-        self._reader_cover_single = True
+        # 全画面見開きの表紙の有無・綴じ方向（保存された設定を引き継ぐ）
+        self._reader_store = ReaderStore()
+        _reader_prefs = self._reader_store.get_prefs()
+        self._reader_cover_single = bool(_reader_prefs.get("cover_single", True))
+        self._reader_right_to_left = bool(_reader_prefs.get("right_to_left", False))
+        # 履歴から開いたときだけ使う、見開きのレジューム先 (パス, ページ)
+        self._pending_reader_resume = None
         # 現在の文書が複数ファイルの一括読み込み（フォルダ結合）由来か。
         # True の間は元のファイル群への上書きを防ぐため、保存は別名保存のみ。
         self._current_doc_from_bulk = False
@@ -2198,9 +2204,20 @@ class MainWindow(QMainWindow):
             return
 
         cur_idx = self.viewer.current_page_idx
+        # 一括読み込み由来の文書は単一ファイルではないのでレジューム対象外
+        source_path = None if self._current_doc_from_bulk else self.viewer.current_file
+        resume_page = None
+        if self._pending_reader_resume is not None:
+            pending_path, pending_page = self._pending_reader_resume
+            self._pending_reader_resume = None
+            if source_path and os.path.normcase(pending_path) == os.path.normcase(
+                source_path
+            ):
+                resume_page = pending_page
         self._active_reader = FullscreenSpreadReader(
             doc=self.viewer.current_pdf,
             start_page=cur_idx,
+            right_to_left=self._reader_right_to_left,
             cover_single=self._reader_cover_single,
             annotations=self.viewer.page_annotations,
             draw_annot_callback=PageManager.draw_annotations_on_image,
@@ -2210,16 +2227,43 @@ class MainWindow(QMainWindow):
             fitz_lock=FITZ_LOCK,
             viewer=self.viewer,
             editor_callbacks=self._build_fullscreen_editor_callbacks(),
+            source_path=source_path,
+            resume_page=resume_page,
+            history_open_callback=self.open_file_in_reader_from_history,
+            store=self._reader_store,
             parent=None,
         )
         self._active_reader_closed_handler = self._on_reader_closed
         self._active_reader.closed.connect(self._active_reader_closed_handler)
 
+    def open_file_in_reader_from_history(self, filepath):
+        """見開きリーダーの簡易履歴から選ばれたファイルを、続きから見開きで開く"""
+        filepath = os.path.abspath(filepath)
+        if not os.path.isfile(filepath):
+            QMessageBox.information(
+                self, "履歴", f"ファイルが見つかりませんでした。\n{filepath}"
+            )
+            self._reader_store.remove_entry(filepath)
+            return
+        if not self._close_active_reader():
+            return
+        self.open_file_from_path(filepath)
+        if not self.viewer.current_file or os.path.normcase(
+            self.viewer.current_file
+        ) != os.path.normcase(filepath):
+            # 開くのに失敗した／キャンセルされた場合は何もしない
+            return
+        pos = self._reader_store.get_position(filepath)
+        if pos is not None:
+            self._pending_reader_resume = (filepath, pos)
+        self.open_fullscreen_reader()
+
     def _on_reader_closed(self):
         """全画面を閉じたとき、読んでいたページと編集内容をメインエディタに反映する"""
         if self._active_reader and self.viewer.current_pdf and self._active_reader.spreads:
-            # 表紙の有無の選択を覚えておく（次に開くときも同じ設定）
+            # 表紙の有無・綴じ方向の選択を覚えておく（次に開くときも同じ設定）
             self._reader_cover_single = bool(self._active_reader.cover_single)
+            self._reader_right_to_left = bool(self._active_reader.right_to_left)
             idx = max(0, min(self._active_reader.current_spread_idx, len(self._active_reader.spreads) - 1))
             sp = self._active_reader.spreads[idx]
             edited_page = getattr(self._active_reader, "_last_edited_page_idx", None)
@@ -2335,6 +2379,7 @@ class MainWindow(QMainWindow):
         self._active_reader = FullscreenSpreadReader(
             doc=merged_doc,
             start_page=0,
+            right_to_left=self._reader_right_to_left,
             cover_single=self._reader_cover_single,
             file_manifest=manifest,
             draw_annot_callback=PageManager.draw_annotations_on_image,
@@ -2344,6 +2389,8 @@ class MainWindow(QMainWindow):
             fitz_lock=FITZ_LOCK,
             viewer=None,
             editor_callbacks=self._build_fullscreen_editor_callbacks(),
+            history_open_callback=self.open_file_in_reader_from_history,
+            store=self._reader_store,
             parent=None,
         )
         self._active_reader_closed_handler = self._on_folder_reader_closed
@@ -2353,6 +2400,7 @@ class MainWindow(QMainWindow):
     def _on_folder_reader_closed(self):
         if self._active_reader is not None:
             self._reader_cover_single = bool(self._active_reader.cover_single)
+            self._reader_right_to_left = bool(self._active_reader.right_to_left)
         self._active_reader = None
         self._active_reader_closed_handler = None
 
