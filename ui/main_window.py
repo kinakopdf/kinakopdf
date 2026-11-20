@@ -41,6 +41,7 @@ from core import (
     COLOR_PRESETS,
     adjust_updated_after_on_remove,
     annotation_to_erase_rects,
+    build_text_annotation,
     clip_stroke_by_rects,
     collect_text_only_redact_raw_rects,
     get_later_user_erase_rects,
@@ -77,7 +78,13 @@ from core.geometry import (
 )
 from core.pdf_engine import PDFDocumentManager
 from core.pdf_loader import load_folder_as_merged_document
-from core.text_tools import extract_page_texts
+from core.text_tools import (
+    extract_page_spans,
+    extract_page_texts,
+    fit_fontsize_to_width,
+    get_page_view_rects,
+    render_page_png_bytes,
+)
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
 from ui.pdf_viewer import PDFViewer
@@ -111,6 +118,11 @@ class MainWindow(QMainWindow):
         # 現在の文書が複数ファイルの一括読み込み（フォルダ結合）由来か。
         # True の間は元のファイル群への上書きを防ぐため、保存は別名保存のみ。
         self._current_doc_from_bulk = False
+        # 文字データダイアログの作業状態（ページごとの編集中テキストと
+        # くっつけプレビュー）。ダイアログを閉じても同じ文書の間は保持し、
+        # 文書が差し替わったら破棄する。
+        self._text_data_session = {"pages": {}, "all": None, "join": {}}
+        self._text_data_session_doc = None
 
         self.viewer = PDFViewer()
         self.setCentralWidget(self.viewer)
@@ -995,6 +1007,7 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = filepath
         self.viewer.current_pdf = doc
+        self._reset_text_data_session()
         self._current_doc_from_bulk = False
         self.viewer.current_pdf_was_encrypted = bool(
             getattr(self, "_last_opened_was_encrypted", False)
@@ -2156,6 +2169,7 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = None
         self.viewer.current_pdf = doc
+        self._reset_text_data_session()
         # 複数ファイルの一括読み込み由来なら上書き禁止フラグを引き継ぐ
         self._current_doc_from_bulk = bool(from_bulk)
         self.viewer.current_pdf_was_encrypted = False
@@ -2404,14 +2418,24 @@ class MainWindow(QMainWindow):
         self._active_reader = None
         self._active_reader_closed_handler = None
 
+    def _reset_text_data_session(self):
+        """文字データダイアログの作業状態を破棄する（文書の差し替え時に呼ぶ）。"""
+        self._text_data_session = {"pages": {}, "all": None, "join": {}}
+        self._text_data_session_doc = None
+
     def open_text_data_dialog(self):
         """PDFに埋め込まれた文字データを表示・手直し・コピーするダイアログを開く"""
         doc = self.viewer.current_pdf
         if not doc or len(doc) == 0:
             QMessageBox.information(self, "案内", "先にPDFファイルを開いてください。")
             return
+        # 作業状態は文書ごとに保持する。別の文書に替わっていたら破棄する。
+        if self._text_data_session_doc is not doc:
+            self._reset_text_data_session()
+            self._text_data_session_doc = doc
         try:
             page_texts = extract_page_texts(doc, self.viewer.page_annotations)
+            page_spans = extract_page_spans(doc, self.viewer.page_annotations)
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -2419,10 +2443,160 @@ class MainWindow(QMainWindow):
                 f"文字データの読み取りに失敗しました。\n{e}",
             )
             return
+        page_rects = get_page_view_rects(doc)
+
+        def _refresh():
+            annotations = self.viewer.page_annotations
+            return (
+                extract_page_texts(doc, annotations),
+                extract_page_spans(doc, annotations),
+            )
+
+        def _image(page_idx):
+            from PyQt6.QtGui import QPixmap
+
+            try:
+                data = render_page_png_bytes(
+                    doc, page_idx, self.viewer.page_annotations
+                )
+            except Exception:
+                return None
+            if not data:
+                return None
+            pix = QPixmap()
+            if not pix.loadFromData(data):
+                return None
+            return pix
+
         from ui.text_data_dialog import TextDataDialog
 
-        dlg = TextDataDialog(page_texts, parent=self)
+        dlg = TextDataDialog(
+            page_texts,
+            parent=self,
+            page_spans=page_spans,
+            page_rects=page_rects,
+            session_state=self._text_data_session,
+            apply_handler=self._apply_text_data_replacement,
+            refresh_handler=_refresh,
+            image_provider=_image,
+        )
         dlg.exec()
+
+    def _apply_text_data_replacement(self, page_idx, spans, joined_text):
+        """文字データ画面の「PDFに反映」を実行する。
+
+        既存の「PDF内の文字を編集」と同じ仕組み（注釈＋Undoコマンド）を使う:
+        - 断片が元のPDF文字なら、断片の矩形ちょうどの text_redact 注釈で消す
+          （断片の外の文字には触れない）。
+        - 断片が過去の編集で入れたテキスト注釈そのものなら、その注釈を取り除く
+          （redact_rect を持つ注釈は、元の消去を引き継ぐため text_redact に変える）。
+        - つなげた文は、断片の先頭位置・代表フォントサイズで1件の text 注釈として
+          入れる（収まらない場合はフォントを縮める）。
+        全体を ReplacePageAnnotationsCommand 1件で積むため、1回の Undo で戻せる。
+        成功したら True、対象を特定できず安全に置き換えられない場合は False。
+        """
+        viewer = self.viewer
+        doc = viewer.current_pdf
+        joined = str(joined_text or "").strip()
+        if not doc or not (0 <= page_idx < len(doc)) or not spans or not joined:
+            return False
+
+        ann_list = viewer.page_annotations.get(page_idx, [])
+
+        span_rects = []
+        for sp in spans:
+            r = fitz.Rect(sp["raw_rect"])
+            r.normalize()
+            if r.is_empty:
+                return False
+            span_rects.append(r)
+
+        # 注釈由来の断片を特定する: スパンの文字が注釈のいずれかの行と一致し、
+        # スパン中心がその注釈の推定BBox（少し拡大）に入っているもの。
+        span_ann_match = []
+        for sp, r in zip(spans, span_rects):
+            center = fitz.Point((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0)
+            found = None
+            for idx, ann in enumerate(ann_list):
+                if ann.get("type") != "text":
+                    continue
+                if sp["text"] not in str(ann.get("text", "")).split("\n"):
+                    continue
+                try:
+                    bbox = estimate_text_bbox_in_pdf(ann)
+                except Exception:
+                    continue
+                expanded = fitz.Rect(
+                    bbox.x0 - 2.0, bbox.y0 - 2.0, bbox.x1 + 2.0, bbox.y1 + 2.0
+                )
+                if expanded.contains(center):
+                    found = idx
+                    break
+            span_ann_match.append(found)
+
+        matched_ann_indices = {i for i in span_ann_match if i is not None}
+
+        new_list = [
+            copy.deepcopy(ann)
+            for idx, ann in enumerate(ann_list)
+            if idx not in matched_ann_indices
+        ]
+        # 取り除く注釈が元の文字を消していた場合は、その消去を引き継ぐ
+        for idx in sorted(matched_ann_indices):
+            redact_rect = ann_list[idx].get("redact_rect")
+            if redact_rect:
+                new_list.append(
+                    {
+                        "type": "text_redact",
+                        "rect": tuple(float(v) for v in redact_rect),
+                    }
+                )
+        # 元のPDF文字の断片は、断片の矩形ちょうどで個別に消す
+        for sp, matched in zip(spans, span_ann_match):
+            if matched is None:
+                new_list.append(
+                    {
+                        "type": "text_redact",
+                        "rect": tuple(float(v) for v in sp["raw_rect"]),
+                    }
+                )
+
+        first = spans[0]
+        union = span_rects[0]
+        for r in span_rects[1:]:
+            union = union | r
+        if int(first["rotation"]) % 180 == 0:
+            available = union.width
+        else:
+            available = union.height
+        fontsize = fit_fontsize_to_width(
+            joined, float(first["fontsize"]), available
+        )
+        new_list.append(
+            build_text_annotation(
+                text=joined,
+                pos=first["pos"],
+                baseline_pos=first["baseline_pos"],
+                fontsize=fontsize,
+                color=first["color"],
+                rotation=int(first["rotation"]),
+                updated_after=len(new_list),
+            )
+        )
+
+        old_snapshot = copy.deepcopy(ann_list)
+        if new_list:
+            viewer.page_annotations[page_idx] = copy.deepcopy(new_list)
+        else:
+            viewer.page_annotations.pop(page_idx, None)
+        viewer.history.push(
+            ReplacePageAnnotationsCommand(page_idx, old_snapshot, new_list)
+        )
+        if viewer.current_page_idx == page_idx:
+            viewer.render_page(fit_view=False, rebuild_base=True)
+        viewer.notify_pages_updated([page_idx])
+        self.update_window_title()
+        return True
 
     def open_scan_clean_ocr_dialog(self):
         """スキャン用紙の色抜き（黄・赤・青・点々消去）＆Windows標準OCRダイアログを開く"""

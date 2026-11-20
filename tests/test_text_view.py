@@ -21,7 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import fitz
 
-from core.text_tools import extract_page_texts, join_fragments
+from core.text_tools import (
+    extract_page_spans,
+    extract_page_texts,
+    fit_fontsize_to_width,
+    join_fragments,
+    join_span_texts,
+)
 
 
 def _make_doc(texts):
@@ -237,9 +243,10 @@ class TestMainWindowTextData(_WindowTestBase):
         captured = {}
 
         class FakeDialog:
-            def __init__(self, page_texts, parent=None):
+            def __init__(self, page_texts, parent=None, **kwargs):
                 captured["texts"] = page_texts
                 captured["parent"] = parent
+                captured["kwargs"] = kwargs
 
             def exec(self):
                 return 0
@@ -249,6 +256,17 @@ class TestMainWindowTextData(_WindowTestBase):
 
         self.assertEqual(len(captured["texts"]), 1)
         self.assertIn("HELLO_PAGE", captured["texts"][0])
+        # 配置表示用のスパン・ページ矩形・各種ハンドラも渡っていること
+        kwargs = captured["kwargs"]
+        self.assertEqual(len(kwargs["page_spans"]), 1)
+        self.assertTrue(
+            any(sp["text"] == "HELLO_PAGE" for sp in kwargs["page_spans"][0])
+        )
+        self.assertEqual(len(kwargs["page_rects"]), 1)
+        self.assertIs(kwargs["session_state"], win._text_data_session)
+        self.assertTrue(callable(kwargs["apply_handler"]))
+        self.assertTrue(callable(kwargs["refresh_handler"]))
+        self.assertTrue(callable(kwargs["image_provider"]))
 
     def test_handler_without_document_shows_guidance(self):
         win = self.window
@@ -259,3 +277,288 @@ class TestMainWindowTextData(_WindowTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def _make_jp_doc():
+    """日本語フォントで、1ページに断片化した文＋無関係な文字を入れた文書を作る。"""
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_text((20, 40), "これは", fontsize=12, fontname="japan")
+    page.insert_text((20, 70), "テストです", fontsize=12, fontname="japan")
+    page.insert_text((20, 200), "関係ない文字", fontsize=12, fontname="japan")
+    return doc
+
+
+def _make_jp_pdf_bytes():
+    doc = _make_jp_doc()
+    try:
+        return doc.tobytes()
+    finally:
+        doc.close()
+
+
+class TestJoinSpanTexts(unittest.TestCase):
+    def test_japanese_spans_join_without_space(self):
+        self.assertEqual(
+            join_span_texts(["これは", "テストです"]), "これはテストです"
+        )
+
+    def test_ascii_spans_join_with_space(self):
+        self.assertEqual(join_span_texts(["Hello", "world"]), "Hello world")
+
+    def test_extraction_order_is_respected(self):
+        self.assertEqual(
+            join_span_texts(["テストです", "これは"]), "テストですこれは"
+        )
+
+    def test_empty_and_blank_spans(self):
+        self.assertEqual(join_span_texts([]), "")
+        self.assertEqual(join_span_texts(["", "  "]), "")
+
+
+class TestFitFontsizeToWidth(unittest.TestCase):
+    def test_short_text_keeps_base_size(self):
+        self.assertEqual(fit_fontsize_to_width("短い", 12.0, 500.0), 12.0)
+
+    def test_long_text_shrinks_to_fit(self):
+        size = fit_fontsize_to_width("これはテストです" * 10, 12.0, 100.0)
+        self.assertLess(size, 12.0)
+        self.assertGreaterEqual(size, 5.0)
+
+    def test_invalid_inputs_fall_back_to_base(self):
+        self.assertEqual(fit_fontsize_to_width("", 12.0, 100.0), 12.0)
+        self.assertEqual(fit_fontsize_to_width("abc", 12.0, 0.0), 12.0)
+
+
+class TestExtractPageSpans(unittest.TestCase):
+    def test_positions_sizes_and_text(self):
+        doc = _make_jp_doc()
+        self.addCleanup(doc.close)
+        spans = extract_page_spans(doc)
+        self.assertEqual(len(spans), 1)
+        page_spans = spans[0]
+        texts = [sp["text"] for sp in page_spans]
+        self.assertEqual(texts, ["これは", "テストです", "関係ない文字"])
+        first = page_spans[0]
+        self.assertAlmostEqual(first["fontsize"], 12.0, places=1)
+        # 表示座標の矩形と基線原点が、挿入位置 (20, 40) に対応していること
+        self.assertAlmostEqual(first["rect"][0], 20.0, places=1)
+        self.assertAlmostEqual(first["origin"][0], 20.0, places=1)
+        self.assertAlmostEqual(first["origin"][1], 40.0, places=1)
+        # 書き戻し用の生座標も入っていること
+        self.assertEqual(len(first["raw_rect"]), 4)
+        self.assertEqual(len(first["pos"]), 2)
+        self.assertEqual(len(first["baseline_pos"]), 2)
+        self.assertEqual(first["rotation"], 0)
+
+    def test_redaction_is_reflected_and_source_untouched(self):
+        doc = _make_doc(["KEEP_ME", "SECRET_WORD"])
+        self.addCleanup(doc.close)
+        annotations = {
+            1: [{"type": "text_redact", "rect": (10.0, 20.0, 200.0, 60.0)}]
+        }
+        spans = extract_page_spans(doc, annotations)
+        self.assertEqual(len(spans), 2)
+        self.assertEqual([sp["text"] for sp in spans[0]], ["KEEP_ME"])
+        self.assertNotIn("SECRET_WORD", [sp["text"] for sp in spans[1]])
+        # 呼び出し側の文書は変更されていない
+        self.assertIn("SECRET_WORD", doc[1].get_text())
+
+    def test_empty_and_none_document(self):
+        doc = fitz.open()
+        self.addCleanup(doc.close)
+        self.assertEqual(extract_page_spans(doc), [])
+        self.assertEqual(extract_page_spans(None), [])
+
+
+def _fake_span(text, x, y, fontsize=12.0):
+    return {
+        "text": text,
+        "rect": (x, y - fontsize, x + 40.0, y + 2.4),
+        "raw_rect": (x, y - fontsize, x + 40.0, y + 2.4),
+        "origin": (x, y),
+        "fontsize": fontsize,
+        "color": (0.0, 0.0, 0.0),
+        "pos": (x, y - fontsize * 0.88),
+        "baseline_pos": (x, y),
+        "rotation": 0,
+    }
+
+
+class TestTextDataDialogRework(_QtTestBase):
+    def _dialog(self, session=None, **kwargs):
+        from ui.text_data_dialog import TextDataDialog
+
+        spans = [[_fake_span("これは", 20, 40), _fake_span("テストです", 20, 70)]]
+        return TextDataDialog(
+            ["これは\nテストです"],
+            page_spans=spans,
+            page_rects=[(0.0, 0.0, 400.0, 400.0)],
+            session_state=session if session is not None else {},
+            **kwargs,
+        )
+
+    def test_mode_switch_and_layout_join(self):
+        dlg = self._dialog()
+        try:
+            self.assertEqual(dlg.tabs.currentIndex(), 0)  # 配置表示が既定
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.layout_canvas.set_selected({0, 1})
+            dlg.btn_layout_join.click()
+            self.assertEqual(dlg.join_preview.toPlainText(), "これはテストです")
+            dlg.tabs.setCurrentIndex(1)
+            self.assertEqual(dlg.tabs.currentIndex(), 1)
+            self.assertIn("これは", dlg.text_edit.toPlainText())
+            dlg.tabs.setCurrentIndex(0)
+            self.assertEqual(dlg.tabs.currentIndex(), 0)
+        finally:
+            dlg.close()
+
+    def test_canvas_builds_on_textless_page(self):
+        from ui.text_data_dialog import TextDataDialog
+
+        dlg = TextDataDialog(
+            [""], page_spans=[[]], page_rects=[(0.0, 0.0, 300.0, 300.0)]
+        )
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.layout_canvas.set_selected(set())
+            dlg.btn_layout_join.click()
+            self.assertEqual(dlg.join_preview.toPlainText(), "")
+            self.assertIn("選んでください", dlg.lbl_status.text())
+        finally:
+            dlg.close()
+
+    def test_text_edit_persists_across_reopen(self):
+        from ui.text_data_dialog import TextDataDialog
+
+        session = {}
+        dlg = TextDataDialog(["元の文章", "2ページ目"], session_state=session)
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.text_edit.setPlainText("直した文章")
+        finally:
+            dlg.close()
+
+        dlg2 = TextDataDialog(["元の文章", "2ページ目"], session_state=session)
+        try:
+            dlg2.page_combo.setCurrentIndex(1)
+            self.assertEqual(dlg2.text_edit.toPlainText(), "直した文章")
+        finally:
+            dlg2.close()
+
+    def test_join_preview_persists_across_reopen(self):
+        session = {}
+        dlg = self._dialog(session=session)
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.layout_canvas.set_selected({0, 1})
+            dlg.btn_layout_join.click()
+            self.assertEqual(session["join"][0], "これはテストです")
+        finally:
+            dlg.close()
+
+        dlg2 = self._dialog(session=session)
+        try:
+            dlg2.page_combo.setCurrentIndex(1)
+            self.assertEqual(dlg2.join_preview.toPlainText(), "これはテストです")
+        finally:
+            dlg2.close()
+
+    def test_apply_flow_with_fake_handlers(self):
+        session = {}
+        calls = {}
+
+        def apply_handler(page_idx, spans, joined):
+            calls["args"] = (page_idx, list(spans), joined)
+            return True
+
+        joined_span = _fake_span("これはテストです", 20, 40)
+
+        def refresh_handler():
+            return (["これはテストです"], [[joined_span]])
+
+        dlg = self._dialog(
+            session=session,
+            apply_handler=apply_handler,
+            refresh_handler=refresh_handler,
+        )
+        try:
+            dlg.page_combo.setCurrentIndex(1)
+            dlg.layout_canvas.set_selected({0, 1})
+            dlg.btn_layout_join.click()
+            dlg.btn_apply.click()
+            page_idx, spans, joined = calls["args"]
+            self.assertEqual(page_idx, 0)
+            self.assertEqual(len(spans), 2)
+            self.assertEqual(joined, "これはテストです")
+            # 反映後は選択が解除され、最新データで表示し直される
+            self.assertEqual(dlg.layout_canvas.selected_indices(), [])
+            self.assertIn("反映しました", dlg.lbl_status.text())
+            self.assertNotIn(0, session["join"])
+        finally:
+            dlg.close()
+
+
+class TestApplyTextReplacement(_WindowTestBase):
+    def _open_fragments(self):
+        path = Path(self._tmp.name) / "frag.pdf"
+        path.write_bytes(_make_jp_pdf_bytes())
+        self._open(str(path))
+
+    def test_apply_joins_fragments_and_undo_restores(self):
+        win = self.window
+        self._open_fragments()
+        viewer = win.viewer
+        self.assertFalse(viewer.is_modified)
+
+        spans = extract_page_spans(viewer.current_pdf, viewer.page_annotations)
+        frag = [
+            sp for sp in spans[0] if sp["text"] in ("これは", "テストです")
+        ]
+        self.assertEqual(len(frag), 2)
+        joined = join_span_texts([sp["text"] for sp in frag])
+        self.assertEqual(joined, "これはテストです")
+
+        self.assertTrue(win._apply_text_data_replacement(0, frag, joined))
+        self.assertTrue(viewer.is_modified)
+
+        texts_after = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        # つなげた文が1つのスパンとして入り、断片は残らない
+        self.assertIn("これはテストです", texts_after)
+        self.assertNotIn("これは", texts_after)
+        self.assertNotIn("テストです", texts_after)
+        # 断片の外の文字はそのまま
+        self.assertIn("関係ない文字", texts_after)
+
+        viewer.history.undo(viewer)
+        texts_undo = [
+            sp["text"]
+            for sp in extract_page_spans(
+                viewer.current_pdf, viewer.page_annotations
+            )[0]
+        ]
+        self.assertIn("これは", texts_undo)
+        self.assertIn("テストです", texts_undo)
+        self.assertNotIn("これはテストです", texts_undo)
+        self.assertIn("関係ない文字", texts_undo)
+        self.assertFalse(viewer.is_modified)
+
+    def test_session_cleared_when_document_changes(self):
+        win = self.window
+        src1 = self._write_pdf("a.pdf", ["AAA"])
+        self._open(src1)
+        win._text_data_session["pages"][0] = "作業中テキスト"
+        win._text_data_session["join"][0] = "作業中プレビュー"
+
+        src2 = self._write_pdf("b.pdf", ["BBB"])
+        self._open(src2)
+        self.assertEqual(win._text_data_session["pages"], {})
+        self.assertEqual(win._text_data_session["join"], {})
+        self.assertIsNone(win._text_data_session["all"])
