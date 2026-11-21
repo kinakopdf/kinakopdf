@@ -61,6 +61,7 @@ from core import (
 from ui import rgb_tuple_to_qcolor
 from core.commands import (
     DeletePagesCommand,
+    DeskewPagesCommand,
     InsertPagesCommand,
     MergeTwoPagesCommand,
     PerspectiveCorrectPageCommand,
@@ -590,6 +591,16 @@ class PageManager(QDockWidget):
         self.btn_perspective.clicked.connect(self.perspective_correct_page)
         persp_buttons.addWidget(self.btn_perspective)
         top_layout.addLayout(persp_buttons)
+
+        deskew_buttons = QHBoxLayout()
+        self.btn_deskew = QPushButton("📐 傾き補正")
+        self.btn_deskew.setToolTip(
+            "選んだページ（選んでいないときは開いているページ）の傾きを"
+            "自動で検出して、まっすぐに戻します。文字データは残ります"
+        )
+        self.btn_deskew.clicked.connect(self.deskew_selected_pages)
+        deskew_buttons.addWidget(self.btn_deskew)
+        top_layout.addLayout(deskew_buttons)
 
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
@@ -1442,6 +1453,71 @@ class PageManager(QDockWidget):
 
         self.main.statusBar().showMessage(
             f"{page_idx + 1}ページ目を台形補正しました（画像ページになりました）")
+
+    def deskew_selected_pages(self):
+        """傾き補正（傾いたページを自動検出してまっすぐに戻す）。
+
+        ページ一覧で選んだページすべてが対象（複数選択可）。選んで
+        いないときは開いているページだけを対象にする。
+        ダイアログでページごとに検出角度を提示・調整し、実行は
+        DeskewPagesCommand で Undo 可能にする。補正しても文字データは
+        残り、注釈は補正結果に焼き込まれる（台形補正と同じ規約）。
+        """
+        from PyQt6.QtWidgets import QDialog
+
+        from ui.deskew_dialog import DeskewDialog
+
+        viewer = self.main.viewer
+        doc = viewer.current_pdf
+        if not doc or len(doc) < 1:
+            QMessageBox.information(
+                self, "📐 傾き補正",
+                "補正するには、PDFを開いてください。")
+            return
+
+        viewer.cancel_active_interaction()
+        selected = self.list_widget.selectedItems()
+        rows = sorted(set(self.list_widget.row(item) for item in selected))
+        rows = [r for r in rows if 0 <= r < len(doc)]
+        if not rows:
+            rows = [viewer.current_page_idx]
+
+        try:
+            dialog = DeskewDialog(
+                self, doc, rows, viewer.page_annotations)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "📐 傾き補正",
+                f"傾きの検出に失敗しました。\n{e}")
+            return
+
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            if not dialog.correction_items():
+                QMessageBox.information(
+                    self, "📐 傾き補正",
+                    "補正するページがありませんでした。\n"
+                    "（角度が 0° のページは、まっすぐなので対象外です）")
+                return
+            indices, deskewed_doc = dialog.build_deskewed_doc()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "📐 傾き補正",
+                f"補正に失敗しました。\n{e}")
+            return
+        finally:
+            dialog.dispose()
+
+        cmd = DeskewPagesCommand(
+            doc, indices, deskewed_doc,
+            viewer.page_annotations, viewer.current_page_idx,
+            take_ownership=True)
+        cmd.redo(viewer)
+        viewer.history.push(cmd)
+
+        self.main.statusBar().showMessage(
+            f"{len(indices)}ページの傾きを補正しました")
 
     def extract_selected_pages(self):
         """選択中のページだけを新しいPDFとして保存する（抽出）。

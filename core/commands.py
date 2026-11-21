@@ -968,6 +968,98 @@ class PerspectiveCorrectPageCommand(BaseCommand):
         self._refresh(viewer)
 
 
+class DeskewPagesCommand(BaseCommand):
+    """傾き補正で複数ページを補正済みページに差し替えるコマンド。
+
+    deskewed_doc は補正済みページだけを page_indices と同じ順序で
+    持つ文書（core.deskew.build_deskewed_pages_doc の結果）。
+    元ページは backup_doc に退避し、Undo で元に戻す。
+    補正結果には元の注釈が焼き込み済みの前提で、viewer 側の注釈は
+    差し替え時に破棄し、Undo で復元する（PerspectiveCorrectPageCommand
+    と同じ規約。内容が回転するため、注釈を画面上に残すと位置がずれる）。
+    ページ数は変わらないため、他のページの注釈には影響しない。
+    """
+
+    def __init__(self, doc, page_indices, deskewed_doc,
+                 page_annotations, prev_page_idx, take_ownership=False):
+        super().__init__()
+        self.page_indices = [int(i) for i in page_indices]
+        self.prev_page_idx = prev_page_idx
+        self.backup_doc = fitz.open()
+        self.saved_annots = {}
+
+        with FITZ_LOCK:
+            for p_idx in self.page_indices:
+                self.backup_doc.insert_pdf(doc, from_page=p_idx, to_page=p_idx)
+                annots = (page_annotations or {}).get(p_idx)
+                if annots:
+                    self.saved_annots[p_idx] = copy.deepcopy(annots)
+
+            if take_ownership:
+                self.deskewed_doc = deskewed_doc
+            else:
+                self.deskewed_doc = fitz.open()
+                self.deskewed_doc.insert_pdf(deskewed_doc)
+
+    def dispose(self):
+        for attr in ("backup_doc", "deskewed_doc"):
+            d = getattr(self, attr, None)
+            if d is not None:
+                try:
+                    with FITZ_LOCK:
+                        d.close()
+                except Exception:
+                    logger.debug(
+                        "Failed to close deskew doc on dispose",
+                        exc_info=True)
+                setattr(self, attr, None)
+
+    def _replace_with(self, viewer, src_doc):
+        doc = viewer.current_pdf
+        with FITZ_LOCK:
+            for pos, p_idx in enumerate(self.page_indices):
+                if 0 <= p_idx < len(doc):
+                    doc.insert_pdf(src_doc, from_page=pos, to_page=pos,
+                                   start_at=p_idx)
+                    doc.delete_page(p_idx + 1)
+        # 文字の位置が変わるため、テキストトークンのキャッシュを破棄する
+        # （PerspectiveCorrectPageCommand と同じ扱い）。
+        if hasattr(viewer, "_pdf_tokens_cache"):
+            viewer._pdf_tokens_cache.clear()
+        viewer._cached_pdf_tokens = []
+        viewer._cached_tokens_key = None
+
+    def _refresh(self, viewer):
+        _set_current_page_safe(viewer, self.prev_page_idx)
+        viewer.render_page(fit_view=False, rebuild_base=True)
+        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
+        viewer.notify_pages_updated(self.page_indices)
+
+    def redo(self, viewer):
+        viewer.clear_calc_selection()
+        doc = viewer.current_pdf
+        if doc is None:
+            logger.debug("DeskewPagesCommand.redo: no doc; no-op")
+            return
+        self._replace_with(viewer, self.deskewed_doc)
+        # 注釈は補正結果に焼き込み済みのため、画面上の注釈は破棄する
+        for p_idx in self.page_indices:
+            viewer.page_annotations.pop(p_idx, None)
+        self._refresh(viewer)
+
+    def undo(self, viewer):
+        viewer.clear_calc_selection()
+        doc = viewer.current_pdf
+        if doc is None:
+            logger.debug("DeskewPagesCommand.undo: no doc; no-op")
+            return
+        self._replace_with(viewer, self.backup_doc)
+        for p_idx in self.page_indices:
+            _set_page_annotations_verbatim(
+                viewer, p_idx, self.saved_annots.get(p_idx))
+        self._refresh(viewer)
+
+
 class HistoryManager:
     def __init__(self, max_steps=MAX_UNDO_STEPS):
         self.max_steps = max_steps
