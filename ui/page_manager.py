@@ -63,6 +63,7 @@ from core.commands import (
     DeletePagesCommand,
     InsertPagesCommand,
     MergeTwoPagesCommand,
+    PerspectiveCorrectPageCommand,
     ReorderPagesCommand,
     RotatePagesCommand,
 )
@@ -579,6 +580,16 @@ class PageManager(QDockWidget):
         self.btn_merge.clicked.connect(self.merge_selected_pages)
         merge_buttons.addWidget(self.btn_merge)
         top_layout.addLayout(merge_buttons)
+
+        persp_buttons = QHBoxLayout()
+        self.btn_perspective = QPushButton("🔶 台形補正")
+        self.btn_perspective.setToolTip(
+            "開いているページ（または選んだ1ページ）の、台形に歪んだ書類部分を"
+            "四隅指定でまっすぐな長方形に直します。補正したページは画像になります"
+        )
+        self.btn_perspective.clicked.connect(self.perspective_correct_page)
+        persp_buttons.addWidget(self.btn_perspective)
+        top_layout.addLayout(persp_buttons)
 
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
@@ -1373,6 +1384,64 @@ class PageManager(QDockWidget):
 
         self.main.statusBar().showMessage(
             f"{first_idx + 1}ページ目と{second_idx + 1}ページ目を1枚に結合しました")
+
+    def perspective_correct_page(self):
+        """台形補正（ページ上の書類部分を四隅指定で長方形に直す）。
+
+        ページごとに四隅の調整が要るため対象は1ページだけにする。
+        ページ一覧で1ページだけ選んでいればそのページ、そうでなければ
+        開いているページを対象に、補正ダイアログを開く。
+        実行は PerspectiveCorrectPageCommand で Undo 可能にする。
+        補正後のページは画像になり、文字データは残らない。
+        """
+        from PyQt6.QtWidgets import QDialog
+
+        from ui.perspective_dialog import PerspectiveCorrectionDialog
+
+        viewer = self.main.viewer
+        doc = viewer.current_pdf
+        if not doc or len(doc) < 1:
+            QMessageBox.information(
+                self, "🔶 台形補正",
+                "補正するには、PDFを開いてください。")
+            return
+
+        viewer.cancel_active_interaction()
+        selected = self.list_widget.selectedItems()
+        rows = sorted(set(self.list_widget.row(item) for item in selected))
+        rows = [r for r in rows if 0 <= r < len(doc)]
+        page_idx = rows[0] if len(rows) == 1 else viewer.current_page_idx
+
+        try:
+            dialog = PerspectiveCorrectionDialog(
+                self, doc, page_idx, viewer.page_annotations)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "🔶 台形補正",
+                f"プレビューの準備に失敗しました。\n{e}")
+            return
+
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            corrected_doc = dialog.build_corrected_doc()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "🔶 台形補正",
+                f"補正に失敗しました。\n{e}")
+            return
+        finally:
+            dialog.dispose()
+
+        cmd = PerspectiveCorrectPageCommand(
+            doc, page_idx, corrected_doc,
+            viewer.page_annotations, viewer.current_page_idx,
+            take_ownership=True)
+        cmd.redo(viewer)
+        viewer.history.push(cmd)
+
+        self.main.statusBar().showMessage(
+            f"{page_idx + 1}ページ目を台形補正しました（画像ページになりました）")
 
     def extract_selected_pages(self):
         """選択中のページだけを新しいPDFとして保存する（抽出）。

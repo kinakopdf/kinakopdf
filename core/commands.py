@@ -877,6 +877,97 @@ class MergeTwoPagesCommand(BaseCommand):
         viewer.notify_pages_updated(None)
 
 
+class PerspectiveCorrectPageCommand(BaseCommand):
+    """台形補正で1ページを補正済み画像ページに差し替えるコマンド。
+
+    corrected_doc は補正済みの1ページだけを持つ文書
+    （core.photo_to_pdf.build_corrected_image_page_doc の結果）。
+    元ページは backup_doc に退避し、Undo で元に戻す。
+    補正結果には元の注釈が焼き込み済みの前提で、viewer 側の注釈は
+    差し替え時に破棄し、Undo で復元する（MergeTwoPagesCommand と同じ
+    規約。ReplacePagesContentCommand と違い、補正でページの形が変わる
+    ため注釈を画面上に残すことはしない）。
+    ページ数は変わらないため、他のページの注釈には影響しない。
+    """
+
+    def __init__(self, doc, page_idx, corrected_doc,
+                 page_annotations, prev_page_idx, take_ownership=False):
+        super().__init__()
+        self.page_idx = int(page_idx)
+        self.prev_page_idx = prev_page_idx
+        self.backup_doc = fitz.open()
+        self.saved_annots = []
+
+        with FITZ_LOCK:
+            self.backup_doc.insert_pdf(
+                doc, from_page=self.page_idx, to_page=self.page_idx)
+            annots = (page_annotations or {}).get(self.page_idx)
+            if annots:
+                self.saved_annots = copy.deepcopy(annots)
+
+            if take_ownership:
+                self.corrected_doc = corrected_doc
+            else:
+                self.corrected_doc = fitz.open()
+                self.corrected_doc.insert_pdf(corrected_doc)
+
+    def dispose(self):
+        for attr in ("backup_doc", "corrected_doc"):
+            d = getattr(self, attr, None)
+            if d is not None:
+                try:
+                    with FITZ_LOCK:
+                        d.close()
+                except Exception:
+                    logger.debug(
+                        "Failed to close perspective doc on dispose",
+                        exc_info=True)
+                setattr(self, attr, None)
+
+    def _replace_with(self, viewer, src_doc):
+        doc = viewer.current_pdf
+        with FITZ_LOCK:
+            doc.insert_pdf(src_doc, from_page=0, to_page=0,
+                           start_at=self.page_idx)
+            doc.delete_page(self.page_idx + 1)
+        # 文字データが消えるため、テキストトークンのキャッシュを破棄する
+        # （ReplacePagesContentCommand と同じ扱い）。
+        if hasattr(viewer, "_pdf_tokens_cache"):
+            viewer._pdf_tokens_cache.clear()
+        viewer._cached_pdf_tokens = []
+        viewer._cached_tokens_key = None
+
+    def _refresh(self, viewer):
+        _set_current_page_safe(viewer, self.prev_page_idx)
+        viewer.render_page(fit_view=True, rebuild_base=True)
+        viewer.pageSelectionChanged.emit(viewer.current_page_idx)
+        viewer.notify_pages_updated([self.page_idx])
+
+    def redo(self, viewer):
+        viewer.clear_calc_selection()
+        doc = viewer.current_pdf
+        if doc is None or not (0 <= self.page_idx < len(doc)):
+            logger.debug(
+                "PerspectiveCorrectPageCommand.redo: no doc/page; no-op")
+            return
+        self._replace_with(viewer, self.corrected_doc)
+        # 注釈は補正結果に焼き込み済みのため、画面上の注釈は破棄する
+        viewer.page_annotations.pop(self.page_idx, None)
+        self._refresh(viewer)
+
+    def undo(self, viewer):
+        viewer.clear_calc_selection()
+        doc = viewer.current_pdf
+        if doc is None or not (0 <= self.page_idx < len(doc)):
+            logger.debug(
+                "PerspectiveCorrectPageCommand.undo: no doc/page; no-op")
+            return
+        self._replace_with(viewer, self.backup_doc)
+        _set_page_annotations_verbatim(
+            viewer, self.page_idx, self.saved_annots)
+        self._refresh(viewer)
+
+
 class HistoryManager:
     def __init__(self, max_steps=MAX_UNDO_STEPS):
         self.max_steps = max_steps

@@ -335,3 +335,70 @@ def photos_to_pdf_bytes(images, jpeg_quality: int = 92) -> bytes:
     """QImage のリストを1枚＝1ページの A4 PDF バイト列にする。"""
     return create_pdf_bytes_from_images(
         [qimage_to_jpeg_bytes(img, quality=jpeg_quality) for img in images])
+
+
+# ============================================================
+# 既存ページの台形補正（多機能版）
+# ============================================================
+
+# ページを画像化する際の基準解像度。小さな文字でも読める水準として
+# 200 DPI を使い、巨大なページでは長辺のピクセル数を抑える。
+PAGE_RENDER_DPI = 200.0
+PAGE_RENDER_MAX_DIM = 3600
+
+
+def page_render_dpi(width_pt: float, height_pt: float,
+                    target_dpi: float = PAGE_RENDER_DPI,
+                    max_dim: int = PAGE_RENDER_MAX_DIM) -> float:
+    """ページサイズ（pt）に対して使うレンダリング DPI を返す。
+
+    target_dpi を基準に、長辺が max_dim ピクセルを超えないよう下げる。
+    """
+    longest_pt = max(float(width_pt), float(height_pt))
+    if longest_pt <= 0:
+        return float(target_dpi)
+    dpi = min(float(target_dpi), max_dim * 72.0 / longest_pt)
+    return max(36.0, dpi)
+
+
+def _segments_cross(a, b, c, d) -> bool:
+    """線分 ab と線分 cd が交差するか（端点の共有は除く）。"""
+    def orient(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    o1 = orient(a, b, c)
+    o2 = orient(a, b, d)
+    o3 = orient(c, d, a)
+    o4 = orient(c, d, b)
+    return (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0) and o1 and o2 and o3 and o4
+
+
+def build_corrected_image_page_doc(image: QImage, quad, dpi: float,
+                                   jpeg_quality: int = 92):
+    """ページを写した画像と四隅から、台形補正した1ページだけの文書を作る。
+
+    quad は画像座標（ピクセル）の4点で、左上・右上・右下・左下の順。
+    出力ページの大きさは、補正後画像のピクセル寸法を dpi で pt に
+    換算したものになり、元の書類部分のおおよその実寸を保つ。
+    補正後のページは画像だけになり、文字データは残らない。
+    戻り値の fitz.Document は呼び出し側が所有する。
+    """
+    if quad and len(quad) == 4:
+        # 向かい合う辺同士が交わる四隅（蝶ネクタイ型）は、透視変換が
+        # 成功しても意味のない結果になるため、ここで弾く
+        pts = [(float(x), float(y)) for (x, y) in quad]
+        if (_segments_cross(pts[0], pts[1], pts[3], pts[2])
+                or _segments_cross(pts[1], pts[2], pts[0], pts[3])):
+            raise ValueError("四隅が交差しています。書類の角に合わせ直してください。")
+    warped = warp_perspective(image, quad)
+    data = qimage_to_jpeg_bytes(warped, quality=jpeg_quality)
+    width_pt = warped.width() * 72.0 / float(dpi)
+    height_pt = warped.height() * 72.0 / float(dpi)
+    doc = fitz.open()
+    try:
+        page = doc.new_page(width=width_pt, height=height_pt)
+        page.insert_image(page.rect, stream=data)
+    except Exception:
+        doc.close()
+        raise
+    return doc
