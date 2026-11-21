@@ -41,6 +41,7 @@ from core import (
     COLOR_PRESETS,
     adjust_updated_after_on_remove,
     annotation_to_erase_rects,
+    build_text_annotation,
     clip_stroke_by_rects,
     collect_text_only_redact_raw_rects,
     get_later_user_erase_rects,
@@ -77,10 +78,21 @@ from core.geometry import (
 )
 from core.pdf_engine import PDFDocumentManager
 from core.pdf_loader import load_folder_as_merged_document
+from core.text_tools import (
+    extract_page_spans,
+    extract_page_texts,
+    fit_fontsize_to_width,
+    get_page_view_rects,
+    render_page_png_bytes,
+    save_image_only_pdf,
+    spans_are_scan_overlay,
+)
 from ui.dialogs import TextEditDeleteDialog
 from ui.page_manager import PageManager
+from ui.toolbar_layout_dialog import DEFAULT_TITLES, ToolbarLayoutDialog
 from ui.pdf_viewer import PDFViewer
 from ui.region_ocr_ext import DirectViewerRegionOCRController
+from ui.reader_store import ReaderStore
 from ui.spread_reader import FullscreenSpreadReader
 
 
@@ -99,8 +111,24 @@ class MainWindow(QMainWindow):
         self._initial_positioned = False
         self._active_reader = None
         self._active_reader_closed_handler = None
-        # 全画面見開きの表紙の有無（次に開くときも同じ設定を使う）
-        self._reader_cover_single = True
+        # 全画面見開きの表紙の有無・綴じ方向（保存された設定を引き継ぐ）
+        self._reader_store = ReaderStore()
+        _reader_prefs = self._reader_store.get_prefs()
+        self._reader_cover_single = bool(_reader_prefs.get("cover_single", True))
+        self._reader_right_to_left = bool(_reader_prefs.get("right_to_left", False))
+        # 履歴から開いたときだけ使う、見開きのレジューム先 (パス, ページ)
+        self._pending_reader_resume = None
+        # 現在の文書が複数ファイルの一括読み込み（フォルダ結合）由来か。
+        # True の間は元のファイル群への上書きを防ぐため、保存は別名保存のみ。
+        self._current_doc_from_bulk = False
+        # 文字データダイアログの作業状態（ページごとの編集中テキストと
+        # くっつけプレビュー）。ダイアログを閉じても同じ文書の間は保持し、
+        # 文書が差し替わったら破棄する。
+        self._text_data_session = {"pages": {}, "all": None, "join": {}}
+        self._text_data_session_doc = None
+        # 直近の「PDFに反映」が不可視（OCRレイヤー型）だったか。
+        # 文字データ画面が完了メッセージの出し分けに使う。
+        self._last_text_data_apply_invisible = False
 
         self.viewer = PDFViewer()
         self.setCentralWidget(self.viewer)
@@ -217,10 +245,37 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         QTimer.singleShot(0, self._ensure_within_screen)
 
+    # ツールバーの配置カスタマイズ（「🛠 バーを編集」）で使う配置先キー
+    _LAYOUT_LOCATIONS = ("bar", "more", "save", "erase", "hidden")
+
+    def _register_movable(self, key, action, label, default, toolbar, anchor):
+        """配置変更できる項目をレジストリに登録する。
+
+        toolbar/anchor は「バーに表示」のときの戻り先（固定要素のアンカーの
+        直前に挿入する）。実際の配置は _apply_toolbar_layout() が行うので、
+        ここではツールバーやメニューへは追加しない。
+
+        ただしショートカットは配置先に依らず効かせたいので、ウィンドウ
+        自体へも登録しておく（act_save と同じ方式）。これをしないと、
+        「隠す」にした項目はショートカットまで無効になってしまう。
+        """
+        self.addAction(action)
+        self._movable_items[key] = {
+            "action": action,
+            "label": label,
+            "default": default,
+            "toolbar": toolbar,
+            "anchor": anchor,
+        }
+
     def init_toolbar(self):
         top_toolbar = QToolBar("ファイル・表示ツールバー")
         top_toolbar.setMovable(False)
         self.addToolBar(top_toolbar)
+        self.top_toolbar = top_toolbar
+        # 配置カスタマイズ対象の項目レジストリと、バーに戻すときのアンカー
+        self._movable_items = {}
+        self._layout_anchors = {}
 
         act_open = self.add_action(top_toolbar, "📁 開く", self.open_file)
         act_open.setShortcut(QKeySequence.StandardKey.Open)
@@ -234,33 +289,101 @@ class MainWindow(QMainWindow):
         top_toolbar.addWidget(self.btn_recent_files)
         self._update_recent_files_menu()
 
-        act_save = self.add_action(top_toolbar, "💾 保存", self.save_file)
-        act_save.setShortcut(QKeySequence.StandardKey.Save)
+        # 「💾 保存」はドロップダウン付きボタンにする:
+        # 本体クリック = 保存、右側の矢印クリック = メニュー（既定では別名保存）
+        self.act_save = QAction("💾 保存", self)
+        self.act_save.setShortcut(QKeySequence.StandardKey.Save)
+        self.act_save.triggered.connect(self.save_file)
+        self.addAction(self.act_save)  # Ctrl+S をウィンドウ全体で効かせる
 
-        act_save_as = self.add_action(top_toolbar, "💾 別名保存", self.save_as)
+        self.btn_save = QToolButton(self)
+        self.btn_save.setText(DEFAULT_TITLES["save"])
+        self.btn_save.setToolTip("保存します (Ctrl+S)。右側の▼から「別名保存」も選べます")
+        self.btn_save.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.menu_save = QMenu(self)
+        self.btn_save.setMenu(self.menu_save)
+        self.btn_save.clicked.connect(self.save_file)
+        top_toolbar.addWidget(self.btn_save)
+
+        act_save_as = QAction("💾 別名保存", self)
+        act_save_as.triggered.connect(self.save_as)
         act_save_as.setShortcut(QKeySequence.StandardKey.SaveAs)
+        self.act_save_as = act_save_as
+        self._register_movable(
+            "save_as", act_save_as, "💾 別名保存", "save", top_toolbar, "more_btn"
+        )
 
-        act_print = self.add_action(top_toolbar, "🖨 印刷", self.print_file)
+        act_print = QAction("🖨 印刷", self)
+        act_print.triggered.connect(self.print_file)
         act_print.setShortcut(QKeySequence.StandardKey.Print)
         act_print.setToolTip("現在編集中のPDFを印刷します (Ctrl+P)")
+        self.act_print = act_print
+        self._register_movable(
+            "print", act_print, "🖨 印刷", "bar", top_toolbar, "more_btn"
+        )
 
-        act_excel = self.add_action(top_toolbar, "📊 Excel出力", self.export_to_excel)
+        # たまに使う機能は「🧰 その他」メニューにまとめてツールバーをすっきりさせる
+        self.btn_more_features = QToolButton(self)
+        self.btn_more_features.setText(DEFAULT_TITLES["more"])
+        self.btn_more_features.setToolTip("たまに使う機能はこちらにまとめました（Excel出力・フォルダ読込・新規ウィンドウなど）")
+        self.btn_more_features.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.menu_more_features = QMenu(self)
+        self.btn_more_features.setMenu(self.menu_more_features)
+        self._layout_anchors["more_btn"] = top_toolbar.addWidget(self.btn_more_features)
+
+        act_excel = QAction("📊 Excel出力", self)
+        act_excel.triggered.connect(self.export_to_excel)
         act_excel.setToolTip("PDF内の表や文字データを追加ライブラリなしでExcel(.xlsx)に変換して保存します")
+        self.act_excel = act_excel
+        self._register_movable(
+            "excel", act_excel, "📊 Excel出力", "more", top_toolbar, "more_btn"
+        )
 
-        self.add_action(top_toolbar, "🗔 新規", self.spawn_new_window)
+        act_new_window = QAction("🗔 新規", self)
+        act_new_window.triggered.connect(self.spawn_new_window)
+        act_new_window.setToolTip("新しいウィンドウを開きます")
+        self.act_new_window = act_new_window
+        self._register_movable(
+            "new_window", act_new_window, "🗔 新規", "more", top_toolbar, "more_btn"
+        )
 
-        act_read = self.add_action(top_toolbar, "📖 見開き", self.open_fullscreen_reader)
+        act_folder = QAction("📚 フォルダ読込", self)
+        act_folder.triggered.connect(self.open_pdf_folder)
+        act_folder.setToolTip("フォルダ内の複数PDFをまとめて1つの本として読み込みます")
+        self.act_folder = act_folder
+        self._register_movable(
+            "folder", act_folder, "📚 フォルダ読込", "more", top_toolbar, "more_btn"
+        )
+
+        act_read = QAction("📖 見開き", self)
+        act_read.triggered.connect(self.open_fullscreen_reader)
         act_read.setShortcut(QKeySequence("F5"))
         act_read.setToolTip("現在のPDFを全画面見開きモードで閲覧します (F5)")
+        self.act_read = act_read
+        self._register_movable(
+            "read", act_read, "📖 見開き", "bar", top_toolbar, "text_sep"
+        )
 
-        act_folder = self.add_action(top_toolbar, "📚 フォルダ読込", self.open_pdf_folder)
-        act_folder.setToolTip("フォルダ内の複数PDFをまとめて1つの本として読み込みます")
-
-        act_ocr = self.add_action(top_toolbar, "🧼 色抜き・OCR", self.open_scan_clean_ocr_dialog)
+        # OCR系は「🧰 その他」メニューにまとめる（ショートカットは維持される）
+        act_ocr = QAction("🧼 色抜き・OCR", self)
+        act_ocr.triggered.connect(self.open_scan_clean_ocr_dialog)
         act_ocr.setShortcut(QKeySequence("Ctrl+Shift+O"))
         act_ocr.setToolTip("スキャンした明細から黄・赤・青の背景や点々を消し、Windows標準OCRで文字認識します (Ctrl+Shift+O)")
+        self.act_ocr = act_ocr
+        self._register_movable(
+            "ocr", act_ocr, "🧼 色抜き・OCR", "more", top_toolbar, "text_sep"
+        )
 
-        top_toolbar.addSeparator()
+        self.act_text_data = QAction("📝 文字データ", self)
+        self.act_text_data.triggered.connect(self.open_text_data_dialog)
+        self.act_text_data.setToolTip("PDFに埋め込まれている文字データをそのまま表示します（AIや検索が読む中身の確認・手直し・コピー用）")
+        self.act_text_data.setEnabled(False)
+        self._register_movable(
+            "text_data", self.act_text_data, "📝 文字データ", "bar",
+            top_toolbar, "text_sep",
+        )
+
+        self._layout_anchors["text_sep"] = top_toolbar.addSeparator()
 
         self.add_action(top_toolbar, "◀ 前へ", self.viewer.go_prev_page)
         self.lbl_page_info = QLabel(" 0 / 0 ")
@@ -298,11 +421,16 @@ class MainWindow(QMainWindow):
         self.add_action(top_toolbar, "🔎 縮小", self.viewer.zoom_out)
         self.add_action(top_toolbar, "全体表示", self.viewer.fit_page)
 
-        self.act_scroll_mode = self.add_action(top_toolbar, "📜 スクロール表示", self.toggle_scroll_mode)
+        self.act_scroll_mode = QAction("📜 スクロール表示", self)
+        self.act_scroll_mode.triggered.connect(self.toggle_scroll_mode)
         self.act_scroll_mode.setCheckable(True)
         self.act_scroll_mode.setToolTip("通常画面でページを上下スクロールして表示します（ダブルクリックで1ページ表示に戻ります）")
+        self._register_movable(
+            "scroll", self.act_scroll_mode, "📜 スクロール表示", "bar",
+            top_toolbar, "scroll_sep",
+        )
 
-        top_toolbar.addSeparator()
+        self._layout_anchors["scroll_sep"] = top_toolbar.addSeparator()
 
         lbl_search = QLabel(" 🔎 検索:")
         lbl_search.setStyleSheet("font-weight: bold; padding-left: 4px;")
@@ -351,19 +479,34 @@ class MainWindow(QMainWindow):
         self.shortcut_escape.activated.connect(self._on_escape_pressed)
 
         if sys.platform == "win32":
-            top_toolbar.addSeparator()
-            act_default_app = self.add_action(
-                top_toolbar,
-                "⚙ 既定アプリに設定",
-                self.setup_as_default_pdf_app,
-            )
+            act_default_app = QAction("⚙ 既定アプリに設定", self)
+            act_default_app.triggered.connect(self.setup_as_default_pdf_app)
             act_default_app.setToolTip("Windowsの既定のPDFアプリに登録します")
+            self.act_default_app = act_default_app
+            self._register_movable(
+                "default_app", act_default_app, "⚙ 既定アプリに設定", "more",
+                top_toolbar, "more_btn",
+            )
+
+        # 「🧰 その他」メニューの末尾には、配置を自分で変えるための
+        # 「🛠 バーを編集...」を固定で置く（移動・非表示の対象にしない）。
+        # 可動項目はこのセパレータの直前へ挿入されるので、常に末尾に残る。
+        self._sep_before_edit_layout = self.menu_more_features.addSeparator()
+        self.act_edit_toolbar_layout = QAction("🛠 バーを編集...", self)
+        self.act_edit_toolbar_layout.setToolTip(
+            "ボタンの題名や置き場所を自分好みに変えられます"
+        )
+        self.act_edit_toolbar_layout.triggered.connect(
+            self.open_toolbar_layout_dialog
+        )
+        self.menu_more_features.addAction(self.act_edit_toolbar_layout)
 
         self.addToolBarBreak()
 
         edit_toolbar = QToolBar("編集・スタイルツールバー")
         edit_toolbar.setMovable(False)
         self.addToolBar(edit_toolbar)
+        self.edit_toolbar = edit_toolbar
 
         self.mode_group = QActionGroup(self)
         self.mode_group.setExclusive(True)
@@ -383,6 +526,23 @@ class MainWindow(QMainWindow):
             ("🎯 範囲OCR", "region_ocr"),
         ]
 
+        # 消去系のモードは「🧽 消去」メニューにまとめて、編集ツールバーをすっきりさせる。
+        # 「🧽 消去」ボタン自体は固定で、消去系モードがあった位置に置く。
+        # モードの実際の配置は _apply_toolbar_layout() がレジストリに従って行う。
+        erase_modes = {"highlight_erase", "box_erase", "erase", "text_erase"}
+        self.btn_erase_modes = QToolButton(self)
+        self.btn_erase_modes.setText(DEFAULT_TITLES["erase"])
+        self.btn_erase_modes.setToolTip("消すための道具はこちらにまとめました（マーカー消去・範囲墨消し・消しゴム・テキスト消去）")
+        self.btn_erase_modes.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.menu_erase_modes = QMenu(self)
+        self.btn_erase_modes.setMenu(self.menu_erase_modes)
+        self._layout_anchors["erase_btn"] = edit_toolbar.addWidget(self.btn_erase_modes)
+        self._layout_anchors["modes_sep"] = edit_toolbar.addSeparator()
+
+        self.mode_actions = {}
+        # 「🧽 消去」ボタンより前に並ぶモードは erase_btn を、
+        # それ以降のモードは modes_sep を、バーに戻るときのアンカーにする
+        pre_erase_modes = {"view", "text_select", "crop", "fold", "draw", "highlight"}
         for name, mode in modes:
             action = QAction(name, self)
             action.setCheckable(True)
@@ -408,9 +568,18 @@ class MainWindow(QMainWindow):
                 )
             action.triggered.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_group.addAction(action)
-            edit_toolbar.addAction(action)
-
-        edit_toolbar.addSeparator()
+            self.mode_actions[mode] = action
+            if mode in erase_modes:
+                default_loc = "erase"
+            elif mode == "region_ocr":
+                # 範囲OCRは OCR系として「🧰 その他」メニューにまとめる
+                default_loc = "more"
+            else:
+                default_loc = "bar"
+            anchor = "erase_btn" if mode in pre_erase_modes else "modes_sep"
+            self._register_movable(
+                f"mode:{mode}", action, name, default_loc, edit_toolbar, anchor
+            )
 
         lbl_color = QLabel(" 🎨 色:")
         lbl_color.setStyleSheet("padding-left: 4px; font-weight: bold;")
@@ -476,6 +645,114 @@ class MainWindow(QMainWindow):
         self.btn_clear_sum.clicked.connect(self.viewer.clear_calc_selection)
         self.btn_clear_sum.setEnabled(False)
         edit_toolbar.addWidget(self.btn_clear_sum)
+
+        # 保存済みの配置（なければ既定配置）を反映する
+        self._apply_toolbar_layout()
+
+    # ---------------------------------------------------------------
+    # ツールバー配置のカスタマイズ（「🛠 バーを編集...」）
+    # ---------------------------------------------------------------
+    def _load_toolbar_layout(self):
+        """QSettings からボタンの題名と項目の配置を読み込む。
+
+        戻り値: (titles, places)
+          titles: {"more": str, "erase": str, "save": str}（"" は既定名）
+          places: {item_key: 配置先キー}（未保存の項目は既定配置）
+        """
+        settings = self._get_settings()
+        settings.beginGroup("toolbar_layout")
+        titles = {}
+        for key in DEFAULT_TITLES:
+            value = settings.value(f"title_{key}", "")
+            titles[key] = value if isinstance(value, str) else ""
+        places = {}
+        for key, item in self._movable_items.items():
+            loc = settings.value(f"place_{key}", item["default"])
+            if loc not in self._LAYOUT_LOCATIONS:
+                loc = item["default"]
+            places[key] = loc
+        settings.endGroup()
+        return titles, places
+
+    def _save_toolbar_layout(self, titles, places):
+        settings = self._get_settings()
+        settings.beginGroup("toolbar_layout")
+        for key, value in titles.items():
+            settings.setValue(f"title_{key}", value)
+        for key, value in places.items():
+            settings.setValue(f"place_{key}", value)
+        settings.endGroup()
+        settings.sync()
+
+    def _clear_toolbar_layout(self):
+        """保存済みの配置を消して既定配置に戻す。"""
+        settings = self._get_settings()
+        settings.beginGroup("toolbar_layout")
+        settings.remove("")
+        settings.endGroup()
+        settings.sync()
+
+    def _apply_toolbar_layout(self):
+        """題名と項目の配置をツールバー／メニューへ反映する（再起動不要）。"""
+        titles, places = self._load_toolbar_layout()
+
+        self.btn_more_features.setText(titles["more"] or DEFAULT_TITLES["more"])
+        self.btn_erase_modes.setText(titles["erase"] or DEFAULT_TITLES["erase"])
+        self.btn_save.setText(titles["save"] or DEFAULT_TITLES["save"])
+
+        containers = [
+            self.top_toolbar,
+            self.edit_toolbar,
+            self.menu_more_features,
+            self.menu_save,
+            self.menu_erase_modes,
+        ]
+        # まず全ての可動項目を現在の置き場所から外す
+        for item in self._movable_items.values():
+            action = item["action"]
+            for container in containers:
+                if action in container.actions():
+                    container.removeAction(action)
+        # レジストリの順番どおりに配置し直す（メニュー内の並びも安定する）
+        for key, item in self._movable_items.items():
+            action = item["action"]
+            loc = places.get(key, item["default"])
+            if loc == "bar":
+                anchor = self._layout_anchors[item["anchor"]]
+                item["toolbar"].insertAction(anchor, action)
+            elif loc == "more":
+                # 「🛠 バーを編集...」とその手前のセパレータは常に末尾に残す
+                self.menu_more_features.insertAction(
+                    self._sep_before_edit_layout, action
+                )
+            elif loc == "save":
+                self.menu_save.addAction(action)
+            elif loc == "erase":
+                self.menu_erase_modes.addAction(action)
+            # "hidden" のときはどこにも置かない
+
+        # 「保存」メニューが空っぽなら、ボタンの矢印が空のメニューを
+        # 開いてしまわないよう、ボタンからメニューを外す（項目が
+        # 戻ってきたら付け直す）。本体クリックの保存はそのまま使える。
+        if self.menu_save.actions():
+            if self.btn_save.menu() is not self.menu_save:
+                self.btn_save.setMenu(self.menu_save)
+        elif self.btn_save.menu() is not None:
+            self.btn_save.setMenu(None)
+
+    def open_toolbar_layout_dialog(self):
+        titles, places = self._load_toolbar_layout()
+        items = [
+            (key, item["label"], item["default"])
+            for key, item in self._movable_items.items()
+        ]
+        dialog = ToolbarLayoutDialog(self, items, titles, places)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._save_toolbar_layout(
+                dialog.result_titles(), dialog.result_places()
+            )
+            self._apply_toolbar_layout()
+            self.statusBar().showMessage("ツールバーの配置を変更しました")
 
     def _focus_search_box(self):
         self.edit_search.setFocus()
@@ -738,7 +1015,21 @@ class MainWindow(QMainWindow):
         toolbar.addAction(action)
         return action
 
+    def _sync_text_data_action(self):
+        """「📝 文字データ」ボタンの有効/無効を、文書を開いているかどうかで切り替える"""
+        if not hasattr(self, "act_text_data"):
+            return
+        doc = self.viewer.current_pdf
+        has_doc = False
+        if doc is not None:
+            try:
+                has_doc = len(doc) > 0
+            except Exception:
+                has_doc = False
+        self.act_text_data.setEnabled(has_doc)
+
     def update_window_title(self):
+        self._sync_text_data_action()
         if not self.viewer.current_pdf:
             self.setWindowTitle(APP_NAME)
             return
@@ -967,6 +1258,8 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = filepath
         self.viewer.current_pdf = doc
+        self._reset_text_data_session()
+        self._current_doc_from_bulk = False
         self.viewer.current_pdf_was_encrypted = bool(
             getattr(self, "_last_opened_was_encrypted", False)
             or PDFDocumentManager._is_encrypted_document(doc)
@@ -1010,24 +1303,32 @@ class MainWindow(QMainWindow):
             return False, False
         return True, True
 
+    def _should_force_save_as(self):
+        """上書き保存をせず、別名保存ダイアログを使うべきかを返す。
+
+        複数ファイルの一括読み込み由来の文書は、元のファイル群のどれにも
+        上書きしないよう常に別名保存にする。保存先が未設定の文書も同様。
+        """
+        if self._current_doc_from_bulk:
+            return True
+        return not self.viewer.current_file
+
     def save_file(self):
         if not self.viewer.current_pdf:
             QMessageBox.information(self, "案内", "保存するPDFが開かれていません。先にPDFを開いてください。")
             return
 
-        if self.viewer.current_file:
-            filepath = self.viewer.current_file
-        else:
-            filepath, _ = QFileDialog.getSaveFileName(
-                self,
-                "PDFを保存",
-                "",
-                "PDF Files (*.pdf)",
-            )
-
-        if not filepath:
+        if self._should_force_save_as():
+            if self._current_doc_from_bulk:
+                QMessageBox.information(
+                    self,
+                    "別名保存の案内",
+                    "複数のファイルから作ったドキュメントは上書き保存できません。別名で保存してください。",
+                )
+            self.save_as()
             return
 
+        filepath = self.viewer.current_file
         if not filepath.lower().endswith(".pdf"):
             filepath += ".pdf"
 
@@ -2033,7 +2334,12 @@ class MainWindow(QMainWindow):
             if replace_err is not None:
                 raise replace_err
 
-            self.viewer.current_file = filepath
+            # 複数ファイル由来の文書は、別名保存しても保存先をそのファイルに
+            # 固定しない（次回保存も別名保存にし、元のファイル群や保存した
+            # 結合ファイルへの上書きを防ぐ）。
+            self.viewer.current_file = (
+                None if self._current_doc_from_bulk else filepath
+            )
             self.viewer.current_pdf_was_encrypted = False
             if allow_strip_encryption:
                 self.viewer._encryption_strip_approved = True
@@ -2096,6 +2402,7 @@ class MainWindow(QMainWindow):
         page_idx: int = 0,
         target_mode: str = "highlight",
         has_edited: bool = False,
+        from_bulk: bool = False,
     ) -> bool:
         if self.viewer.is_modified:
             reply = QMessageBox.question(
@@ -2113,6 +2420,9 @@ class MainWindow(QMainWindow):
 
         self.viewer.current_file = None
         self.viewer.current_pdf = doc
+        self._reset_text_data_session()
+        # 複数ファイルの一括読み込み由来なら上書き禁止フラグを引き継ぐ
+        self._current_doc_from_bulk = bool(from_bulk)
         self.viewer.current_pdf_was_encrypted = False
         self.viewer.reset_history()
         self.viewer.page_annotations = copy.deepcopy(annotations) if annotations else {}
@@ -2159,9 +2469,20 @@ class MainWindow(QMainWindow):
             return
 
         cur_idx = self.viewer.current_page_idx
+        # 一括読み込み由来の文書は単一ファイルではないのでレジューム対象外
+        source_path = None if self._current_doc_from_bulk else self.viewer.current_file
+        resume_page = None
+        if self._pending_reader_resume is not None:
+            pending_path, pending_page = self._pending_reader_resume
+            self._pending_reader_resume = None
+            if source_path and os.path.normcase(pending_path) == os.path.normcase(
+                source_path
+            ):
+                resume_page = pending_page
         self._active_reader = FullscreenSpreadReader(
             doc=self.viewer.current_pdf,
             start_page=cur_idx,
+            right_to_left=self._reader_right_to_left,
             cover_single=self._reader_cover_single,
             annotations=self.viewer.page_annotations,
             draw_annot_callback=PageManager.draw_annotations_on_image,
@@ -2171,16 +2492,43 @@ class MainWindow(QMainWindow):
             fitz_lock=FITZ_LOCK,
             viewer=self.viewer,
             editor_callbacks=self._build_fullscreen_editor_callbacks(),
+            source_path=source_path,
+            resume_page=resume_page,
+            history_open_callback=self.open_file_in_reader_from_history,
+            store=self._reader_store,
             parent=None,
         )
         self._active_reader_closed_handler = self._on_reader_closed
         self._active_reader.closed.connect(self._active_reader_closed_handler)
 
+    def open_file_in_reader_from_history(self, filepath):
+        """見開きリーダーの簡易履歴から選ばれたファイルを、続きから見開きで開く"""
+        filepath = os.path.abspath(filepath)
+        if not os.path.isfile(filepath):
+            QMessageBox.information(
+                self, "履歴", f"ファイルが見つかりませんでした。\n{filepath}"
+            )
+            self._reader_store.remove_entry(filepath)
+            return
+        if not self._close_active_reader():
+            return
+        self.open_file_from_path(filepath)
+        if not self.viewer.current_file or os.path.normcase(
+            self.viewer.current_file
+        ) != os.path.normcase(filepath):
+            # 開くのに失敗した／キャンセルされた場合は何もしない
+            return
+        pos = self._reader_store.get_position(filepath)
+        if pos is not None:
+            self._pending_reader_resume = (filepath, pos)
+        self.open_fullscreen_reader()
+
     def _on_reader_closed(self):
         """全画面を閉じたとき、読んでいたページと編集内容をメインエディタに反映する"""
         if self._active_reader and self.viewer.current_pdf and self._active_reader.spreads:
-            # 表紙の有無の選択を覚えておく（次に開くときも同じ設定）
+            # 表紙の有無・綴じ方向の選択を覚えておく（次に開くときも同じ設定）
             self._reader_cover_single = bool(self._active_reader.cover_single)
+            self._reader_right_to_left = bool(self._active_reader.right_to_left)
             idx = max(0, min(self._active_reader.current_spread_idx, len(self._active_reader.spreads) - 1))
             sp = self._active_reader.spreads[idx]
             edited_page = getattr(self._active_reader, "_last_edited_page_idx", None)
@@ -2255,9 +2603,48 @@ class MainWindow(QMainWindow):
             with FITZ_LOCK:
                 merged_doc.close()
             return
+
+        # 結合した文書の開き方を選んでもらう（見開きで読む／メイン画面で編集）
+        choice = QMessageBox(self)
+        choice.setWindowTitle("フォルダ読込")
+        choice.setText(
+            f"{len(manifest)} ファイル（全 {len(merged_doc)} ページ）を結合しました。\n"
+            "どのように開きますか？"
+        )
+        btn_read = choice.addButton(
+            "📖 見開きで読む", QMessageBox.ButtonRole.AcceptRole
+        )
+        btn_edit = choice.addButton(
+            "✏️ メイン画面で編集する", QMessageBox.ButtonRole.ActionRole
+        )
+        choice.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        choice.setDefaultButton(btn_read)
+        choice.exec()
+        clicked = choice.clickedButton()
+        if clicked is btn_edit:
+            # ページの並べ替え・削除はメイン画面のページ一覧で行う。
+            # 未保存編集の確認や後始末は _adopt_reader_doc_to_main に任せる。
+            adopted = self._adopt_reader_doc_to_main(
+                merged_doc,
+                {},
+                0,
+                target_mode="highlight",
+                has_edited=False,
+                from_bulk=True,
+            )
+            if not adopted:
+                with FITZ_LOCK:
+                    merged_doc.close()
+            return
+        if clicked is not btn_read:
+            with FITZ_LOCK:
+                merged_doc.close()
+            return
+
         self._active_reader = FullscreenSpreadReader(
             doc=merged_doc,
             start_page=0,
+            right_to_left=self._reader_right_to_left,
             cover_single=self._reader_cover_single,
             file_manifest=manifest,
             draw_annot_callback=PageManager.draw_annotations_on_image,
@@ -2267,6 +2654,8 @@ class MainWindow(QMainWindow):
             fitz_lock=FITZ_LOCK,
             viewer=None,
             editor_callbacks=self._build_fullscreen_editor_callbacks(),
+            history_open_callback=self.open_file_in_reader_from_history,
+            store=self._reader_store,
             parent=None,
         )
         self._active_reader_closed_handler = self._on_folder_reader_closed
@@ -2276,8 +2665,239 @@ class MainWindow(QMainWindow):
     def _on_folder_reader_closed(self):
         if self._active_reader is not None:
             self._reader_cover_single = bool(self._active_reader.cover_single)
+            self._reader_right_to_left = bool(self._active_reader.right_to_left)
         self._active_reader = None
         self._active_reader_closed_handler = None
+
+    def _reset_text_data_session(self):
+        """文字データダイアログの作業状態を破棄する（文書の差し替え時に呼ぶ）。"""
+        self._text_data_session = {"pages": {}, "all": None, "join": {}}
+        self._text_data_session_doc = None
+
+    def open_text_data_dialog(self):
+        """PDFに埋め込まれた文字データを表示・手直し・コピーするダイアログを開く"""
+        doc = self.viewer.current_pdf
+        if not doc or len(doc) == 0:
+            QMessageBox.information(self, "案内", "先にPDFファイルを開いてください。")
+            return
+        # 作業状態は文書ごとに保持する。別の文書に替わっていたら破棄する。
+        if self._text_data_session_doc is not doc:
+            self._reset_text_data_session()
+            self._text_data_session_doc = doc
+        try:
+            page_texts = extract_page_texts(doc, self.viewer.page_annotations)
+            page_spans = extract_page_spans(doc, self.viewer.page_annotations)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "文字データエラー",
+                f"文字データの読み取りに失敗しました。\n{e}",
+            )
+            return
+        page_rects = get_page_view_rects(doc)
+
+        def _refresh():
+            annotations = self.viewer.page_annotations
+            return (
+                extract_page_texts(doc, annotations),
+                extract_page_spans(doc, annotations),
+            )
+
+        def _image(page_idx, zoom=2.0):
+            from PyQt6.QtGui import QPixmap
+
+            try:
+                data = render_page_png_bytes(
+                    doc, page_idx, self.viewer.page_annotations, zoom=zoom
+                )
+            except Exception:
+                return None
+            if not data:
+                return None
+            pix = QPixmap()
+            if not pix.loadFromData(data):
+                return None
+            return pix
+
+        from ui.text_data_dialog import TextDataDialog
+
+        current_file = getattr(self.viewer, "current_file", None)
+        strip_stem = Path(current_file).stem if current_file else "PDF"
+        dlg = TextDataDialog(
+            page_texts,
+            parent=self,
+            page_spans=page_spans,
+            page_rects=page_rects,
+            session_state=self._text_data_session,
+            apply_handler=self._apply_text_data_replacement,
+            refresh_handler=_refresh,
+            image_provider=_image,
+            strip_handler=self._save_image_only_pdf,
+            strip_filename=f"{strip_stem}_画像のみ.pdf",
+        )
+        dlg.exec()
+
+    def _save_image_only_pdf(self, path):
+        """文字データ画面の「画像だけのPDFとして保存」を実行する。
+
+        現在の文書（注釈を焼き込んだ見た目）から、文字データだけを消した
+        PDFを path に保存し、(成功したか, メッセージ) を返す。
+        開いている文書や現在のファイルは変更しない。
+        """
+        doc = self.viewer.current_pdf
+        if not doc or len(doc) == 0:
+            return False, "PDFが開かれていません。"
+        try:
+            save_image_only_pdf(doc, self.viewer.page_annotations, path)
+        except Exception as e:
+            return False, f"画像だけのPDFを保存できませんでした。\n{e}"
+        return True, (
+            "画像だけのPDFを保存しました。"
+            "見た目はそのままで、文字データは入っていません。"
+        )
+
+    def _apply_text_data_replacement(self, page_idx, spans, joined_text):
+        """文字データ画面の「PDFに反映」を実行する。
+
+        既存の「PDF内の文字を編集」と同じ仕組み（注釈＋Undoコマンド）を使う:
+        - 断片が元のPDF文字なら、断片の矩形ちょうどの text_redact 注釈で消す
+          （断片の外の文字には触れない）。
+        - 断片が過去の編集で入れたテキスト注釈そのものなら、その注釈を取り除く
+          （redact_rect を持つ注釈は、元の消去を引き継ぐため text_redact に変える）。
+        - つなげた文は、断片の先頭位置・代表フォントサイズで1件の text 注釈として
+          入れる（収まらない場合はフォントを縮める）。
+        - 断片がすべてスキャン画像の上に乗ったOCR文字の場合は、つなげた文を
+          不可視テキスト（レンダリングモード3）として入れ、断片の消去でも
+          背景画像のピクセルを消さない。見た目は元の画像のままで、
+          内部の文字データだけが差し替わる。
+        全体を ReplacePageAnnotationsCommand 1件で積むため、1回の Undo で戻せる。
+        成功したら True、対象を特定できず安全に置き換えられない場合は False。
+        """
+        viewer = self.viewer
+        doc = viewer.current_pdf
+        joined = str(joined_text or "").strip()
+        if not doc or not (0 <= page_idx < len(doc)) or not spans or not joined:
+            return False
+
+        ann_list = viewer.page_annotations.get(page_idx, [])
+
+        span_rects = []
+        for sp in spans:
+            r = fitz.Rect(sp["raw_rect"])
+            r.normalize()
+            if r.is_empty:
+                return False
+            span_rects.append(r)
+
+        # 断片がすべてスキャン画像の上に乗ったOCR文字なら、置換後の文字は
+        # 画像の上に表示せず、文字データだけを差し替える（通常のOCR
+        # レイヤーと同じ不可視テキストにする）。判定はダイアログのスパン
+        # 抽出元と同じ焼き込み済みページで行う。
+        invisible = False
+        try:
+            baked_doc = PDFDocumentManager.extract_pages_as_doc(
+                doc, [page_idx], viewer.page_annotations
+            )
+            try:
+                invisible = spans_are_scan_overlay(baked_doc[0], span_rects)
+            finally:
+                baked_doc.close()
+        except Exception:
+            invisible = False
+
+        # 注釈由来の断片を特定する: スパンの文字が注釈のいずれかの行と一致し、
+        # スパン中心がその注釈の推定BBox（少し拡大）に入っているもの。
+        span_ann_match = []
+        for sp, r in zip(spans, span_rects):
+            center = fitz.Point((r.x0 + r.x1) / 2.0, (r.y0 + r.y1) / 2.0)
+            found = None
+            for idx, ann in enumerate(ann_list):
+                if ann.get("type") != "text":
+                    continue
+                if sp["text"] not in str(ann.get("text", "")).split("\n"):
+                    continue
+                try:
+                    bbox = estimate_text_bbox_in_pdf(ann)
+                except Exception:
+                    continue
+                expanded = fitz.Rect(
+                    bbox.x0 - 2.0, bbox.y0 - 2.0, bbox.x1 + 2.0, bbox.y1 + 2.0
+                )
+                if expanded.contains(center):
+                    found = idx
+                    break
+            span_ann_match.append(found)
+
+        matched_ann_indices = {i for i in span_ann_match if i is not None}
+
+        new_list = [
+            copy.deepcopy(ann)
+            for idx, ann in enumerate(ann_list)
+            if idx not in matched_ann_indices
+        ]
+        # 取り除く注釈が元の文字を消していた場合は、その消去を引き継ぐ。
+        # 元の文字が見えないOCR文字だった（または今回の置換が不可視になる）
+        # 場合は、背景画像を傷つけないよう keep_image を引き継ぐ。
+        for idx in sorted(matched_ann_indices):
+            redact_rect = ann_list[idx].get("redact_rect")
+            if redact_rect:
+                redact_ann = {
+                    "type": "text_redact",
+                    "rect": tuple(float(v) for v in redact_rect),
+                }
+                if invisible or ann_list[idx].get("invisible"):
+                    redact_ann["keep_image"] = True
+                new_list.append(redact_ann)
+        # 元のPDF文字の断片は、断片の矩形ちょうどで個別に消す。
+        # 不可視の置換では、画像側の字形を消さないよう keep_image を付ける。
+        for sp, matched in zip(spans, span_ann_match):
+            if matched is None:
+                redact_ann = {
+                    "type": "text_redact",
+                    "rect": tuple(float(v) for v in sp["raw_rect"]),
+                }
+                if invisible:
+                    redact_ann["keep_image"] = True
+                new_list.append(redact_ann)
+
+        first = spans[0]
+        union = span_rects[0]
+        for r in span_rects[1:]:
+            union = union | r
+        if int(first["rotation"]) % 180 == 0:
+            available = union.width
+        else:
+            available = union.height
+        fontsize = fit_fontsize_to_width(
+            joined, float(first["fontsize"]), available
+        )
+        new_list.append(
+            build_text_annotation(
+                text=joined,
+                pos=first["pos"],
+                baseline_pos=first["baseline_pos"],
+                fontsize=fontsize,
+                color=first["color"],
+                rotation=int(first["rotation"]),
+                updated_after=len(new_list),
+                invisible=invisible,
+            )
+        )
+        self._last_text_data_apply_invisible = invisible
+
+        old_snapshot = copy.deepcopy(ann_list)
+        if new_list:
+            viewer.page_annotations[page_idx] = copy.deepcopy(new_list)
+        else:
+            viewer.page_annotations.pop(page_idx, None)
+        viewer.history.push(
+            ReplacePageAnnotationsCommand(page_idx, old_snapshot, new_list)
+        )
+        if viewer.current_page_idx == page_idx:
+            viewer.render_page(fit_view=False, rebuild_base=True)
+        viewer.notify_pages_updated([page_idx])
+        self.update_window_title()
+        return True
 
     def open_scan_clean_ocr_dialog(self):
         """スキャン用紙の色抜き（黄・赤・青・点々消去）＆Windows標準OCRダイアログを開く"""

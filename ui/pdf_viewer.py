@@ -51,6 +51,7 @@ from core import (
     clip_stroke_by_rects,
     collect_all_erased_raw_rects,
     collect_text_only_redact_raw_rects,
+    split_text_only_redact_raw_rects,
     find_draw_annotation_at_point,
     find_draws_along_eraser_stroke,
     find_highlight_annotation_at_point,
@@ -66,6 +67,7 @@ from core import (
     point_to_segment_distance,
 )
 from ui import rgb_tuple_to_qcolor
+from core.text_tools import spans_are_scan_overlay
 from core.batch_apply import (
     SCOPE_ALL,
     SCOPE_CURRENT,
@@ -131,6 +133,7 @@ from core.geometry import (
     raw_rect_to_view_rect,
     raw_rect_to_view_rect_from_geom,
     srgb_int_to_rgb_tuple,
+    text_annotation_rotation,
     view_point_to_raw_pdf,
     view_point_to_raw_pdf_from_geom,
     view_rect_to_raw_rect,
@@ -956,6 +959,35 @@ class PDFViewer(QGraphicsView):
             ))
         return out
 
+    def _get_annotation_word_rects_raw(self, page_idx=None):
+        """今のページのテキスト注釈を、ドラッグ選択用の単語タプルで返す。
+
+        置換で入れたテキストはライブ文書の単語一覧に現れないため、
+        注釈の推定BBoxを1単語として扱う。座標は _get_page_word_rects_raw と
+        同じ raw 座標系。5要素タプル (x0, y0, x1, y1, text) で返し、
+        select_words_in_rect の並び順は座標ベースになる。
+        後からユーザー消去で隠された注釈は対象外。
+        """
+        if not self.current_pdf:
+            return []
+        target_idx = self.current_page_idx if page_idx is None else int(page_idx)
+        ann_list = self.page_annotations.get(target_idx) or []
+        out = []
+        for ann_idx, ann in enumerate(ann_list):
+            if ann.get("type") != "text":
+                continue
+            text = str(ann.get("text", ""))
+            if not text.strip():
+                continue
+            bbox = estimate_text_bbox_in_pdf(ann)
+            if bbox.is_empty:
+                continue
+            later_erases = get_later_user_erase_rects(ann_list, ann_idx, ann)
+            if is_rect_substantially_erased(bbox, later_erases):
+                continue
+            out.append((bbox.x0, bbox.y0, bbox.x1, bbox.y1, text))
+        return out
+
     def _finish_text_selection(self, raw_rect, scene_rect):
         """ドラッグ確定後のテキスト選択処理。単語を集めてハイライト＋コピーポップアップを出す。
 
@@ -974,6 +1006,11 @@ class PDFViewer(QGraphicsView):
                     fitz.Rect(w[0], w[1], w[2], w[3]), erased_rects
                 )
             ]
+        # 置換で入れたテキスト注釈の文字も選択対象にする（ライブ文書の
+        # 単語一覧には現れないため）。注釈の推定BBoxは元の断片の墨消し
+        # 矩形と重なるので、上の消去済みフィルタにはかけない。
+        # 5要素タプルで足すと並び順は座標ベースのフォールバックになる。
+        words = words + self._get_annotation_word_rects_raw()
         selected = select_words_in_rect(
             words, (raw_rect.x0, raw_rect.y0, raw_rect.x1, raw_rect.y1)
         )
@@ -1353,6 +1390,9 @@ class PDFViewer(QGraphicsView):
 
         erased_rects = collect_all_erased_raw_rects(ann_list)
         for tok in self._get_page_pdf_text_tokens():
+            # 注釈由来のトークンは上の注釈ループで処理済みなので二重に数えない
+            if tok.get("ann_idx") is not None:
+                continue
             r = fitz.Rect(tok["raw_rect"])
             r.normalize()
             center = fitz.Point((r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5)
@@ -1623,10 +1663,10 @@ class PDFViewer(QGraphicsView):
             scale = target_w / disp_w
             source_page = self.current_pdf[page_idx]
             temp_doc = None
-            redact_rects = collect_text_only_redact_raw_rects(
+            redact_rects, keep_image_rects = split_text_only_redact_raw_rects(
                 self.page_annotations.get(page_idx, [])
             )
-            if redact_rects:
+            if redact_rects or keep_image_rects:
                 temp_doc = fitz.open()
                 temp_doc.insert_pdf(self.current_pdf, from_page=page_idx, to_page=page_idx)
                 temp_page = temp_doc[0]
@@ -1634,7 +1674,9 @@ class PDFViewer(QGraphicsView):
                 saved_crop = get_effective_cropbox(temp_page)
                 temp_page.set_rotation(0)
                 temp_page.set_cropbox(temp_page.mediabox)
-                PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, redact_rects)
+                PDFDocumentManager.apply_text_only_redactions_to_page(
+                    temp_page, redact_rects, keep_image_rects
+                )
                 if temp_page.rotation != saved_rot:
                     temp_page.set_rotation(saved_rot)
                 if saved_crop != temp_page.mediabox:
@@ -1979,8 +2021,9 @@ class PDFViewer(QGraphicsView):
                     if cur_chunk:
                         chunks.append(cur_chunk)
 
-                    view_deg = int(round(math.degrees(math.atan2(dy, dx)) / 90.0) * 90) % 360
-                    token_rot = (page.rotation - view_deg) % 360
+                    # 注釈の rotation はページ回転を含めない
+                    # （core.geometry.text_annotation_rotation 参照）
+                    token_rot = text_annotation_rotation(dx, dy)
 
                     for chunk in chunks:
                         raw_text_str = "".join(item[0].get("c", "") for item in chunk).strip()
@@ -2024,6 +2067,41 @@ class PDFViewer(QGraphicsView):
                             "rotation": token_rot,
                         })
 
+            # 置換で入れたテキスト注釈はライブ文書の文字レイヤーに存在しない
+            # ため、このままではテキスト編集コマンドで二度と選べなくなる。
+            # 注釈由来のトークンを末尾に足して公開する（元の断片トークンは
+            # 各利用側の消去済みチェックで除外されるので二重にはならない）。
+            # 別文書が明示された場合（見開きリーダーの別文書など）は、
+            # その文書に対応する注釈が無いので足さない。
+            if doc is None:
+                ann_tokens = self._annotation_text_tokens(target_idx)
+                # 注釈の推定BBoxと重なる元トークンは、注釈側を優先するため
+                # 除外する（中心が消去矩形の外にある元断片が、置換テキストの
+                # 場所で先にヒットしてしまうのを防ぐ）。完全に含まれる・
+                # 中心が入る・面積の半分以上が重なる場合に対象とする。
+                if ann_tokens:
+                    ann_boxes = [fitz.Rect(t["raw_rect"]) for t in ann_tokens]
+
+                    def _covered_by_ann(tok) -> bool:
+                        tr = fitz.Rect(tok["raw_rect"])
+                        tr.normalize()
+                        center = fitz.Point(
+                            (tr.x0 + tr.x1) * 0.5, (tr.y0 + tr.y1) * 0.5
+                        )
+                        for ab in ann_boxes:
+                            if ab.contains(center):
+                                return True
+                            inter = tr & ab
+                            area = tr.width * tr.height
+                            if area > 0 and (
+                                inter.width * inter.height
+                            ) >= area * 0.5:
+                                return True
+                        return False
+
+                    tokens = [t for t in tokens if not _covered_by_ann(t)]
+                tokens.extend(ann_tokens)
+
             self._cached_tokens_key = key
             self._cached_pdf_tokens = tokens
             if len(self._pdf_tokens_cache) >= 16:
@@ -2031,6 +2109,44 @@ class PDFViewer(QGraphicsView):
                 self._pdf_tokens_cache.pop(oldest_key, None)
             self._pdf_tokens_cache[key] = tokens
             return tokens
+
+    def _annotation_text_tokens(self, page_idx: int) -> List[Dict[str, Any]]:
+        """指定ページのテキスト注釈を、PDF内文字トークンと同じ形式で返す。
+
+        「PDFに反映」やトークン編集で入れた置換テキストは、ライブ文書の
+        文字レイヤーではなく注釈として存在するため、get_text からは拾えない。
+        テキスト編集コマンドで再び選べるよう、注釈からトークンを合成する。
+        各トークンには ann_idx（注釈のインデックス）を含め、呼び出し側が
+        新しい置換を重ねず、注釈そのものを編集・削除できるようにする。
+        後からユーザー消去で隠された注釈は、find_text_annotation_at_point と
+        同じ規則で対象外にする。
+        """
+        ann_list = self.page_annotations.get(page_idx) or []
+        tokens: List[Dict[str, Any]] = []
+        for ann_idx, ann in enumerate(ann_list):
+            if ann.get("type") != "text":
+                continue
+            if not str(ann.get("text", "")).strip():
+                continue
+            bbox = estimate_text_bbox_in_pdf(ann)
+            if bbox.is_empty:
+                continue
+            later_erases = get_later_user_erase_rects(ann_list, ann_idx, ann)
+            if is_rect_substantially_erased(bbox, later_erases):
+                continue
+            tokens.append({
+                "text": str(ann.get("text", "")),
+                "fontsize": float(ann.get("fontsize", TEXT_FONT_SIZE)),
+                "color": tuple(ann.get("color", (0.0, 0.0, 0.0))),
+                "raw_rect": (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+                "pos": tuple(ann.get("pos", (bbox.x0, bbox.y0))),
+                "baseline_pos": tuple(
+                    ann.get("baseline_pos", (bbox.x0, bbox.y1))
+                ),
+                "rotation": int(ann.get("rotation", 0)) % 360,
+                "ann_idx": ann_idx,
+            })
+        return tokens
 
     def _find_pdf_text_token_at_scene_pos(self, scene_pos):
         if not self.current_pdf or scene_pos is None:
@@ -2595,8 +2711,10 @@ class PDFViewer(QGraphicsView):
         )
 
         self._close_clean_redacted_doc()
-        text_redact_rects = collect_text_only_redact_raw_rects(self.current_annotations)
-        if text_redact_rects:
+        text_redact_rects, keep_image_rects = split_text_only_redact_raw_rects(
+            self.current_annotations
+        )
+        if text_redact_rects or keep_image_rects:
             temp_doc = fitz.open()
             temp_doc.insert_pdf(
                 self.current_pdf,
@@ -2609,7 +2727,9 @@ class PDFViewer(QGraphicsView):
             temp_page.set_rotation(0)
             temp_page.set_cropbox(temp_page.mediabox)
 
-            PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, text_redact_rects)
+            PDFDocumentManager.apply_text_only_redactions_to_page(
+                temp_page, text_redact_rects, keep_image_rects
+            )
 
             if temp_page.rotation != saved_rot:
                 temp_page.set_rotation(saved_rot)
@@ -2988,6 +3108,10 @@ class PDFViewer(QGraphicsView):
                 self.scene.addItem(item)
 
             elif ann["type"] == "text":
+                # 不可視テキスト（OCRレイヤーの置換）は画面に字形を描かない。
+                # 文字データとしてのみ存在し、編集は文字データ画面から行う。
+                if ann.get("invisible"):
+                    continue
                 text_bbox = estimate_text_bbox_in_pdf(ann)
                 if is_rect_substantially_erased(text_bbox, later_erases):
                     continue
@@ -3038,6 +3162,11 @@ class PDFViewer(QGraphicsView):
     def redact_existing_pdf_token(self, pdf_token):
         if not pdf_token:
             return False
+        ann_idx = pdf_token.get("ann_idx")
+        if ann_idx is not None:
+            # 置換テキスト注釈由来のトークンの削除は、注釈の削除として扱う
+            # （plan_text_annotation_removal 経由で消去の引き継ぎも行われる）。
+            return self.remove_text_annotation_at(int(ann_idx))
         annot = {
             "type": "text_redact",
             "rect": pdf_token["raw_rect"],
@@ -3048,13 +3177,51 @@ class PDFViewer(QGraphicsView):
         self.notify_pages_updated([self.current_page_idx])
         return True
 
+    def _token_is_scan_overlay(self, pdf_token):
+        """PDF内文字トークンがスキャン画像の上に乗ったOCR文字か判定する。
+
+        OCR文字の置換は、画像の上に字形を表示せず、文字データだけを
+        差し替える（不可視テキストにする）ために使う。
+        """
+        if not pdf_token or not self.current_pdf:
+            return False
+        if not (0 <= self.current_page_idx < len(self.current_pdf)):
+            return False
+        page = self.current_pdf[self.current_page_idx]
+        return spans_are_scan_overlay(page, [pdf_token["raw_rect"]])
+
     def quick_recolor_existing_pdf_token(self, pdf_token, new_color):
         if not pdf_token:
             return False
+        ann_idx = pdf_token.get("ann_idx")
+        if ann_idx is not None:
+            # 置換テキスト注釈由来のトークンは、注釈そのものの色を変える
+            # （新しい置換注釈を重ねて作らない）。
+            ann_list = self.current_annotations
+            if not (0 <= int(ann_idx) < len(ann_list)):
+                return False
+            old_ann = copy.deepcopy(ann_list[int(ann_idx)])
+            if old_ann.get("type") != "text":
+                return False
+            if tuple(old_ann.get("color", ())) == tuple(new_color):
+                return True
+            new_ann = copy.deepcopy(old_ann)
+            new_ann["color"] = tuple(new_color)
+            new_ann["updated_after"] = len(ann_list)
+            ann_list[int(ann_idx)] = new_ann
+            self.history.push(
+                EditAnnotationCommand(
+                    self.current_page_idx, int(ann_idx), old_ann, new_ann
+                )
+            )
+            self.render_page(fit_view=False, rebuild_base=False)
+            self.notify_pages_updated([self.current_page_idx])
+            return True
         annot = build_pdf_token_replacement_annotation(
             pdf_token,
             new_color=new_color,
             updated_after=len(self.current_annotations),
+            invisible=self._token_is_scan_overlay(pdf_token),
         )
         self.current_annotations.append(annot)
         self.history.push(AddAnnotationCommand(self.current_page_idx, annot))
@@ -3064,6 +3231,13 @@ class PDFViewer(QGraphicsView):
 
     def edit_existing_pdf_token(self, pdf_token):
         if not pdf_token or self.page_rect is None or self.page_rect.width() == 0:
+            return
+
+        # 置換テキスト注釈由来のトークンは、元PDF文字ではなく注釈そのものを
+        # 編集する（新しい置換注釈を重ねて作らない）。
+        ann_idx = pdf_token.get("ann_idx")
+        if ann_idx is not None:
+            self.edit_or_delete_text_annotation_at(int(ann_idx))
             return
 
         self._clear_interactive_guides()
@@ -3128,6 +3302,8 @@ class PDFViewer(QGraphicsView):
                 "redact_rect": pdf_token["raw_rect"],
                 "updated_after": len(self.current_annotations),
             }
+            if self._token_is_scan_overlay(pdf_token):
+                annot["invisible"] = True
             self.current_annotations.append(annot)
             self.history.push(AddAnnotationCommand(self.current_page_idx, annot))
             self.render_page(fit_view=False, rebuild_base=True)
@@ -3673,6 +3849,21 @@ class PDFViewer(QGraphicsView):
                 if 0 <= hit_ann_idx < len(self.current_annotations):
                     self._update_drag_text_guide(hit_item, self.current_annotations[hit_ann_idx])
                 event.accept()
+                return
+
+            if hit_ann_idx is not None:
+                # 座標判定でのみヒットした注釈（不可視テキストなど、画面に
+                # 字形アイテムが無いもの）。ドラッグ移動はできないため、
+                # クリックで編集ダイアログを開く（Shift+クリックで削除）。
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    self.remove_text_annotation_at(hit_ann_idx)
+                    event.accept()
+                    return
+                event.accept()
+                QTimer.singleShot(
+                    0,
+                    lambda idx=hit_ann_idx: self.edit_or_delete_text_annotation_at(idx),
+                )
                 return
 
             pdf_token = self._find_pdf_text_token_at_scene_pos(pos)

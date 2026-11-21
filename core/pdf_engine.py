@@ -15,7 +15,7 @@ from core import (
     TEXT_LINE_SPACING,
     annotation_to_erase_rects,
     clip_stroke_by_rects,
-    collect_text_only_redact_raw_rects,
+    split_text_only_redact_raw_rects,
     get_later_user_erase_rects,
     is_rect_substantially_erased,
     logger,
@@ -109,16 +109,35 @@ class PDFDocumentManager:
             page.apply_redactions(images=img_pixels)
 
     @classmethod
-    def apply_text_only_redactions_to_page(cls, page, raw_rects):
-        if not raw_rects:
-            return
+    def apply_text_only_redactions_to_page(cls, page, raw_rects, keep_image_raw_rects=None):
+        """テキストのみ墨消しをページへ適用する。
 
-        view_rects = cls._raw_rects_to_view_rects(page, raw_rects)
-        if not view_rects:
-            return
+        raw_rects（通常群）は従来どおり、スキャン画像上の文字については
+        画像側の字形ピクセルも消去する（可視の置換文字との二重表示防止）。
+        keep_image_raw_rects（画像を残す群）は背景画像のピクセルに一切
+        触れず、文字データだけを取り除く。OCR文字の不可視置換用で、
+        見た目（画像）をそのままに内部の文字データだけを差し替える。
+        """
+        if raw_rects:
+            view_rects = cls._raw_rects_to_view_rects(page, raw_rects)
+            if view_rects:
+                cls._erase_overlay_image_pixels_for_rects(page, view_rects)
+                cls._remove_text_chars_in_view_rects(page, view_rects)
 
-        # OCR透明テキスト(0x010101〜0x030303)またはスキャン画像上の透明テキスト領域は
-        # ベクター罫線を維持したまま背景のスキャン文字ピクセルも白塗り消去して重なりを防ぐ
+        if keep_image_raw_rects:
+            keep_view_rects = cls._raw_rects_to_view_rects(page, keep_image_raw_rects)
+            if keep_view_rects:
+                cls._remove_text_chars_in_view_rects(page, keep_view_rects)
+
+    @classmethod
+    def _erase_overlay_image_pixels_for_rects(cls, page, view_rects):
+        # OCRマーカー色のテキスト、またはスキャン画像の上に乗ったテキスト領域は
+        # ベクター罫線を維持したまま背景のスキャン文字ピクセルも白塗り消去して重なりを防ぐ。
+        # 画像上のテキストは、文字レイヤー側を消しても画像側に同じ字形が焼き付いて
+        # 残るため、置換後の文字と二重に表示されてしまう。字形が画像に残るかどうかは
+        # 文字色とは無関係なので、色で対象を絞らず、画像と重なるスパンは一律に対象とする
+        # （以前はマーカー色と黒系のレイヤーだけが対象で、それ以外の色のレイヤーでは
+        # 画像の字形だけが消え残っていた）。
         try:
             from core.ocr_cleaner import OCR_TEXT_MARKER_SRGB_INTS
             ocr_pixel_erase_rects = []
@@ -140,7 +159,6 @@ class PDFDocumentManager:
                         is_ocr_marker = sp_color in OCR_TEXT_MARKER_SRGB_INTS
                         is_scan_overlay_text = (
                             has_page_images
-                            and sp_color in (0, 0x010101, 0x020202, 0x030303)
                             and any(ir.intersects(sp_rect) for ir in image_rects)
                         )
                         if is_ocr_marker or is_scan_overlay_text:
@@ -153,6 +171,9 @@ class PDFDocumentManager:
         except Exception:
             logger.debug("Optional OCR pixel redaction check skipped", exc_info=True)
 
+    @classmethod
+    def _remove_text_chars_in_view_rects(cls, page, view_rects):
+        """表示座標の矩形群について、文字データだけを取り除く（画像・線画は残す）。"""
         img_none = getattr(fitz, "PDF_REDACT_IMAGE_NONE", 0)
         gfx_none = getattr(fitz, "PDF_REDACT_LINE_ART_NONE", 0)
         text_opt = getattr(fitz, "PDF_REDACT_TEXT_REMOVE", 0)
@@ -385,11 +406,17 @@ class PDFDocumentManager:
             if verify:
                 cls._verify_page_redaction(page, page_idx, all_erase_view)
 
-        text_only_redact_raw = collect_text_only_redact_raw_rects(ann_list)
-        if text_only_redact_raw:
-            cls.apply_text_only_redactions_to_page(page, text_only_redact_raw)
+        text_only_redact_raw, keep_image_redact_raw = (
+            split_text_only_redact_raw_rects(ann_list)
+        )
+        if text_only_redact_raw or keep_image_redact_raw:
+            cls.apply_text_only_redactions_to_page(
+                page, text_only_redact_raw, keep_image_redact_raw
+            )
             if verify:
-                text_only_view = cls._raw_rects_to_view_rects(page, text_only_redact_raw)
+                text_only_view = cls._raw_rects_to_view_rects(
+                    page, text_only_redact_raw + keep_image_redact_raw
+                )
                 cls._verify_page_text_only_redaction(page, page_idx, text_only_view)
 
         existing_font_names = {f[4] for f in (page.get_fonts() or []) if len(f) > 4}
@@ -473,6 +500,9 @@ class PDFDocumentManager:
                 fontsize = float(ann.get("fontsize", TEXT_FONT_SIZE))
                 text_color = tuple(ann.get("color", (0.0, 0.0, 0.0)))
                 ann_rot = int(ann.get("rotation", saved_rot)) % 360
+                # invisible な注釈は、OCRレイヤーと同じく見えない文字
+                # （レンダリングモード3）として挿入する。抽出・検索は可能。
+                render_mode = 3 if ann.get("invisible") else 0
 
                 raw_pt = fitz.Point(*ann["pos"])
                 if "baseline_pos" in ann:
@@ -504,6 +534,7 @@ class PDFDocumentManager:
                                 fontsize=fontsize,
                                 color=text_color,
                                 rotate=ann_rot,
+                                render_mode=render_mode,
                                 fontfile=JAPANESE_FONT,
                                 fontname=jp_font_alias,
                             )
@@ -518,6 +549,7 @@ class PDFDocumentManager:
                             fontsize=fontsize,
                             color=text_color,
                             rotate=ann_rot,
+                            render_mode=render_mode,
                             fontname="japan",
                         )
 
