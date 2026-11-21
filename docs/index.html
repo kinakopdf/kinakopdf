@@ -43,13 +43,13 @@ a{color:var(--red)}
 <h1>きなこPDF</h1>
 <p class="tagline">無料PDF編集ソフト・完全ローカルで安全</p>
 <p>無料のPDFフリーソフトです。安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。無料でPDF編集ができます。</p>
-<a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.1/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
+<a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.4/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
 <p><small>インストール不要。ダウンロードしてダブルクリックするだけで起動します。USBメモリに入れて持ち運ぶこともできます。<br>
 exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <p><a href="chromebook.html">Chromebookの方はこちら →</a></p>
 <div class="trial">
-<p><strong>お試し版：折りたたみ表示</strong> — 狭い画面で作業するときに、ページの帯を隠して下を詰めて表示できます（表示だけの機能で、PDFの中身は変わりません）。まだ実験中の機能です。安定版とは別のファイルです。<br>
-<a href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.1-trial-fold/KinakoPDF-trial-fold.exe">お試し版をダウンロード（KinakoPDF-trial-fold.exe）</a></p>
+<p><strong>多機能版</strong> — 安定版にない機能を試せる実験版です。機能の一覧と開発中の注意書きは、別ページにまとめました。<br>
+<a href="trial-multi.html">多機能版はこちら →</a></p>
 </div>
 </header>
 
@@ -79,11 +79,12 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 文字を上から塗りつぶすのではありません。選んだ文字や画像のデータを完全に削除し、復旧できないようにします。だから、保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
 <li><span class="pill">編集</span><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
 <li><span class="pill">編集</span><strong>ペン・マーカー・トリミング・回転・折りたたみ表示</strong> — ページの並べ替え・挿入・削除も。折りたたみ表示は、ページの一部の帯を隠して詰めて表示する機能です（表示だけ・PDFは変わりません）</li>
-<li><span class="pill">読む</span><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます</li>
+<li><span class="pill">読む</span><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます（表紙の有無も選べます）。通常画面で全ページを縦にスクロールして読む表示もあります</li>
 <li><span class="pill">OCR</span><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、文字を外部のサービスに送ることはありません。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
 <li><span class="pill">計算</span><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
 <li><span class="pill">便利</span><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
 <li><span class="pill">便利</span><strong>Excel出力</strong> — PDFの表をExcel（.xlsx）に書き出せます</li>
+<li><span class="pill">便利</span><strong>テキスト選択→コピー</strong> — 文字をドラッグで選ぶと「📋 コピー」ボタンが出て、押すとコピーして自動で閉じます。テキスト編集ダイアログにもコピーボタンがあります</li>
 <li><span class="pill">便利</span><strong>文字検索・印刷・最近開いたファイル</strong></li>
 </ul>
 </div>
@@ -113,6 +114,9 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <section>
 <h2>会計事務所向け（近日公開）</h2>
 <p>今はPDFソフトのみ公開中です。会計事務所向けのページに育てていきます。</p>
+<p><strong>確定申告シミュレーター（試作中）</strong> — 特定口座（源泉徴収あり）の確定申告で、申告したほうが得かどうかを世帯全体で試算できます（名古屋市・尾張旭市対応）。<br>
+<a href="shinkoku-simulator.html">確定申告シミュレーター（試作中）を開く →</a><br>
+<small>まだ作成中です。計算結果について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。</small></p>
 <div class="slot">会計ソフトのおすすめ — アフィリエイト枠（ASP・商品未定。登録済みのASPがあれば差し替え）</div>
 <div class="slot">伝票印刷のおすすめ — アフィリエイト枠（ASP・商品未定）</div>
 </section>

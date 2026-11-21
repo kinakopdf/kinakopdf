@@ -2,6 +2,8 @@
 """全画面見開きリーダー (FullscreenSpreadReader) - 見開き閲覧・直接注釈編集"""
 import copy
 import math
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import fitz
 
@@ -17,7 +19,10 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QInputDialog,
+    QMenu,
     QMessageBox,
+    QSlider,
+    QSpinBox,
     QGraphicsOpacityEffect,
 )
 from PyQt6.QtGui import (
@@ -81,9 +86,11 @@ from core.geometry import (
     raw_pdf_to_view_point_from_geom,
     view_point_to_raw_pdf_from_geom,
 )
+from core.text_tools import spans_are_scan_overlay
 
 
 from ui.spread_engine import SpreadCoordMapper, SpreadItem, SpreadLayoutEngine
+from ui.reader_store import ReaderStore
 
 
 class FullscreenSpreadReader(QWidget):
@@ -104,6 +111,10 @@ class FullscreenSpreadReader(QWidget):
         fitz_lock=None,
         viewer=None,
         editor_callbacks: Optional[Dict[str, Any]] = None,
+        source_path: Optional[str] = None,
+        resume_page: Optional[int] = None,
+        history_open_callback=None,
+        store: Optional[ReaderStore] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -111,6 +122,27 @@ class FullscreenSpreadReader(QWidget):
         self.file_manifest = file_manifest or []
         self.right_to_left = right_to_left
         self.cover_single = cover_single
+        # レジューム（続きから開く）用。source_path が無い文書
+        # （フォルダ一括読み込みの結合PDFなど）は位置を記録しない。
+        self.store = store if store is not None else ReaderStore()
+        self.source_path = os.path.abspath(source_path) if source_path else None
+        self.history_open_callback = history_open_callback
+        self._resumed_page: Optional[int] = None
+        if resume_page is not None:
+            start_page = int(resume_page)
+            self._resumed_page = int(resume_page)
+        self._last_recorded_page: Optional[int] = None
+        # 表示だけの白紙ページ: {実ページ番号: その直前に差し込む白紙の枚数}
+        # PDF 自体は変更せず、このセッション限り有効。
+        self._blank_counts: Dict[int, int] = {}
+        self._is_fullscreen = True
+        # 次/前の見開きの先読みキャッシュ
+        self._prefetch_cache: Dict[Tuple, Dict[str, Any]] = {}
+        self._prefetch_timer = QTimer(self)
+        self._prefetch_timer.setSingleShot(True)
+        self._prefetch_timer.setInterval(60)
+        self._prefetch_timer.timeout.connect(self._prefetch_adjacent_spreads)
+        self._syncing_page_controls = False
         self.viewer = viewer
         self.annotations = (
             viewer.page_annotations
@@ -191,9 +223,13 @@ class FullscreenSpreadReader(QWidget):
             "QWidget#hudBox { background-color: rgba(20, 20, 20, 225); border: 1px solid rgba(255,255,255,50); border-radius: 10px; }"
         )
         self.hud_container.setObjectName("hudBox")
-        hud_layout = QHBoxLayout(self.hud_container)
-        hud_layout.setContentsMargins(10, 5, 10, 5)
+        hud_outer_layout = QVBoxLayout(self.hud_container)
+        hud_outer_layout.setContentsMargins(10, 5, 10, 5)
+        hud_outer_layout.setSpacing(4)
+        hud_layout = QHBoxLayout()
+        hud_layout.setContentsMargins(0, 0, 0, 0)
         hud_layout.setSpacing(8)
+        hud_outer_layout.addLayout(hud_layout)
 
         hud_btn_style = (
             "QPushButton { background-color: #2c2c34; color: #f0f0f0; border: 1px solid #555562; "
@@ -227,6 +263,70 @@ class FullscreenSpreadReader(QWidget):
         self.btn_hud_jump.clicked.connect(self._prompt_page_jump)
         hud_layout.addWidget(self.btn_hud_jump)
 
+        # 表紙の有無を選択するボタン（[C] キーと同じ動作。押すたびに切替）
+        self.btn_hud_cover = QPushButton("📕 表紙", self.hud_container)
+        self.btn_hud_cover.setToolTip("表紙を1ページ目だけ単独で表示する / しない（Cキーでも切替）")
+        self.btn_hud_cover.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_cover.setCheckable(True)
+        self.btn_hud_cover.setChecked(self.cover_single)
+        self.btn_hud_cover.setStyleSheet(
+            hud_btn_style
+            + "QPushButton:checked { background-color: #0e639c; color: #ffffff; border-color: #3794ff; }"
+        )
+        self.btn_hud_cover.clicked.connect(self._toggle_cover_mode)
+        hud_layout.addWidget(self.btn_hud_cover)
+
+        # 綴じ方向（右開き／左開き）を切り替えるボタン（[R] キーと同じ動作）
+        self.btn_hud_dir = QPushButton(self.hud_container)
+        self.btn_hud_dir.setToolTip("綴じ方向を切り替えます（右開き＝日本の漫画向き / 左開き）(Rキーでも切替)")
+        self.btn_hud_dir.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_dir.setCheckable(True)
+        self.btn_hud_dir.setStyleSheet(
+            hud_btn_style
+            + "QPushButton:checked { background-color: #0e639c; color: #ffffff; border-color: #3794ff; }"
+        )
+        self.btn_hud_dir.clicked.connect(self._toggle_reading_direction)
+        hud_layout.addWidget(self.btn_hud_dir)
+        self._sync_dir_button()
+
+        # 表示だけの白紙ページをはさむ／取り除くボタン（組を1ページ進める／戻す）
+        self.btn_hud_blank_add = QPushButton("📄+ 白紙", self.hud_container)
+        self.btn_hud_blank_add.setToolTip("現在の見開きの先頭に表示だけの白紙をはさみ、組を1ページ進めます（PDFは変更されません）")
+        self.btn_hud_blank_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_blank_add.setStyleSheet(hud_btn_style)
+        self.btn_hud_blank_add.clicked.connect(self.insert_blank_before_current)
+        hud_layout.addWidget(self.btn_hud_blank_add)
+
+        self.btn_hud_blank_remove = QPushButton("📄− 白紙", self.hud_container)
+        self.btn_hud_blank_remove.setToolTip("はさんだ白紙を取り除き、組を1ページ戻します")
+        self.btn_hud_blank_remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_blank_remove.setStyleSheet(hud_btn_style)
+        self.btn_hud_blank_remove.clicked.connect(self.remove_blank_for_current)
+        hud_layout.addWidget(self.btn_hud_blank_remove)
+
+        # 簡易履歴（最近見開きで読んだファイル）ボタン
+        self.btn_hud_history = QPushButton("📚 履歴", self.hud_container)
+        self.btn_hud_history.setToolTip("最近見開きで読んだファイルを開きます（続きから開きます）")
+        self.btn_hud_history.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_history.setStyleSheet(hud_btn_style)
+        self.btn_hud_history.clicked.connect(self._show_history_menu)
+        hud_layout.addWidget(self.btn_hud_history)
+        if history_open_callback is None:
+            self.btn_hud_history.hide()
+
+        # 全画面／通常表示の切り替えボタン（[F] キーと同じ動作）
+        self.btn_hud_fs = QPushButton("🖥 全画面", self.hud_container)
+        self.btn_hud_fs.setToolTip("全画面表示と通常表示を切り替えます (F)")
+        self.btn_hud_fs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_fs.setCheckable(True)
+        self.btn_hud_fs.setChecked(True)
+        self.btn_hud_fs.setStyleSheet(
+            hud_btn_style
+            + "QPushButton:checked { background-color: #0e639c; color: #ffffff; border-color: #3794ff; }"
+        )
+        self.btn_hud_fs.clicked.connect(self.toggle_fullscreen)
+        hud_layout.addWidget(self.btn_hud_fs)
+
         self.btn_hud_edit = QPushButton("✏ マーカー・編集ツール (E)", self.hud_container)
         self.btn_hud_edit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_hud_edit.setStyleSheet(
@@ -236,6 +336,41 @@ class FullscreenSpreadReader(QWidget):
         )
         self.btn_hud_edit.clicked.connect(self._toggle_toolbar_pinned)
         hud_layout.addWidget(self.btn_hud_edit)
+
+        # 2段目: ページスライダー＋ページ番号（入力して Enter で移動）
+        hud_row2 = QHBoxLayout()
+        hud_row2.setContentsMargins(0, 0, 0, 0)
+        hud_row2.setSpacing(8)
+        self.page_slider = QSlider(Qt.Orientation.Horizontal, self.hud_container)
+        self.page_slider.setMinimumWidth(240)
+        self.page_slider.setToolTip("ドラッグで見開きを移動します")
+        self.page_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 6px; background: #3a3a44; border-radius: 3px; }"
+            "QSlider::handle:horizontal { width: 16px; margin: -5px 0; border-radius: 8px; background: #d8d8e0; border: 1px solid #808095; }"
+        )
+        self.page_slider.valueChanged.connect(self._on_slider_value_changed)
+        hud_row2.addWidget(self.page_slider, 1)
+
+        self.spin_page = QSpinBox(self.hud_container)
+        self.spin_page.setToolTip("ページ番号を入力して Enter で移動します")
+        self.spin_page.setStyleSheet(
+            "QSpinBox { background-color: #25252b; color: #f0f0f0; border: 1px solid #555562; "
+            "border-radius: 5px; padding: 2px 5px; font-size: 12px; }"
+        )
+        self.spin_page.editingFinished.connect(self._on_spin_page_jump)
+        hud_row2.addWidget(self.spin_page)
+
+        self.lbl_page_total = QLabel(self.hud_container)
+        self.lbl_page_total.setStyleSheet(
+            "background: transparent; color: #f0f0f0; font-weight: bold; font-size: 12px;"
+        )
+        hud_row2.addWidget(self.lbl_page_total)
+        hud_outer_layout.addLayout(hud_row2)
+
+        self._slider_jump_timer = QTimer(self)
+        self._slider_jump_timer.setSingleShot(True)
+        self._slider_jump_timer.setInterval(120)
+        self._slider_jump_timer.timeout.connect(self._jump_to_slider_value)
 
         self.hud_opacity = QGraphicsOpacityEffect(self.hud_container)
         self.hud_container.setGraphicsEffect(self.hud_opacity)
@@ -249,7 +384,7 @@ class FullscreenSpreadReader(QWidget):
         self.close_btn = QPushButton("✕", self)
         self.close_btn.setFixedSize(46, 46)
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.close_btn.setToolTip("見開き全画面を閉じる (Esc / F5)")
+        self.close_btn.setToolTip("見開きを閉じる (F5)")
         self.close_btn.setStyleSheet(
             "QPushButton { background-color: rgba(28, 28, 30, 225); color: #ffffff; "
             "border: 1.5px solid rgba(255, 255, 255, 130); border-radius: 23px; "
@@ -625,13 +760,23 @@ class FullscreenSpreadReader(QWidget):
                 main_win.set_mode(target_mode)
             self.close()
         elif self.doc is not None and "adopt_doc_to_main" in self.editor_callbacks:
-            cur_page = (
-                self._last_edited_page_idx
-                if (self._last_edited_page_idx is not None and self.spreads and self._last_edited_page_idx in self.spreads[self.current_spread_idx].page_indices)
-                else (self.spreads[self.current_spread_idx].page_indices[0] if self.spreads else 0)
-            )
+            if (
+                self._last_edited_page_idx is not None
+                and self.spreads
+                and self._last_edited_page_idx in self.spreads[self.current_spread_idx].page_indices
+            ):
+                cur_page = self._last_edited_page_idx
+            else:
+                cur_page = self._current_real_page()
+                if cur_page is None:
+                    cur_page = 0
             adopted = self.editor_callbacks["adopt_doc_to_main"](
-                self.doc, self.annotations, cur_page, target_mode, self._has_edited
+                self.doc,
+                self.annotations,
+                cur_page,
+                target_mode,
+                self._has_edited,
+                from_bulk=bool(self.file_manifest),
             )
             if adopted:
                 self.own_doc = False
@@ -709,21 +854,29 @@ class FullscreenSpreadReader(QWidget):
             self._update_current_spread_cache()
             self.update()
         self._position_overlays()
-        self._show_hud("右上へ移動: [✕ 閉じる] | 上端へ移動または[E]: 編集ツール | [M] マーカー | [R] 右開き | [C] 表紙")
+        if self._resumed_page is not None:
+            self._show_hud(f"前回の続き（{self._resumed_page + 1}ページ）から開きました")
+        else:
+            self._show_hud("右上へ移動: [✕ 閉じる] | 上端へ移動または[E]: 編集ツール | [M] マーカー | [R] 右開き | [C] 表紙 | [F] 全画面")
 
     def _is_page_landscape(self, page_idx: int) -> bool:
         return SpreadLayoutEngine.is_page_landscape(self.doc, page_idx, self.fitz_lock)
 
     def _build_spreads(self):
-        self.spreads = SpreadLayoutEngine.build_spreads(
-            self.doc, cover_single=self.cover_single, fitz_lock=self.fitz_lock
+        slots = SpreadLayoutEngine.build_slot_sequence(
+            len(self.doc), self._blank_counts
         )
+        self.spreads = SpreadLayoutEngine.build_spreads_from_slots(
+            self.doc, slots, cover_single=self.cover_single, fitz_lock=self.fitz_lock
+        )
+        self._sync_page_controls_range()
 
     def _prompt_page_jump(self):
         if not self.doc or len(self.doc) == 0:
             return
         self._cancel_active_drawing()
-        cur_p = self.spreads[self.current_spread_idx].page_indices[0] + 1 if self.spreads else 1
+        cur_real = self._current_real_page()
+        cur_p = (cur_real + 1) if cur_real is not None else 1
         page_num, ok = QInputDialog.getInt(
             self,
             "ページ移動",
@@ -814,66 +967,315 @@ class FullscreenSpreadReader(QWidget):
         self._show_hud()
         self.update()
 
-    def next_spread(self):
+    def _current_real_page(self) -> Optional[int]:
+        """現在の見開きに含まれる最初の実ページ番号。
+
+        見開きが白紙だけの場合は、後方→前方の順に最も近い実ページを返す。
+        実ページが1つも無い場合は None。
+        """
+        if not self.spreads:
+            return None
+        idx = max(0, min(self.current_spread_idx, len(self.spreads) - 1))
+        if self.spreads[idx].page_indices:
+            return self.spreads[idx].page_indices[0]
+        for sp in self.spreads[idx + 1:]:
+            if sp.page_indices:
+                return sp.page_indices[0]
+        for sp in reversed(self.spreads[:idx]):
+            if sp.page_indices:
+                return sp.page_indices[-1]
+        return None
+
+    def _goto_spread(self, idx: int):
+        if not self.spreads:
+            return
+        idx = max(0, min(int(idx), len(self.spreads) - 1))
         self._cancel_active_drawing()
+        self.current_spread_idx = idx
+        self._pan_offset = QPointF(0.0, 0.0)
+        self._hover_screen_rect = None
+        self._update_current_spread_cache()
+        self._show_hud()
+        self.update()
+
+    def next_spread(self):
         if self.current_spread_idx < len(self.spreads) - 1:
-            self.current_spread_idx += 1
-            self._pan_offset = QPointF(0.0, 0.0)
-            self._hover_screen_rect = None
-            self._update_current_spread_cache()
-            self._show_hud()
-            self.update()
+            self._goto_spread(self.current_spread_idx + 1)
 
     def prev_spread(self):
-        self._cancel_active_drawing()
         if self.current_spread_idx > 0:
-            self.current_spread_idx -= 1
-            self._pan_offset = QPointF(0.0, 0.0)
-            self._hover_screen_rect = None
-            self._update_current_spread_cache()
-            self._show_hud()
-            self.update()
+            self._goto_spread(self.current_spread_idx - 1)
+
+    def _rebuild_spreads_keep_page(self, anchor_page: int):
+        """見開きを組み直し、アンカーの実ページを含む見開きへ移動する。"""
+        self._build_spreads()
+        self.current_spread_idx = 0
+        for idx, sp in enumerate(self.spreads):
+            if anchor_page in sp.page_indices:
+                self.current_spread_idx = idx
+                break
+        self._pan_offset = QPointF(0.0, 0.0)
+        self._hover_screen_rect = None
+        self._update_current_spread_cache()
+
+    # ---- 表示だけの白紙ページ（組を1ページ進める／戻す） ----
+
+    def insert_blank_before_current(self):
+        """現在の見開きの先頭ページの直前に表示だけの白紙をはさむ。
+
+        見開きの組が1ページ進む（マンガミーヤの「1ページだけ進む」と同じ）。
+        PDF 自体は変更せず、このセッション限り有効。
+        """
+        if not self.doc or not self.spreads:
+            return
+        anchor = self._current_real_page()
+        if anchor is None:
+            return
+        self._cancel_active_drawing()
+        self._blank_counts[anchor] = self._blank_counts.get(anchor, 0) + 1
+        self._rebuild_spreads_keep_page(anchor)
+        self._show_hud("📄 表示だけの白紙をはさみました（PDFは変更されません）")
+        self.update()
+
+    def remove_blank_for_current(self):
+        """現在の見開きに関わる白紙を1枚取り除く（組を1ページ戻す）。"""
+        if not self.doc or not self.spreads:
+            return
+        self._cancel_active_drawing()
+        anchor = self._blank_anchor_for_current_spread()
+        if anchor is None:
+            self._show_hud("取り除ける白紙がありません")
+            return
+        keep_page = self._current_real_page()
+        if keep_page is None:
+            keep_page = anchor
+        remaining = self._blank_counts.get(anchor, 0) - 1
+        if remaining > 0:
+            self._blank_counts[anchor] = remaining
+        else:
+            self._blank_counts.pop(anchor, None)
+        self._rebuild_spreads_keep_page(keep_page)
+        self._show_hud("📄 白紙を取り除きました")
+        self.update()
+
+    # 「1ページだけ進む／戻す」は白紙の挿入／除去と同じ仕組みの別名
+    def shift_pairing_forward(self):
+        self.insert_blank_before_current()
+
+    def shift_pairing_back(self):
+        self.remove_blank_for_current()
+
+    def _blank_anchor_for_current_spread(self) -> Optional[int]:
+        """現在の見開きについて、取り除くべき白紙のアンカー（直後の実ページ）を返す。
+
+        優先順: (1) 現在の見開きに含まれる白紙、(2) 現在の見開きの先頭ページの
+        直前に差し込まれた白紙。該当が無ければ None。
+        """
+        if not self.spreads or not self.doc:
+            return None
+        idx = max(0, min(self.current_spread_idx, len(self.spreads) - 1))
+        sp = self.spreads[idx]
+        if None in sp.slots:
+            seq = SpreadLayoutEngine.build_slot_sequence(
+                len(self.doc), self._blank_counts
+            )
+            start = sum(len(s.slots) for s in self.spreads[:idx])
+            for j in range(start, min(start + len(sp.slots), len(seq))):
+                if seq[j] is None:
+                    for k in range(j + 1, len(seq)):
+                        if seq[k] is not None:
+                            return seq[k]
+                    return None
+        if sp.page_indices and self._blank_counts.get(sp.page_indices[0], 0) > 0:
+            return sp.page_indices[0]
+        return None
+
+    # ---- 綴じ方向（右開き／左開き） ----
+
+    def _sync_dir_button(self):
+        if getattr(self, "btn_hud_dir", None) is not None:
+            self.btn_hud_dir.blockSignals(True)
+            self.btn_hud_dir.setChecked(self.right_to_left)
+            self.btn_hud_dir.setText("🔄 右開き" if self.right_to_left else "🔄 左開き")
+            self.btn_hud_dir.blockSignals(False)
 
     def _toggle_reading_direction(self):
         self._cancel_active_drawing()
         self.right_to_left = not self.right_to_left
+        self._sync_dir_button()
+        try:
+            self.store.set_prefs(right_to_left=self.right_to_left)
+        except Exception:
+            logger.debug("Spread reader prefs save skipped", exc_info=True)
         self._update_current_spread_cache()
         self._show_hud(f"綴じ方向(R): {'[右開き]' if self.right_to_left else '[左開き]'}")
         self.update()
 
     def _toggle_cover_mode(self):
         self._cancel_active_drawing()
-        cur_page = self.spreads[self.current_spread_idx].page_indices[0] if self.spreads else 0
+        cur_page = self._current_real_page()
+        if cur_page is None:
+            cur_page = 0
         self.cover_single = not self.cover_single
-        self._build_spreads()
-        for idx, sp in enumerate(self.spreads):
-            if cur_page in sp.page_indices:
-                self.current_spread_idx = idx
-                break
-        self._update_current_spread_cache()
+        if getattr(self, "btn_hud_cover", None) is not None:
+            self.btn_hud_cover.setChecked(self.cover_single)
+        try:
+            self.store.set_prefs(cover_single=self.cover_single)
+        except Exception:
+            logger.debug("Spread reader prefs save skipped", exc_info=True)
+        self._rebuild_spreads_keep_page(cur_page)
         self._show_hud(f"表紙モード(C): {'[表紙単ページ]' if self.cover_single else '[1P目から見開き]'}")
         self.update()
+
+    # ---- 全画面／通常表示 ----
+
+    def _sync_fs_button(self):
+        if getattr(self, "btn_hud_fs", None) is not None:
+            self.btn_hud_fs.blockSignals(True)
+            self.btn_hud_fs.setChecked(self._is_fullscreen)
+            self.btn_hud_fs.blockSignals(False)
+
+    def set_fullscreen(self, on: bool):
+        on = bool(on)
+        if on == self._is_fullscreen:
+            self._sync_fs_button()
+            return
+        self._is_fullscreen = on
+        if on:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+            if self.width() < 480 or self.height() < 360:
+                self.resize(1100, 800)
+        self._sync_fs_button()
+        self._show_hud("🖥 全画面表示" if on else "🖥 通常表示（Fで全画面に戻ります）")
+
+    def toggle_fullscreen(self):
+        self.set_fullscreen(not self._is_fullscreen)
+
+    # ---- ページスライダー／ページ番号入力 ----
+
+    def _sync_page_controls_range(self):
+        if not hasattr(self, "page_slider"):
+            return
+        self.page_slider.setRange(0, max(0, len(self.spreads) - 1))
+        total = len(self.doc) if self.doc else 0
+        self.spin_page.setRange(1, max(1, total))
+        self.lbl_page_total.setText(f"/ {total} ページ")
+
+    def _sync_page_controls(self):
+        if not hasattr(self, "page_slider"):
+            return
+        self._syncing_page_controls = True
+        try:
+            self.page_slider.setValue(self.current_spread_idx)
+            real_page = self._current_real_page()
+            if real_page is not None:
+                self.spin_page.setValue(real_page + 1)
+        finally:
+            self._syncing_page_controls = False
+
+    def _on_slider_value_changed(self, value: int):
+        if self._syncing_page_controls:
+            return
+        # スピン側だけ先に追随させ、移動はデバウンス後に1回だけ行う
+        if 0 <= value < len(self.spreads):
+            pages = self.spreads[value].page_indices
+            if pages:
+                self._syncing_page_controls = True
+                try:
+                    self.spin_page.setValue(pages[0] + 1)
+                finally:
+                    self._syncing_page_controls = False
+        self._slider_jump_timer.start()
+
+    def _jump_to_slider_value(self):
+        target = self.page_slider.value()
+        if target != self.current_spread_idx:
+            self._goto_spread(target)
+
+    def _on_spin_page_jump(self):
+        if self._syncing_page_controls or not self.doc:
+            return
+        self.set_current_page(self.spin_page.value() - 1)
+
+    # ---- 簡易履歴 ----
+
+    def _show_history_menu(self):
+        if self.history_open_callback is None:
+            return
+        self._cancel_active_drawing()
+        try:
+            entries = self.store.get_history()
+        except Exception:
+            logger.debug("Spread reader history load skipped", exc_info=True)
+            entries = []
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #25252b; color: #f0f0f0; border: 1px solid #555562; }"
+            "QMenu::item:selected { background-color: #0e639c; }"
+            "QMenu::item:disabled { color: #888892; }"
+        )
+        if not entries:
+            act = menu.addAction("（履歴はありません）")
+            act.setEnabled(False)
+        for entry in entries:
+            path = entry.get("path", "")
+            page = entry.get("page", 0)
+            label = f"{Path(path).name} — {page + 1}ページ"
+            if not os.path.isfile(path):
+                label += "（見つかりません）"
+            act = menu.addAction(label)
+            act.triggered.connect(
+                lambda checked=False, p=path: self._open_history_entry(p)
+            )
+        btn = self.btn_hud_history
+        menu.exec(btn.mapToGlobal(btn.rect().topLeft()))
+
+    def _open_history_entry(self, path: str):
+        if not os.path.isfile(path):
+            QMessageBox.information(
+                self,
+                "履歴",
+                "ファイルが見つかりませんでした。履歴から削除します。\n" + str(path),
+            )
+            try:
+                self.store.remove_entry(path)
+            except Exception:
+                logger.debug("Spread reader history cleanup skipped", exc_info=True)
+            return
+        if self.history_open_callback is not None:
+            self.history_open_callback(path)
 
     def _show_hud(self, extra_text=""):
         if not self.spreads or not hasattr(self, "hud_label"):
             return
         sp = self.spreads[self.current_spread_idx]
         p_nums = [idx + 1 for idx in sp.page_indices]
-        p_str = f"P.{p_nums[0]}" if len(p_nums) == 1 else f"P.{p_nums[0]}-{p_nums[1]}"
+        if p_nums:
+            p_str = f"P.{p_nums[0]}" if len(p_nums) == 1 else f"P.{p_nums[0]}-{p_nums[1]}"
+            progress = int(round((p_nums[-1] / len(self.doc)) * 100))
+        else:
+            # 白紙だけの見開き
+            p_str = "白紙"
+            progress = int(
+                round(((self.current_spread_idx + 1) / len(self.spreads)) * 100)
+            )
 
         file_info = ""
-        first_idx = sp.page_indices[0]
-        for name, start, end in self.file_manifest:
-            if start <= first_idx <= end:
-                file_info = f" | {name}"
-                break
+        if sp.page_indices:
+            first_idx = sp.page_indices[0]
+            for name, start, end in self.file_manifest:
+                if start <= first_idx <= end:
+                    file_info = f" | {name}"
+                    break
 
-        progress = int(round((p_nums[-1] / len(self.doc)) * 100))
         hud_text = f"{p_str} / {len(self.doc)} ({progress}%){file_info}"
         if extra_text:
             hud_text += f"  —  {extra_text}"
 
         self.hud_label.setText(hud_text)
+        self._sync_page_controls()
         self._position_overlays()
 
         self.hud_opacity.setOpacity(1.0)
@@ -889,6 +1291,14 @@ class FullscreenSpreadReader(QWidget):
             self.hud_opacity.setOpacity(0.0)
 
     def _render_page_entry(self, page_idx: int, target_w: float, target_h: float) -> Dict[str, Any]:
+        # 先読みキャッシュにあればそれを使い回す（所有権はキャッシュから移る）
+        key = self._prefetch_key(page_idx, target_w, target_h)
+        cached = self._prefetch_cache.pop(key, None)
+        if cached is not None:
+            return cached
+        return self._render_page_entry_fresh(page_idx, target_w, target_h)
+
+    def _render_page_entry_fresh(self, page_idx: int, target_w: float, target_h: float) -> Dict[str, Any]:
         return SpreadLayoutEngine.render_page_entry(
             doc=self.doc,
             page_idx=page_idx,
@@ -903,26 +1313,170 @@ class FullscreenSpreadReader(QWidget):
             fitz_lock=self.fitz_lock,
         )
 
+    # ---- 先読み（プリフェッチ） ----
+
+    def _prefetch_key(self, page_idx: int, target_w: float, target_h: float) -> Tuple:
+        # ズームは _rendered_zoom ではなく現在の _zoom 基準にする。
+        # （ズーム再描画中に古い倍率の先読みを使い回さないため）
+        effective_zoom = min(2.5, max(1.0, float(self._zoom)))
+        return (
+            int(page_idx),
+            int(round(float(target_w))),
+            int(round(float(target_h))),
+            round(effective_zoom, 3),
+            round(float(self.devicePixelRatioF()), 3),
+        )
+
+    def _invalidate_prefetch(self):
+        self._prefetch_cache.clear()
+
+    def _schedule_prefetch(self):
+        if getattr(self, "_prefetch_timer", None) is not None:
+            self._prefetch_timer.start()
+
+    def _prefetch_adjacent_spreads(self):
+        """次（と前）の見開きの実ページを先に描画してキャッシュする。
+
+        描画はアイドル時（タイマー経由）にのみ行い、失敗しても閲覧には
+        影響しない。キャッシュは最大6エントリに制限する。
+        """
+        try:
+            if (
+                not self.doc
+                or not self.spreads
+                or self.width() <= 0
+                or self.height() <= 0
+                or self._drawing
+            ):
+                return
+            screen_w = float(self.width())
+            screen_h = float(self.height())
+            for idx in (self.current_spread_idx + 1, self.current_spread_idx - 1):
+                if not (0 <= idx < len(self.spreads)):
+                    continue
+                sp = self.spreads[idx]
+                target_w = screen_w / 2.0 if sp.is_spread else screen_w
+                for slot in sp.slots:
+                    if slot is None:
+                        continue
+                    key = self._prefetch_key(slot, target_w, screen_h)
+                    if key in self._prefetch_cache:
+                        continue
+                    self._prefetch_cache[key] = self._render_page_entry_fresh(
+                        slot, target_w, screen_h
+                    )
+            while len(self._prefetch_cache) > 6:
+                self._prefetch_cache.pop(next(iter(self._prefetch_cache)))
+        except Exception:
+            logger.debug("Spread reader prefetch skipped on exception", exc_info=True)
+
+    # ---- レジューム位置の記録 ----
+
+    def _record_position(self):
+        if not self.source_path:
+            return
+        real_page = self._current_real_page()
+        if real_page is None or real_page == self._last_recorded_page:
+            return
+        self._last_recorded_page = real_page
+        try:
+            self.store.set_position(self.source_path, real_page)
+        except Exception:
+            logger.debug("Spread reader position save skipped", exc_info=True)
+
+    # ---- 白紙スロットの描画エントリ ----
+
+    def _make_blank_entry(
+        self, sp: SpreadItem, target_w: float, target_h: float
+    ) -> Optional[Dict[str, Any]]:
+        """表示だけの白紙ページ用の描画エントリを作る（page_idx は -1）。"""
+        if not self.doc or len(self.doc) == 0:
+            return None
+        ref_idx = sp.page_indices[0] if sp.page_indices else 0
+        try:
+            if self.fitz_lock is not None:
+                with self.fitz_lock:
+                    ref_rect = fitz.Rect(self.doc[ref_idx].rect)
+            else:
+                ref_rect = fitz.Rect(self.doc[ref_idx].rect)
+        except Exception:
+            logger.debug("Spread reader blank entry skipped", exc_info=True)
+            return None
+        if ref_rect.width <= 0 or ref_rect.height <= 0:
+            return None
+        base_scale = min(
+            max(1.0, float(target_w)) / ref_rect.width,
+            max(1.0, float(target_h)) / ref_rect.height,
+        )
+        pw = max(2, int(round(ref_rect.width * base_scale)))
+        ph = max(2, int(round(ref_rect.height * base_scale)))
+        img = QImage(pw, ph, QImage.Format.Format_RGB888)
+        img.fill(QColor(255, 255, 255))
+        return {
+            "page_idx": -1,
+            "img": img,
+            "page_rect": ref_rect,
+            "crop_rect": fitz.Rect(ref_rect),
+            "page_rot": 0,
+            "base_rect": QRectF(),
+            "rect": QRectF(),
+            "is_blank": True,
+        }
+
+    def _obtain_entry(
+        self,
+        slot: Optional[int],
+        sp: SpreadItem,
+        target_w: float,
+        target_h: float,
+        old_by_page: Dict[int, Dict[str, Any]],
+        only_page_idx: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        if slot is None:
+            return self._make_blank_entry(sp, target_w, target_h)
+        if (
+            only_page_idx is not None
+            and slot != only_page_idx
+            and slot in old_by_page
+        ):
+            return old_by_page[slot]
+        return self._render_page_entry(slot, target_w, target_h)
+
     def _update_current_spread_cache(self, only_page_idx: Optional[int] = None):
         if not self.spreads or not self.doc or self.width() <= 0 or self.height() <= 0:
             self._cached_draw_items = []
             return
 
+        if only_page_idx is not None:
+            # 注釈が変わったページを含むため、先読みは古くなる。全て破棄する。
+            self._invalidate_prefetch()
+
         sp = self.spreads[self.current_spread_idx]
         screen_w = float(self.width())
         screen_h = float(self.height())
         cur_size = (self.width(), self.height())
-        can_reuse = (
-            only_page_idx is not None
-            and self._last_spread_size == cur_size
-            and len(self._cached_draw_items) == len(sp.page_indices)
-        )
 
-        if not sp.is_spread:
-            entry = self._render_page_entry(sp.page_indices[0], screen_w, screen_h)
-            img = entry["img"]
-            items: List[Dict[str, Any]] = []
-            if not img.isNull():
+        # スロット列を表示順（左→右）に並べ替える
+        slots = list(sp.slots)
+        if len(slots) == 2 and self.right_to_left:
+            visual_slots = [slots[1], slots[0]]
+        else:
+            visual_slots = slots
+
+        # 部分再描画時は、変更されていない実ページのエントリを使い回す
+        old_by_page: Dict[int, Dict[str, Any]] = {}
+        if only_page_idx is not None and self._last_spread_size == cur_size:
+            for entry in self._cached_draw_items:
+                if entry["page_idx"] >= 0:
+                    old_by_page[entry["page_idx"]] = entry
+
+        items: List[Dict[str, Any]] = []
+        if len(visual_slots) == 1:
+            entry = self._obtain_entry(
+                visual_slots[0], sp, screen_w, screen_h, old_by_page, only_page_idx
+            )
+            if entry is not None and not entry["img"].isNull():
+                img = entry["img"]
                 pw = img.width() / img.devicePixelRatio()
                 ph = img.height() / img.devicePixelRatio()
                 x = (screen_w - pw) / 2.0
@@ -930,42 +1484,28 @@ class FullscreenSpreadReader(QWidget):
                 entry["base_rect"] = QRectF(x, y, pw, ph)
                 entry["rect"] = QRectF(x, y, pw, ph)
                 items.append(entry)
-            self._cached_draw_items = items
         else:
-            p_left_idx, p_right_idx = sp.page_indices[0], sp.page_indices[1]
-            if self.right_to_left:
-                p_left_idx, p_right_idx = p_right_idx, p_left_idx
-
             half_w = screen_w / 2.0
-            if can_reuse and self._cached_draw_items[0]["page_idx"] == p_left_idx and p_left_idx != only_page_idx:
-                entry_l = self._cached_draw_items[0]
-            else:
-                entry_l = self._render_page_entry(p_left_idx, half_w, screen_h)
-
-            if can_reuse and self._cached_draw_items[1]["page_idx"] == p_right_idx and p_right_idx != only_page_idx:
-                entry_r = self._cached_draw_items[1]
-            else:
-                entry_r = self._render_page_entry(p_right_idx, half_w, screen_h)
-
-            img_l, img_r = entry_l["img"], entry_r["img"]
-            items = []
-            if not img_l.isNull() and not img_r.isNull():
-                pw_l = img_l.width() / img_l.devicePixelRatio()
-                ph_l = img_l.height() / img_l.devicePixelRatio()
-                pw_r = img_r.width() / img_r.devicePixelRatio()
-                ph_r = img_r.height() / img_r.devicePixelRatio()
-
-                entry_l["base_rect"] = QRectF(half_w - pw_l, (screen_h - ph_l) / 2.0, pw_l, ph_l)
-                entry_r["base_rect"] = QRectF(half_w, (screen_h - ph_r) / 2.0, pw_r, ph_r)
-                entry_l["rect"] = QRectF(entry_l["base_rect"])
-                entry_r["rect"] = QRectF(entry_r["base_rect"])
-                items.append(entry_l)
-                items.append(entry_r)
-            self._cached_draw_items = items
+            entries = [
+                self._obtain_entry(slot, sp, half_w, screen_h, old_by_page, only_page_idx)
+                for slot in visual_slots
+            ]
+            if all(e is not None and not e["img"].isNull() for e in entries):
+                for pos_i, entry in enumerate(entries):
+                    img = entry["img"]
+                    pw = img.width() / img.devicePixelRatio()
+                    ph = img.height() / img.devicePixelRatio()
+                    bx = (half_w - pw) if pos_i == 0 else half_w
+                    entry["base_rect"] = QRectF(bx, (screen_h - ph) / 2.0, pw, ph)
+                    entry["rect"] = QRectF(entry["base_rect"])
+                items = entries
+        self._cached_draw_items = items
 
         self._rendered_zoom = min(2.5, max(1.0, self._zoom))
         self._last_spread_size = cur_size
         self._apply_zoom_pan_to_entries()
+        self._record_position()
+        self._schedule_prefetch()
 
     # ==========================================
     # 見開き画面 ⇔ PDF未回転MediaBox座標変換
@@ -1089,6 +1629,7 @@ class FullscreenSpreadReader(QWidget):
     def _perform_undo(self):
         self._cancel_active_drawing()
         self._hover_screen_rect = None
+        self._invalidate_prefetch()
         if self.viewer is not None:
             self.viewer.undo()
             self._has_edited = True
@@ -1117,6 +1658,7 @@ class FullscreenSpreadReader(QWidget):
     def _perform_redo(self):
         self._cancel_active_drawing()
         self._hover_screen_rect = None
+        self._invalidate_prefetch()
         if self.viewer is not None:
             self.viewer.redo()
             self._has_edited = True
@@ -1273,6 +1815,8 @@ class FullscreenSpreadReader(QWidget):
             if dlg.result_action == dlg_cls.ACTION_DELETE or not dlg.get_clean_text():
                 if old_ann.get("redact_rect"):
                     new_ann = {"type": "text_redact", "rect": old_ann["redact_rect"]}
+                    if old_ann.get("invisible"):
+                        new_ann["keep_image"] = True
                     self._record_and_apply_edit(page_idx, ann_idx, old_ann, new_ann)
                 else:
                     self._record_and_apply_remove(page_idx, ann_idx)
@@ -1345,6 +1889,11 @@ class FullscreenSpreadReader(QWidget):
                         tok["pos"], tok["baseline_pos"], new_fs
                     )
 
+                tok_invisible = False
+                if self.doc is not None and 0 <= page_idx < len(self.doc):
+                    tok_invisible = spans_are_scan_overlay(
+                        self.doc[page_idx], [tok["raw_rect"]]
+                    )
                 annot = build_pdf_token_replacement_annotation(
                     tok,
                     new_text=new_text,
@@ -1352,6 +1901,7 @@ class FullscreenSpreadReader(QWidget):
                     new_color=new_col,
                     new_pos=new_pos,
                     updated_after=len(self.annotations.get(page_idx, [])),
+                    invisible=tok_invisible,
                 )
                 self._record_and_apply_add(page_idx, annot)
                 self._show_hud("✔ PDF内の文字を書き換えました")
@@ -1403,6 +1953,8 @@ class FullscreenSpreadReader(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        # サイズが変わると先読みのキーが合わなくなるため破棄する
+        self._invalidate_prefetch()
         self._update_current_spread_cache()
         self._position_overlays()
 
@@ -1477,6 +2029,15 @@ class FullscreenSpreadReader(QWidget):
 
         painter.end()
 
+    def _view_click_goes_next(self, pos: QPointF, button) -> bool:
+        """閲覧モードのクリックが「次の見開きへ」かどうかを返す。
+
+        左ボタンは常に「次へ」、右ボタンは常に「前へ」。
+        クリックした位置（左半分／右半分）や綴じ方向には依存しない。
+        （2026-11-20 MIWA の希望で、綴じ方向連動のクリック判定から戻した）
+        """
+        return button != Qt.MouseButton.RightButton
+
     def mousePressEvent(self, event: QMouseEvent):
         pos = event.position()
         if self._is_pos_on_overlay_ui(pos):
@@ -1503,8 +2064,10 @@ class FullscreenSpreadReader(QWidget):
                     self._pan_start_offset = QPointF(self._pan_offset)
                     self._view_press_pt = pos
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
-                else:
+                elif self._view_click_goes_next(pos, event.button()):
                     self.next_spread()
+                else:
+                    self.prev_spread()
             elif event.button() == Qt.MouseButton.RightButton:
                 if self._zoom > 1.01:
                     self._panning = True
@@ -1513,11 +2076,16 @@ class FullscreenSpreadReader(QWidget):
                     self._pan_start_offset = QPointF(self._pan_offset)
                     self._right_press_pt = pos
                     self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                elif self._view_click_goes_next(pos, event.button()):
+                    self.next_spread()
                 else:
                     self.prev_spread()
             return
 
         entry = self._find_page_entry_at(pos)
+        if entry is not None and entry["page_idx"] < 0:
+            # 表示だけの白紙ページは編集対象にしない
+            entry = None
 
         # 右ボタン：対象物の上なら即座消去、それ以外（または拡大中ドラッグ）ならパン移動
         if event.button() == Qt.MouseButton.RightButton:
@@ -1751,7 +2319,7 @@ class FullscreenSpreadReader(QWidget):
             or (self.mode == "draw" and (self._pen_eraser_active or shift_held))
         ):
             entry = self._find_page_entry_at(pos)
-            if entry is not None:
+            if entry is not None and entry["page_idx"] >= 0:
                 page_idx = entry["page_idx"]
                 raw_pt = self._screen_to_raw_pdf(pos, entry)
                 if self.mode == "draw":
@@ -1788,6 +2356,8 @@ class FullscreenSpreadReader(QWidget):
         if self._panning and (event.button() == self._pan_button or self._pan_button is None):
             was_view_left = self._view_press_pt is not None and (pos - self._view_press_pt).manhattanLength() < 5.0
             was_view_right = self._right_press_pt is not None and (pos - self._right_press_pt).manhattanLength() < 5.0
+            view_press_pt = self._view_press_pt
+            right_press_pt = self._right_press_pt
             self._panning = False
             self._pan_button = None
             self._view_press_pt = None
@@ -1796,10 +2366,16 @@ class FullscreenSpreadReader(QWidget):
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             elif self.mode == "view":
                 self.setCursor(Qt.CursorShape.ArrowCursor)
-                if was_view_left:
-                    self.next_spread()
-                elif was_view_right:
-                    self.prev_spread()
+                if was_view_left and view_press_pt is not None:
+                    if self._view_click_goes_next(view_press_pt, Qt.MouseButton.LeftButton):
+                        self.next_spread()
+                    else:
+                        self.prev_spread()
+                elif was_view_right and right_press_pt is not None:
+                    if self._view_click_goes_next(right_press_pt, Qt.MouseButton.RightButton):
+                        self.next_spread()
+                    else:
+                        self.prev_spread()
             elif self.mode in ("highlight", "draw", "box_erase", "type"):
                 self.setCursor(Qt.CursorShape.CrossCursor)
             else:
@@ -2008,7 +2584,13 @@ class FullscreenSpreadReader(QWidget):
             if key == Qt.Key.Key_Escape and self._zoom > 1.01:
                 self.reset_zoom()
                 return
+            if key == Qt.Key.Key_Escape and self._is_fullscreen:
+                # 全画面のときは Esc で全画面を抜ける（リーダーは閉じない）
+                self.set_fullscreen(False)
+                return
             self.close()
+        elif key == Qt.Key.Key_F and not (mods & Qt.KeyboardModifier.ControlModifier):
+            self.toggle_fullscreen()
         elif key == Qt.Key.Key_E:
             self._toggle_toolbar_pinned()
         elif key == Qt.Key.Key_G:
@@ -2046,23 +2628,10 @@ class FullscreenSpreadReader(QWidget):
         elif key == Qt.Key.Key_C:
             self._toggle_cover_mode()
         elif key == Qt.Key.Key_Home:
-            if self.spreads:
-                self._cancel_active_drawing()
-                self._pan_offset = QPointF(0.0, 0.0)
-                self._hover_screen_rect = None
-                self.current_spread_idx = 0
-                self._update_current_spread_cache()
-                self._show_hud()
-                self.update()
+            self._goto_spread(0)
         elif key == Qt.Key.Key_End:
             if self.spreads:
-                self._cancel_active_drawing()
-                self._pan_offset = QPointF(0.0, 0.0)
-                self._hover_screen_rect = None
-                self.current_spread_idx = len(self.spreads) - 1
-                self._update_current_spread_cache()
-                self._show_hud()
-                self.update()
+                self._goto_spread(len(self.spreads) - 1)
         else:
             super().keyPressEvent(event)
 
@@ -2089,6 +2658,16 @@ class FullscreenSpreadReader(QWidget):
 
     def closeEvent(self, event):
         self._cancel_active_drawing()
+        # レジューム用に最終位置を記録し、先読みタイマーを止める
+        if getattr(self, "_prefetch_timer", None) is not None:
+            self._prefetch_timer.stop()
+        if getattr(self, "source_path", None) and getattr(self, "spreads", None):
+            real_page = self._current_real_page()
+            if real_page is not None:
+                try:
+                    self.store.set_position(self.source_path, real_page)
+                except Exception:
+                    logger.debug("Spread reader position save skipped", exc_info=True)
         if getattr(self, "own_doc", False) and self._has_edited and self.doc is not None:
             reply = QMessageBox.question(
                 self,

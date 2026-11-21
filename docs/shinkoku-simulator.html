@@ -1,0 +1,2657 @@
+<!-- 修正版（2026-11-18）：尾張旭市の住民税非課税限度額を公式情報に合わせて修正、現役並み高額療養費の年間上限を168万/111万/53万に修正、売却代金未入力時のフォールバックを廃止して警告表示を追加 -->
+<!-- 追加（2026-11-18）：全国主要都市を追加（東京23区・横浜市・大阪市・京都市・神戸市・福岡市）。東京23区は新宿区の国保・介護保険料を代表値として使用。 -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>令和8年分 確定申告（特定口座）損得判定＆世帯影響網羅シミュレーター｜全国主要都市対応（8都市）</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: 'Inter', 'Noto Sans JP', sans-serif; background-color: #f8fafc; color: #0f172a; }
+    .tab-btn.active { background-color: #0f172a; color: #ffffff; border-color: #0f172a; }
+    .flow-node { transition: all 0.2s ease; cursor: pointer; }
+    .flow-node:hover { transform: translateY(-2px); box-shadow: 0 8px 20px -6px rgba(15,23,42,0.15); }
+    .flow-node.selected { border-color: #4f46e5; background-color: #eef2ff; }
+    input[type="number"]::-webkit-inner-spin-button { opacity: 1; }
+  </style>
+</head>
+<body class="min-h-screen antialiased">
+  <!-- Header -->
+  <header class="bg-slate-900 text-white border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <div class="flex flex-wrap items-center gap-2 mb-1.5">
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-500/20 text-indigo-200 border border-indigo-400/30">令和8年分（2026年分）確定申告対応・試作中</span>
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">夫婦・複数人 申告組み合わせ判定</span>
+          </div>
+          <h1 class="text-xl sm:text-2xl font-bold tracking-tight">特定口座（源泉徴収あり）確定申告 損得判定＆世帯影響網羅チャート</h1>
+          <p class="text-xs sm:text-sm text-slate-300 mt-1">「誰が・どの方式で申告するか（夫のみ／妻のみ／両方／申告無し）」と世帯全体（国保・後期・介護・医療負担・扶養）への影響を網羅判定</p>
+        </div>
+        <div class="flex items-center gap-2 bg-slate-800/80 p-1.5 rounded-xl border border-slate-700 self-start">
+          <span class="text-xs text-slate-300 px-2">自治体:</span>
+          <select id="hdr-city" class="rounded-lg bg-indigo-600 text-white px-2.5 py-1.5 text-xs font-semibold outline-none cursor-pointer">
+            <option value="nagoya">名古屋市</option>
+            <option value="owariasahi">尾張旭市</option>
+            <option value="tokyo23">東京23区（新宿区）</option>
+            <option value="yokohama">横浜市</option>
+            <option value="osaka">大阪市</option>
+            <option value="kyoto">京都市</option>
+            <option value="kobe">神戸市</option>
+            <option value="fukuoka">福岡市</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="flex flex-wrap gap-2 mt-5" aria-label="メインナビゲーション">
+        <button type="button" data-tab="sim" class="tab-btn active px-4 py-2 rounded-lg text-sm font-semibold border border-slate-700 transition">1. 世帯損得シミュレーター</button>
+        <button type="button" data-tab="flow" class="tab-btn px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition">2. 影響網羅フローチャート＆マトリクス</button>
+        <button type="button" data-tab="rates" class="tab-btn px-4 py-2 rounded-lg text-sm font-semibold bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition">3. 自治体別 料率・制度比較（8都市）</button>
+        <a href="index.html" class="px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-slate-900 hover:bg-amber-400 transition">きなこPDF（無料PDF編集ソフト）へ →</a>
+      </nav>
+    </div>
+  </header>
+  <!-- 免責の注意書き -->
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+    <div class="bg-red-50 border-2 border-red-400 rounded-xl p-4 text-sm text-red-900 leading-relaxed">
+      <strong class="font-bold">⚠ まだ作成中です。</strong>このシミュレーターは試作中のものです。計算結果の正確性について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。
+    </div>
+  </div>
+
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <!-- Important 2026 Rule & Presets Banner -->
+    <div class="mb-6 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div class="text-xs sm:text-sm text-amber-900 leading-relaxed">
+        <strong class="font-bold">世帯判定のポイント：</strong>
+        各メンバーごとに特定口座の取引を登録でき、<strong>「申告無し」「〇〇のみ申告」「△△のみ申告」「両方申告」</strong>の全組み合わせから世帯ベストを自動判定します。名古屋市・尾張旭市・東京23区（新宿区）・横浜市・大阪市・京都市・神戸市・福岡市の8都市に対応。料率・段階額は令和8年度の各市公式データを使用しています。東京23区は区ごとに料率が異なるため、新宿区の値を代表値として使っています。
+      </div>
+      <div class="flex flex-wrap gap-1.5 shrink-0">
+        <button type="button" data-preset="couple_both" class="px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-900 hover:bg-amber-100 transition">例1: 夫婦ともに特定口座(75歳)</button>
+        <button type="button" data-preset="gisei_head" class="px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-900 hover:bg-amber-100 transition">例2: 75歳親＋40代子(世帯主)</button>
+        <button type="button" data-preset="geneki_trap" class="px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-900 hover:bg-amber-100 transition">例3: 3割判定(売却額の罠)</button>
+        <button type="button" data-preset="kokuho_couple" class="px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-medium text-amber-900 hover:bg-amber-100 transition">例4: 国保夫婦(尾張旭市)</button>
+      </div>
+    </div>
+
+    <!-- TAB 1: SIMULATOR -->
+    <section id="tab-sim" class="space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Input Panel -->
+        <div class="lg:col-span-5 space-y-4">
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 class="text-base font-bold text-slate-900">1. 自治体・世帯メンバー＆特定口座の登録</h2>
+                <p class="text-[11px] text-slate-500 mt-0.5">各メンバーの「特定口座あり」をONにすると口座取引を入力できます</p>
+              </div>
+              <select id="inp-city" class="rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold bg-white focus:ring-2 focus:ring-indigo-500 outline-none">
+                <option value="nagoya">名古屋市</option>
+                <option value="owariasahi">尾張旭市</option>
+                <option value="tokyo23">東京23区（新宿区）</option>
+                <option value="yokohama">横浜市</option>
+                <option value="osaka">大阪市</option>
+                <option value="kyoto">京都市</option>
+                <option value="kobe">神戸市</option>
+                <option value="fukuoka">福岡市</option>
+              </select>
+            </div>
+
+            <div id="members-list" class="space-y-3">
+              <!-- Populated by JS -->
+            </div>
+
+            <button type="button" id="btn-add-member" class="w-full py-2.5 px-4 rounded-xl border-2 border-dashed border-indigo-300 text-indigo-700 font-semibold text-xs hover:bg-indigo-50 transition">
+              ＋ 世帯メンバーを追加（配偶者・親・子など最大5人）
+            </button>
+          </div>
+        </div>
+
+        <!-- Output Panel -->
+        <div class="lg:col-span-7 space-y-5">
+          <!-- Best Verdict Banner -->
+          <div id="verdict-banner" class="rounded-2xl p-5 border shadow-sm bg-emerald-50 border-emerald-200">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span class="inline-block text-xs font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-600 text-white mb-1.5">世帯全体 最適戦略</span>
+                <h2 id="verdict-title" class="text-lg sm:text-xl font-bold text-slate-900">計算中...</h2>
+                <p id="verdict-desc" class="text-sm text-slate-700 mt-1"></p>
+              </div>
+              <div class="text-left sm:text-right shrink-0 bg-white/80 rounded-xl px-4 py-3 border border-emerald-200">
+                <div class="text-xs text-slate-500 font-medium">全員申告無し比の世帯手取り差</div>
+                <div id="verdict-diff" class="text-2xl font-bold text-emerald-700">+0円</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Who Files? Combination Matrix Cards -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 class="text-sm font-bold text-slate-900">誰が申告する？ パターン別 有利不利判定</h3>
+                <p class="text-[11px] text-slate-500">カードをクリックすると下の詳細内訳・メンバー別影響を切り替えて確認できます</p>
+              </div>
+              <span id="city-badge" class="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700">名古屋市</span>
+            </div>
+            <div id="combo-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <!-- Alerts -->
+          <div id="alerts-box" class="space-y-2"></div>
+
+          <!-- Household Status Transitions (Baseline vs Selected/Best) -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <h3 class="text-sm font-bold text-slate-900">世帯判定ステータスの比較（全員申告無し vs 選択中パターン）</h3>
+              <span id="selected-combo-badge" class="text-xs font-semibold text-indigo-700">選択中: -</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs text-left">
+                <thead class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                  <tr>
+                    <th class="px-3.5 py-2.5 font-semibold">世帯判定項目</th>
+                    <th class="px-3.5 py-2.5 font-semibold">全員 申告無し（基準）</th>
+                    <th class="px-3.5 py-2.5 font-semibold" id="col-sel-status">選択パターン</th>
+                  </tr>
+                </thead>
+                <tbody id="status-tbody" class="divide-y divide-slate-100">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Detailed Breakdown Table -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="px-5 py-3.5 border-b border-slate-100">
+              <h3 class="text-sm font-bold text-slate-900">世帯全員の年間負担額 比較内訳（基準 vs 選択パターン）</h3>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs sm:text-sm text-left">
+                <thead class="bg-slate-50 text-slate-600 text-xs uppercase border-b border-slate-200">
+                  <tr>
+                    <th class="px-4 py-2.5 font-semibold">負担項目（世帯合算）</th>
+                    <th class="px-4 py-2.5 font-semibold text-right">全員 申告無し</th>
+                    <th class="px-4 py-2.5 font-semibold text-right" id="col-sel-breakdown">選択パターン</th>
+                    <th class="px-4 py-2.5 font-semibold text-right">増減差額</th>
+                  </tr>
+                </thead>
+                <tbody id="breakdown-tbody" class="divide-y divide-slate-100">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Member-by-member Detail -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="px-5 py-3.5 border-b border-slate-100">
+              <h3 class="text-sm font-bold text-slate-900">メンバー別の課税・介護・窓口負担変化（申告無し → 選択パターン）</h3>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs text-left">
+                <thead class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                  <tr>
+                    <th class="px-3 py-2.5 font-semibold">メンバー</th>
+                    <th class="px-3 py-2.5 font-semibold">選択中の申告方式</th>
+                    <th class="px-3 py-2.5 font-semibold text-right">住民税判定</th>
+                    <th class="px-3 py-2.5 font-semibold text-right">介護保険料</th>
+                    <th class="px-3 py-2.5 font-semibold text-right">医療/介護割合</th>
+                  </tr>
+                </thead>
+                <tbody id="member-detail-tbody" class="divide-y divide-slate-100">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Charts -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <h3 class="text-sm font-bold text-slate-900 mb-3">パターン別の世帯年間負担内訳（万円）</h3>
+            <div class="relative h-64">
+              <canvas id="chart-breakdown"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: FLOWCHART & IMPACT MATRIX -->
+    <section id="tab-flow" class="hidden space-y-6">
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+        <div class="mb-5">
+          <h2 class="text-lg font-bold text-slate-900">特定口座（源泉徴収あり）確定申告 意思決定フローチャート</h2>
+          <p class="text-sm text-slate-600 mt-1">当てはまる分岐カードをクリックすると、世帯全体への連鎖影響と対策を確認できます。</p>
+        </div>
+
+        <div class="space-y-4">
+          <div class="bg-slate-50 rounded-xl p-4 border border-slate-200">
+            <div class="text-xs font-bold text-indigo-600 mb-2">STEP 1：譲渡損失や繰越損失はあるか？</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button type="button" data-flow="loss_yes" class="flow-node selected text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">YES：当年譲渡損・繰越損失あり</div>
+                <div class="text-xs text-slate-600 mt-1">損益通算・繰越控除を使いたい（売却代金の3割判定リスクに注意）</div>
+              </button>
+              <button type="button" data-flow="loss_no" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">NO：利益・配当のみ（損失なし）</div>
+                <div class="text-xs text-slate-600 mt-1">配当控除や基礎控除で源泉徴収20.315%を取り戻したい</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="bg-slate-50 rounded-xl p-4 border border-slate-200">
+            <div class="text-xs font-bold text-indigo-600 mb-2">STEP 2：世帯の医療保険構成はどれか？</div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <button type="button" data-flow="ins_shaho" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">全員が職場の健康保険（社保）</div>
+                <div class="text-xs text-slate-600 mt-1">保険料は標準報酬月額で決まるため影響なし（※扶養・高額療養費注意）</div>
+              </button>
+              <button type="button" data-flow="ins_kokuho" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">国民健康保険（国保）世帯</div>
+                <div class="text-xs text-slate-600 mt-1">名古屋市最大14.01%、尾張旭市最大13.15%＋世帯主合算の軽減消失</div>
+              </button>
+              <button type="button" data-flow="ins_koki" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">後期高齢者医療がいる世帯</div>
+                <div class="text-xs text-slate-600 mt-1">愛知県10.73%＋世帯主合算の軽減判定＋世帯全員の2割/3割連動</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="bg-slate-50 rounded-xl p-4 border border-slate-200">
+            <div class="text-xs font-bold text-indigo-600 mb-2">STEP 3：世帯全体・医療・介護の「崖（しきい値）」に近いか？</div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <button type="button" data-flow="cliff_fuyo" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">扶養・配偶者控除の境界</div>
+                <div class="text-xs text-slate-600 mt-1">合計所得62万円（令和8年改正）を超えると世帯主等の税金増</div>
+              </button>
+              <button type="button" data-flow="cliff_non_tax" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">住民税非課税世帯の境界</div>
+                <div class="text-xs text-slate-600 mt-1">世帯内で1人でも課税になると全員の介護保険料・高額療養費が上昇</div>
+              </button>
+              <button type="button" data-flow="cliff_med" class="flow-node text-left bg-white p-4 rounded-xl border-2 border-slate-200">
+                <div class="font-bold text-sm text-slate-900">医療費3割/2割・介護負担割合</div>
+                <div class="text-xs text-slate-600 mt-1">課税所得28万/145万、合計収入383万/520万、介護160万/220万</div>
+              </button>
+            </div>
+          </div>
+
+          <div id="flow-detail-box" class="bg-indigo-50 border border-indigo-200 rounded-xl p-5">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Comprehensive 10-Domain Impact Matrix -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-100">
+          <h3 class="text-base font-bold text-slate-900">確定申告による全10領域への影響・世帯合算ルール 網羅一覧</h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-4 py-3 font-semibold">影響領域</th>
+                <th class="px-4 py-3 font-semibold">判定範囲（個人 / 世帯）</th>
+                <th class="px-4 py-3 font-semibold">申告したときの主な影響・しきい値</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">1. 所得税（令和8年分）</td>
+                <td class="px-4 py-3">個人（扶養は世帯連動）</td>
+                <td class="px-4 py-3">基礎控除最大104万円（合計所得489万以下）、配当控除10%で還付が出る場合あり。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">2. 住民税（令和9年度）</td>
+                <td class="px-4 py-3">個人（非課税世帯判定は全員）</td>
+                <td class="px-4 py-3">総合課税実質7.2%（名古屋市は市民税減税により7.012%）。名古屋市45万・尾張旭市42万（単身・均等割基準）を超えると均等割課税化。所得割基準は尾張旭市45万。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">3. 国民健康保険料（税）</td>
+                <td class="px-4 py-3">加入者全員＋擬制世帯主</td>
+                <td class="px-4 py-3">名古屋市最大14.01%・尾張旭市最大13.15%増。7/5/2割軽減は擬制世帯主の所得も合算。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">4. 後期高齢者医療保険料</td>
+                <td class="px-4 py-3">個人（軽減は世帯主＋被保険者全員）</td>
+                <td class="px-4 py-3">愛知県10.73%増。7.2/5/2割軽減は世帯主（国保・社保含む）＋被保険者全員の所得合算で判定。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">5. 介護保険料（65歳〜）</td>
+                <td class="px-4 py-3">個人＋世帯全員の非課税判定</td>
+                <td class="px-4 py-3">世帯内で誰か1人でも住民税課税になると「世帯非課税（1〜4/1〜3段階）」から「世帯課税（5〜6/4〜5段階以上）」へ上昇。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">6. 医療費 窓口負担割合</td>
+                <td class="px-4 py-3">同一世帯の後期被保険者全員</td>
+                <td class="px-4 py-3">住民税課税所得（総合＋分離）28万以上かつ収入200万(複数320万)以上で2割。145万以上かつ収入383万(複数520万)以上で3割（売却代金も収入算入）。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">7. 高額療養費 限度額</td>
+                <td class="px-4 py-3">同一保険の世帯単位</td>
+                <td class="px-4 py-3">令和8年8月改正の新上限額（年間上限新設）。世帯非課税→課税や課税所得145万・380万・690万以上で上限が急増。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">8. 介護サービス 負担割合</td>
+                <td class="px-4 py-3">本人＋世帯の65歳以上全員</td>
+                <td class="px-4 py-3">本人合計所得160万(複数65歳以上合計346万)以上で2割、220万(複数463万)以上で3割。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">9. 扶養・配偶者控除</td>
+                <td class="px-4 py-3">申告者本人と扶養する家族</td>
+                <td class="px-4 py-3">合計所得62万円（繰越控除前）を超えると配偶者・扶養控除が外れ、家族の税金が増加。</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-3 font-semibold text-slate-900">10. 非課税世帯向け制度</td>
+                <td class="px-4 py-3">世帯全員</td>
+                <td class="px-4 py-3">高額介護サービス費の上限（1.5〜2.46万→4.44万）や施設食費・居住費軽減等が対象外に。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: MUNICIPALITY COMPARISON -->
+    <section id="tab-rates" class="hidden space-y-6">
+      <div class="bg-slate-100 border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-700">
+        ※令和8年分所得に基づく令和9年度賦課の試算用データです（料率・段階額は最新の令和8年度確定値を使用しています）。
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+            <h3 class="text-base font-bold text-slate-900">個人住民税・国民健康保険（令和8年度）名古屋市 vs 尾張旭市</h3>
+            <p class="text-xs text-slate-600 mt-0.5">名古屋市は「市民税5%減税・国保平等割なし・独自控除あり」、尾張旭市は「2級地非課税基準・国保平等割あり」</p>
+          </div>
+          <div class="p-5 overflow-x-auto">
+            <table class="w-full text-xs sm:text-sm text-left">
+              <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+                <tr>
+                  <th class="px-3 py-2 font-semibold">区分</th>
+                  <th class="px-3 py-2 font-semibold text-right">名古屋市</th>
+                  <th class="px-3 py-2 font-semibold text-right">尾張旭市</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr>
+                  <td class="px-3 py-2 font-medium">住民税 所得割率（総合 / 申告分離）</td>
+                  <td class="px-3 py-2 text-right">9.7% / 4.85%（5%減税）</td>
+                  <td class="px-3 py-2 text-right">10.0% / 5.0%</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">住民税 均等割（森林環境税含） / 非課税基準(単身)</td>
+                  <td class="px-3 py-2 text-right">5,300円 / 合計所得45万以下</td>
+                  <td class="px-3 py-2 text-right">5,500円 / 均等割42万以下・所得割45万以下</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">国保 医療分 所得割 / 均等割 / 平等割</td>
+                  <td class="px-3 py-2 text-right">8.83% / 50,591円 / 0円</td>
+                  <td class="px-3 py-2 text-right">7.80% / 30,200円 / 22,000円</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">国保 支援金分 所得割 / 均等割 / 平等割</td>
+                  <td class="px-3 py-2 text-right">2.58% / 15,784円 / 0円</td>
+                  <td class="px-3 py-2 text-right">2.75% / 11,500円 / 7,600円</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">国保 介護分(40-64歳) 所得割 / 均等割 / 平等割</td>
+                  <td class="px-3 py-2 text-right">2.34% / 16,120円 / 0円</td>
+                  <td class="px-3 py-2 text-right">2.31% / 11,700円 / 5,800円</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">国保 子ども分 所得割 / 均等割(18歳〜) / 平等割</td>
+                  <td class="px-3 py-2 text-right">0.26% / 1,863円 / 0円</td>
+                  <td class="px-3 py-2 text-right">0.29% / 1,260円 / 750円</td>
+                </tr>
+                <tr class="bg-indigo-50/60 font-bold">
+                  <td class="px-3 py-2">国保 所得割率 合計（65歳〜 / 40-64歳）</td>
+                  <td class="px-3 py-2 text-right">11.67% / 14.01%</td>
+                  <td class="px-3 py-2 text-right">10.84% / 13.15%</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">国保 賦課限度額（医療/支援/介護/子ども）</td>
+                  <td class="px-3 py-2 text-right">67万 / 26万 / 17万 / 3万（計113万）</td>
+                  <td class="px-3 py-2 text-right">67万 / 26万 / 17万 / 3万（計113万）</td>
+                </tr>
+                <tr>
+                  <td class="px-3 py-2 font-medium">国保 独自控除</td>
+                  <td class="px-3 py-2 text-right">国保加入扶養1人33万控除・軽減世帯均等2,000円引等</td>
+                  <td class="px-3 py-2 text-right">法定軽減（7・5・2割）のみ</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="space-y-6">
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+              <h3 class="text-base font-bold text-slate-900">愛知県 後期高齢者医療保険料（令和8・9年度）</h3>
+              <p class="text-xs text-slate-600 mt-0.5">名古屋市・尾張旭市とも同一（愛知県後期高齢者医療広域連合）</p>
+            </div>
+            <div class="p-5 text-xs sm:text-sm space-y-2">
+              <div class="flex justify-between py-1 border-b border-slate-100"><span>医療分</span><span class="font-semibold">均等割 56,130円 ＋ 所得割 10.48%（上限 85万円）</span></div>
+              <div class="flex justify-between py-1 border-b border-slate-100"><span>子ども分（令和8年度新設）</span><span class="font-semibold">均等割 1,362円 ＋ 所得割 0.25%（上限 2.1万円）</span></div>
+              <div class="flex justify-between py-1"><span>軽減（7割は医療分7.2割）</span><span class="font-semibold">世帯主＋被保険者全員の合算で判定</span></div>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+              <h3 class="text-base font-bold text-slate-900">介護保険料（第1号・65歳以上）令和8年度比較</h3>
+              <p class="text-xs text-slate-600 mt-0.5">名古屋市は18段階（基準額83,403円）、尾張旭市は15段階（基準額65,800円）</p>
+            </div>
+            <div class="p-5 overflow-x-auto">
+              <table class="w-full text-xs text-left">
+                <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th class="px-2 py-2">所得区分目安</th>
+                    <th class="px-2 py-2 text-right">名古屋市（年額）</th>
+                    <th class="px-2 py-2 text-right">尾張旭市（年額）</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  <tr><td class="px-2 py-1.5">世帯非課税（年金+所得 82.65万以下）</td><td class="px-2 py-1.5 text-right">20,851円（2段階）</td><td class="px-2 py-1.5 text-right">15,100円（1段階）</td></tr>
+                  <tr><td class="px-2 py-1.5">世帯非課税（120万超）</td><td class="px-2 py-1.5 text-right">57,132円（4段階）</td><td class="px-2 py-1.5 text-right">45,100円（3段階）</td></tr>
+                  <tr><td class="px-2 py-1.5">本人非課税・世帯課税（82.65万超）</td><td class="px-2 py-1.5 text-right">83,403円（6段階）</td><td class="px-2 py-1.5 text-right">65,800円（5段階）</td></tr>
+                  <tr><td class="px-2 py-1.5">本人課税（合計所得120万〜125万未満）</td><td class="px-2 py-1.5 text-right">87,574〜91,744円</td><td class="px-2 py-1.5 text-right">79,000円（6段階）</td></tr>
+                  <tr><td class="px-2 py-1.5">本人課税（合計所得200万〜320万）</td><td class="px-2 py-1.5 text-right">125,105〜141,786円</td><td class="px-2 py-1.5 text-right">85,600〜98,800円</td></tr>
+                  <tr><td class="px-2 py-1.5">上限段階（1,500万〜 / 1,000万〜）</td><td class="px-2 py-1.5 text-right">258,550円（18段階）</td><td class="px-2 py-1.5 text-right">171,200円（15段階）</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- 全国主要都市 比較（令和8年度） -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-base font-bold text-slate-900">全国主要都市 住民税・国民健康保険 比較（令和8年度）</h3>
+          <p class="text-xs text-slate-600 mt-0.5">東京23区は新宿区の値を代表値として使用。均等割は森林環境税1,000円込みの額です。</p>
+        </div>
+        <div class="p-5 overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-3 py-2 font-semibold">都市</th>
+                <th class="px-3 py-2 font-semibold text-right">住民税 均等割</th>
+                <th class="px-3 py-2 font-semibold text-right">住民税 所得割率</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 医療分</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 支援金分</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 介護分</th>
+                <th class="px-3 py-2 font-semibold text-right">国保 子ども分</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="px-3 py-2 font-medium">名古屋市</td><td class="px-3 py-2 text-right">5,300円</td><td class="px-3 py-2 text-right">9.7%（5%減税）</td><td class="px-3 py-2 text-right">8.83% / 50,591円</td><td class="px-3 py-2 text-right">2.58% / 15,784円</td><td class="px-3 py-2 text-right">2.34% / 16,120円</td><td class="px-3 py-2 text-right">0.26% / 1,863円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">尾張旭市</td><td class="px-3 py-2 text-right">5,500円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.80% / 30,200円（平等割22,000円）</td><td class="px-3 py-2 text-right">2.75% / 11,500円（7,600円）</td><td class="px-3 py-2 text-right">2.31% / 11,700円（5,800円）</td><td class="px-3 py-2 text-right">0.29% / 1,260円（750円）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">東京23区（新宿区）</td><td class="px-3 py-2 text-right">5,000円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.51% / 47,600円</td><td class="px-3 py-2 text-right">2.80% / 17,600円</td><td class="px-3 py-2 text-right">2.43% / 17,800円</td><td class="px-3 py-2 text-right">0.27% / 1,873円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">横浜市</td><td class="px-3 py-2 text-right">6,200円</td><td class="px-3 py-2 text-right">10.025%</td><td class="px-3 py-2 text-right">8.33% / 40,870円</td><td class="px-3 py-2 text-right">2.62% / 13,380円</td><td class="px-3 py-2 text-right">2.84% / 16,200円</td><td class="px-3 py-2 text-right">0.34% / 1,770円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">大阪市</td><td class="px-3 py-2 text-right">5,300円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">9.50% / 34,990円（平等割33,908円）</td><td class="px-3 py-2 text-right">3.06% / 11,191円（10,845円）</td><td class="px-3 py-2 text-right">2.60% / 18,682円</td><td class="px-3 py-2 text-right">0.28% / 1,841円</td></tr>
+              <tr><td class="px-3 py-2 font-medium">京都市</td><td class="px-3 py-2 text-right">5,600円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.94% / 30,080円（平等割17,930円）</td><td class="px-3 py-2 text-right">2.66% / 10,360円（6,180円）</td><td class="px-3 py-2 text-right">2.51% / 11,090円（5,370円）</td><td class="px-3 py-2 text-right">0.28% / 1,170円（660円）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">神戸市</td><td class="px-3 py-2 text-right">6,200円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">7.38% / 33,700円（平等割21,800円）</td><td class="px-3 py-2 text-right">2.97% / 13,510円（8,740円）</td><td class="px-3 py-2 text-right">2.78% / 13,970円（6,880円）</td><td class="px-3 py-2 text-right">0.26% / 1,330円（830円）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">福岡市</td><td class="px-3 py-2 text-right">5,500円</td><td class="px-3 py-2 text-right">10.0%</td><td class="px-3 py-2 text-right">5.58% / 19,807円（平等割18,664円）</td><td class="px-3 py-2 text-right">3.14% / 10,441円（9,838円）</td><td class="px-3 py-2 text-right">2.61% / 10,160円（7,751円）</td><td class="px-3 py-2 text-right">0.28% / 1,039円（911円）</td></tr>
+            </tbody>
+          </table>
+          <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">国保の賦課限度額は医療分67万円（大阪市のみ66万円）・支援金分26万円・介護分17万円・子ども分3万円。横浜市の所得割率10.025%は神奈川県水源環境保全税0.025%を含みます。申告分離課税の所得割率は名古屋市4.85%、その他5%です（横浜市の県0.025%分が分離課税に適用されるかは未確認）。国保料の端数処理は市により異なります。この試算では名古屋市は10円単位、その他の市は100円単位で切り捨てています。</p>
+        </div>
+      </div>
+
+      <!-- 後期高齢者医療保険料 全国 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-base font-bold text-slate-900">後期高齢者医療保険料（令和8・9年度）全国の広域連合</h3>
+          <p class="text-xs text-slate-600 mt-0.5">賦課限度額は医療分85万円・子ども分2.1万円で全国共通。軽減は全国共通の所得基準で判定します。</p>
+        </div>
+        <div class="p-5 overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-3 py-2 font-semibold">広域連合</th>
+                <th class="px-3 py-2 font-semibold text-right">医療分 均等割</th>
+                <th class="px-3 py-2 font-semibold text-right">医療分 所得割</th>
+                <th class="px-3 py-2 font-semibold text-right">子ども分 均等割</th>
+                <th class="px-3 py-2 font-semibold text-right">子ども分 所得割</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="px-3 py-2 font-medium">愛知県（名古屋市・尾張旭市）</td><td class="px-3 py-2 text-right">56,130円</td><td class="px-3 py-2 text-right">10.48%</td><td class="px-3 py-2 text-right">1,362円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">東京都（東京23区）</td><td class="px-3 py-2 text-right">53,300円</td><td class="px-3 py-2 text-right">9.88%</td><td class="px-3 py-2 text-right">1,300円</td><td class="px-3 py-2 text-right">0.26%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">神奈川県（横浜市）</td><td class="px-3 py-2 text-right">52,531円</td><td class="px-3 py-2 text-right">10.30%</td><td class="px-3 py-2 text-right">1,330円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">大阪府（大阪市）</td><td class="px-3 py-2 text-right">64,931円</td><td class="px-3 py-2 text-right">11.51%</td><td class="px-3 py-2 text-right">1,373円</td><td class="px-3 py-2 text-right">0.24%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">京都府（京都市）</td><td class="px-3 py-2 text-right">59,590円</td><td class="px-3 py-2 text-right">10.15%</td><td class="px-3 py-2 text-right">1,350円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">兵庫県（神戸市）</td><td class="px-3 py-2 text-right">58,427円</td><td class="px-3 py-2 text-right">10.77%</td><td class="px-3 py-2 text-right">1,351円</td><td class="px-3 py-2 text-right">0.24%</td></tr>
+              <tr><td class="px-3 py-2 font-medium">福岡県（福岡市）</td><td class="px-3 py-2 text-right">66,340円</td><td class="px-3 py-2 text-right">11.70%</td><td class="px-3 py-2 text-right">1,339円</td><td class="px-3 py-2 text-right">0.25%</td></tr>
+            </tbody>
+          </table>
+          <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">令和8・9年度のみ、医療分の7割軽減が7.2割軽減になる特例があります（子ども分は7割のまま）。京都府での7.2割特例の適用は広域連合資料で直接確認できていませんが、全国措置のため適用としています。東京都独自の所得割軽減はこの試算では反映していません。</p>
+        </div>
+      </div>
+
+      <!-- 介護保険料 全国比較 -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-base font-bold text-slate-900">介護保険料（第1号・65歳以上）全国比較（令和8年度）</h3>
+          <p class="text-xs text-slate-600 mt-0.5">東京23区は新宿区の値を代表値として使用。</p>
+        </div>
+        <div class="p-5 overflow-x-auto">
+          <table class="w-full text-xs sm:text-sm text-left">
+            <thead class="bg-slate-50 text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="px-3 py-2 font-semibold">都市</th>
+                <th class="px-3 py-2 font-semibold text-right">基準額（年額）</th>
+                <th class="px-3 py-2 font-semibold text-right">段階数</th>
+                <th class="px-3 py-2 font-semibold text-right">世帯非課税・低所得</th>
+                <th class="px-3 py-2 font-semibold text-right">本人課税・上限段階</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr><td class="px-3 py-2 font-medium">名古屋市</td><td class="px-3 py-2 text-right">83,403円</td><td class="px-3 py-2 text-right">18段階</td><td class="px-3 py-2 text-right">20,851円</td><td class="px-3 py-2 text-right">258,550円（18段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">尾張旭市</td><td class="px-3 py-2 text-right">65,800円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">15,100円</td><td class="px-3 py-2 text-right">171,200円（15段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">東京23区（新宿区）</td><td class="px-3 py-2 text-right">79,200円</td><td class="px-3 py-2 text-right">18段階</td><td class="px-3 py-2 text-right">19,800円</td><td class="px-3 py-2 text-right">459,360円（18段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">横浜市</td><td class="px-3 py-2 text-right">79,440円</td><td class="px-3 py-2 text-right">19段階</td><td class="px-3 py-2 text-right">15,880円</td><td class="px-3 py-2 text-right">278,040円（19段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">大阪市</td><td class="px-3 py-2 text-right">110,988円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">37,181円</td><td class="px-3 py-2 text-right">332,964円（15段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">京都市</td><td class="px-3 py-2 text-right">85,920円</td><td class="px-3 py-2 text-right">14段階</td><td class="px-3 py-2 text-right">24,487円</td><td class="px-3 py-2 text-right">266,352円（14段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">神戸市</td><td class="px-3 py-2 text-right">78,960円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">18,556円</td><td class="px-3 py-2 text-right">225,036円（15段階）</td></tr>
+              <tr><td class="px-3 py-2 font-medium">福岡市</td><td class="px-3 py-2 text-right">82,784円</td><td class="px-3 py-2 text-right">15段階</td><td class="px-3 py-2 text-right">20,282円</td><td class="px-3 py-2 text-right">223,517円（15段階）</td></tr>
+            </tbody>
+          </table>
+          <p class="text-[11px] text-slate-500 mt-3 leading-relaxed">横浜市の段階判定は保険料算定用所得金額によるため、合計所得金額での試算は目安です。神戸市の第4段階71,064円は神戸市公式資料を引用する資料2件で確認した値です。神戸市の国保には激変緩和措置、横浜市の国保には19歳未満の控除があり、この試算では反映していません。</p>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+        <h3 class="text-sm font-bold text-slate-900 mb-2">参照公式情報・根拠リンク</h3>
+        <ul class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs text-indigo-700">
+          <li><a href="https://www.city.nagoya.jp/kurashi/hoken/1011736/1011793/1011794/1011799.html" target="_blank" rel="noopener" class="hover:underline">名古屋市：令和8年度分の国民健康保険料</a></li>
+          <li><a href="https://www.city.nagoya.jp/kurashi/hoken/1011736/1011793/1011807/1011809.html" target="_blank" rel="noopener" class="hover:underline">名古屋市：国保料の所得基準による減額制度</a></li>
+          <li><a href="https://www.kaigo-wel.city.nagoya.jp/view/kaigo/seido/hokenryou/" target="_blank" rel="noopener" class="hover:underline">名古屋市：第1号被保険者の介護保険料</a></li>
+          <li><a href="https://www1.g-reiki.net/owariasahi.city/reiki_honbun/i528RG00000322.html" target="_blank" rel="noopener" class="hover:underline">尾張旭市：尾張旭市国民健康保険税条例</a></li>
+          <li><a href="https://www.city.owariasahi.lg.jp/page/1544.html" target="_blank" rel="noopener" class="hover:underline">尾張旭市：介護保険料の概要（令和8年度）</a></li>
+          <li><a href="https://www.aichi-kouiki.jp/iryou/hoken/1001529/1002073.html" target="_blank" rel="noopener" class="hover:underline">愛知県後期高齢者医療広域連合：計算方法</a></li>
+          <li><a href="https://www.aichi-kouiki.jp/iryou/hoken/1001529/1002074.html" target="_blank" rel="noopener" class="hover:underline">愛知県後期高齢者医療広域連合：軽減基準</a></li>
+          <li><a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/1199.htm" target="_blank" rel="noopener" class="hover:underline">国税庁：No.1199 基礎控除（令和8年分改正）</a></li>
+          <li><a href="https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iryouhoken/juuyou/kougakuiryou/index.html" target="_blank" rel="noopener" class="hover:underline">厚生労働省：高額療養費制度（令和8年8月見直し）</a></li>
+          <li><a href="https://www.city.shinjuku.lg.jp/content/000453186.pdf" target="_blank" rel="noopener" class="hover:underline">新宿区：令和8年度 国民健康保険料の計算方法</a></li>
+          <li><a href="https://www.city.shinjuku.lg.jp/content/000434385.pdf" target="_blank" rel="noopener" class="hover:underline">新宿区：令和7年度税額の算出方法等（住民税）</a></li>
+          <li><a href="https://www.city.yokohama.lg.jp/kurashi/koseki-zei-hoken/zeikin/y-shizei/kojin-shiminzei-kenminzei/tokubetsuchoshu-keisan/zeituuR8.html" target="_blank" rel="noopener" class="hover:underline">横浜市：令和8年度分 個人市民税・県民税の計算方法</a></li>
+          <li><a href="https://www.city.yokohama.lg.jp/kurashi/koseki-zei-hoken/kokuho/hokenryo/04hokenryounituite.html" target="_blank" rel="noopener" class="hover:underline">横浜市：国民健康保険料について</a></li>
+          <li><a href="https://www.city.yokohama.lg.jp/kurashi/koseki-zei-hoken/kouki/hokenryo/hokenryonitsuite.html" target="_blank" rel="noopener" class="hover:underline">横浜市：後期高齢者医療保険料について</a></li>
+          <li><a href="https://www.city.osaka.lg.jp/zaisei/page/0000384109.html" target="_blank" rel="noopener" class="hover:underline">大阪市：市民税・府民税・森林環境税の計算例（令和8年度分）</a></li>
+          <li><a href="https://www.city.osaka.lg.jp/fukushi/page/0000624098.html" target="_blank" rel="noopener" class="hover:underline">大阪市：国民健康保険料の決め方</a></li>
+          <li><a href="https://www.city.kyoto.lg.jp/gyozai/cmsfiles/contents/0000342/342572/R8kazeinoaramashi.pdf" target="_blank" rel="noopener" class="hover:underline">京都市：令和8年度 個人市民税・府民税・森林環境税の課税のあらまし</a></li>
+          <li><a href="https://www.city.kyoto.lg.jp/hokenfukushi/page/0000351038.html" target="_blank" rel="noopener" class="hover:underline">京都市：令和8年度の国民健康保険料について</a></li>
+          <li><a href="https://www.city.kyoto.lg.jp/hokenfukushi/page/0000216940.html" target="_blank" rel="noopener" class="hover:underline">京都市：第1号被保険者（65歳以上）の介護保険料</a></li>
+          <li><a href="https://www.city.kobe.lg.jp/a83576/kurashi/tax/shikenminze/keisan/index.html" target="_blank" rel="noopener" class="hover:underline">神戸市：個人の市県民税・森林環境税の計算方法（令和8年度版）</a></li>
+          <li><a href="https://www.city.kobe.lg.jp/a52828/kurashi/support/kokuho/hokenryo/index.html" target="_blank" rel="noopener" class="hover:underline">神戸市：国民健康保険料について</a></li>
+          <li><a href="https://www.city.kobe.lg.jp/a52670/kurashi/support/kouki/index/genmen.html" target="_blank" rel="noopener" class="hover:underline">神戸市：後期高齢者医療制度（保険料・軽減）</a></li>
+          <li><a href="https://www.city.fukuoka.lg.jp/zaisei/zeisei/life/documents/r8P012-P028.pdf" target="_blank" rel="noopener" class="hover:underline">福岡市：令和8年度 個人市民税・県民税のあらまし</a></li>
+          <li><a href="https://www.city.fukuoka.lg.jp/hofuku/kokuho/hp/seido/06-01.html" target="_blank" rel="noopener" class="hover:underline">福岡市：予算と保険料率の決まり方（国保）</a></li>
+          <li><a href="https://www.city.fukuoka.lg.jp/fukushi/kaigohoken/health/00/03/3-010203.html" target="_blank" rel="noopener" class="hover:underline">福岡市：介護保険料の金額</a></li>
+          <li><a href="https://www.city.suginami.tokyo.jp/s035/news/25052.html" target="_blank" rel="noopener" class="hover:underline">杉並区：後期高齢者医療保険料率等のご案内（東京都広域連合）</a></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    // ---------- STATE ----------
+    let chartBreakdown = null;
+    let nextMemberId = 10;
+    let selectedComboId = null;
+
+    let members = [
+      {
+        id: 1, label: "夫（76歳）", isHead: true,
+        ageGroup: "75plus", insurance: "koki",
+        pensionRev: 180, salaryRev: 0, otherBiz: 0, deductions: 22, medTotal: 30, kaigoTotal: 0,
+        hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 30, otherLoss: 0, carryLoss: 0
+      },
+      {
+        id: 2, label: "妻（75歳）", isHead: false,
+        ageGroup: "75plus", insurance: "koki",
+        pensionRev: 80, salaryRev: 0, otherBiz: 0, deductions: 10, medTotal: 20, kaigoTotal: 0,
+        hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 25, otherLoss: 0, carryLoss: 0
+      }
+    ];
+
+    const FLOW_DETAILS = {
+      loss_yes: {
+        title: "当年譲渡損・繰越損失がある場合（申告分離課税が基本）",
+        badge: "原則：申告を検討（売却代金と繰越前所得に注意）",
+        body: "他の口座の譲渡益や配当と損益通算することで20.315%の還付を受けられます（同一特定口座内の譲渡損と配当は申告不要でも自動通算されます）。<br><br><strong>【世帯判定での注意点】</strong><br>① <strong>繰越損失を使う場合</strong>：国保・後期の所得割や住民税課税所得（窓口負担2割・3割判定）は繰越控除「後」で計算されますが、<strong>世帯の均等割軽減判定所得や扶養判定（62万以下）・介護保険料は繰越控除「前」の金額で判定</strong>されます。<br>② <strong>後期高齢者3割判定の「売却代金」</strong>：損失を出すために株式を売却して申告すると、所得が0円でも<strong>売却代金（譲渡対価）が383万/520万の基準収入額に算入</strong>されます。"
+      },
+      loss_no: {
+        title: "利益・配当のみの場合（申告不要 vs 総合課税）",
+        badge: "世帯構成と保険種別で大きく分岐",
+        body: "譲渡益のみなら原則「申告不要」が有利です。国内株式の配当金がある場合は「総合課税（配当控除）」で所得税・住民税が安くなる場合がありますが、国保や後期高齢者医療に加入している場合、世帯合算の軽減割合や窓口負担割合（2割/3割）が動くと一気に逆転します。"
+      },
+      ins_shaho: {
+        title: "全員が職場の健康保険（社保）世帯",
+        badge: "配当総合課税が有利になりやすい",
+        body: "健康保険料は給与の標準報酬月額で決まるため影響しません。ただし、世帯内に非課税要件の介護保険対象者（65歳〜）がいる場合や、配偶者が税法上の扶養（合計所得62万円以下）に入っている場合は、申告による課税化・扶養外れに注意してください。"
+      },
+      ins_kokuho: {
+        title: "国民健康保険（名古屋市・尾張旭市）世帯",
+        badge: "擬制世帯主も含めた軽減判定に注意",
+        body: "国保は加入者全員の所得割（名古屋最大14.01%・尾張旭最大13.15%）が増えるほか、<strong>7割・5割・2割の均等割軽減は「国保に入っていない擬制世帯主」の所得も合算</strong>して判定されます。"
+      },
+      ins_koki: {
+        title: "後期高齢者医療（75歳〜）がいる世帯",
+        badge: "世帯主合算の軽減＋世帯全員の2割/3割連動",
+        body: "① <strong>保険料の軽減（7.2/5/2割）</strong>は、後期被保険者だけでなく<strong>世帯主（40代の子など社保・国保の人を含む）の所得も合算</strong>して判定されます。<br>② <strong>窓口負担割合</strong>は、同一世帯の後期被保険者のうち1人でも住民税課税所得（総合＋分離）145万以上（または28万以上）になると、<strong>世帯の後期被保険者全員</strong>が3割（または2割）へ引き上げられます。"
+      },
+      cliff_fuyo: {
+        title: "世帯の扶養・配偶者控除の境界（令和8年分：合計所得62万円）",
+        badge: "家族の所得税・住民税・独自控除に直結",
+        body: "令和8年分から扶養・配偶者控除の所得要件は合計所得<strong>62万円以下</strong>です。これを超えると世帯主等の所得税・住民税が増えるほか、名古屋市国保では国保加入扶養1人33万円の独自控除も消滅します。"
+      },
+      cliff_non_tax: {
+        title: "住民税非課税世帯の境界（世帯全員判定）",
+        badge: "1人でも課税化すると世帯全員に影響",
+        body: "世帯の中で誰か1人でも住民税が課税（単身の場合、名古屋市は合計所得45万円超、尾張旭市は42万円超（均等割基準。所得割基準は45万円））になると「住民税非課税世帯」から外れ、65歳以上の全員の介護保険料が跳ね上がり、高額療養費の低所得Ⅰ・Ⅱ区分や高額介護サービス費の軽減も消滅します。"
+      },
+      cliff_med: {
+        title: "医療費3割/2割・介護サービス負担割合の崖",
+        badge: "複数人世帯の合算基準（320万/520万/346万/463万）",
+        body: "・後期医療2割：住民税課税所得28万以上 かつ 被保険者合計（年金+他所得）単身200万 / <strong>複数320万以上</strong><br>・後期医療3割：住民税課税所得145万以上 かつ 収入合計 単身383万 / <strong>複数520万以上</strong><br>・介護2割：本人合計所得160万以上 かつ 65歳以上合計 単身280万 / <strong>複数346万以上</strong>"
+      }
+    };
+
+    // ---------- CORE TAX & SOCIAL INSURANCE HELPERS ----------
+    function calcKyuyoShotoku(revYen) {
+      if (revYen <= 0) return 0;
+      if (revYen <= 2200000) return Math.max(0, revYen - 740000);
+      if (revYen <= 3600000) return Math.floor(revYen * 0.7 - 80000);
+      if (revYen <= 6600000) return Math.floor(revYen * 0.8 - 440000);
+      if (revYen <= 8500000) return Math.floor(revYen * 0.9 - 1100000);
+      return Math.max(0, revYen - 1950000);
+    }
+
+    function calcNenkinShotoku(revYen, isOver65) {
+      if (revYen <= 0) return 0;
+      if (isOver65) {
+        if (revYen <= 1100000) return 0;
+        if (revYen < 3300000) return revYen - 1100000;
+        if (revYen < 4100000) return Math.floor(revYen * 0.75 - 275000);
+        if (revYen < 7700000) return Math.floor(revYen * 0.85 - 685000);
+        if (revYen < 10000000) return Math.floor(revYen * 0.95 - 1455000);
+        return revYen - 1955000;
+      } else {
+        if (revYen <= 600000) return 0;
+        if (revYen < 1300000) return revYen - 600000;
+        if (revYen < 4100000) return Math.floor(revYen * 0.75 - 275000);
+        if (revYen < 7700000) return Math.floor(revYen * 0.85 - 685000);
+        if (revYen < 10000000) return Math.floor(revYen * 0.95 - 1455000);
+        return revYen - 1955000;
+      }
+    }
+
+    function calcIncomeTaxBasicDeduction(totalIncome) {
+      if (totalIncome <= 4890000) return 1040000;
+      if (totalIncome <= 6550000) return 670000;
+      if (totalIncome <= 23500000) return 620000;
+      if (totalIncome <= 24000000) return 480000;
+      if (totalIncome <= 24500000) return 320000;
+      if (totalIncome <= 25000000) return 160000;
+      return 0;
+    }
+
+    function calcProgressiveIncomeTax(taxable) {
+      if (taxable <= 0) return 0;
+      const t = Math.floor(taxable / 1000) * 1000;
+      if (t <= 1949000) return t * 0.05;
+      if (t <= 3299000) return t * 0.10 - 97500;
+      if (t <= 6949000) return t * 0.20 - 427500;
+      if (t <= 8999000) return t * 0.23 - 636000;
+      if (t <= 17999000) return t * 0.33 - 1536000;
+      if (t <= 39999000) return t * 0.40 - 2796000;
+      return t * 0.45 - 4796000;
+    }
+
+    function calcDividendCreditIT(taxableTotal, divIncome) {
+      if (divIncome <= 0) return 0;
+      if (taxableTotal <= 10000000) return Math.floor(divIncome * 0.10);
+      const over10m = Math.min(divIncome, taxableTotal - 10000000);
+      return Math.floor((divIncome - over10m) * 0.10 + over10m * 0.05);
+    }
+
+    // ---------- CITY DATA（令和8年度・各市公式確認） ----------
+    // 東京23区は区ごとに国保・介護保険料が異なるため、新宿区の値を代表値として使用。
+    // 神戸市・介護第4段階 71,064円は神戸市公式資料を引用する資料2件で確認。
+    // 京都府の後期高齢者医療 7.2割軽減特例の適用は広域連合資料で直接確認できていないが、全国措置のため適用としている。
+    const CITY_DATA = {
+  "nagoya": {
+    "name": "名古屋市",
+    "resTax": {
+      "incomeRate": 0.097,
+      "separateRate": 0.0485,
+      "kintoYen": 5300,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.02688,
+      "divCreditHalfRate": 0.01344
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0883,
+        "perCapita": 50591,
+        "perHousehold": 0,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0258,
+        "perCapita": 15784,
+        "perHousehold": 0,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0234,
+        "perCapita": 16120,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0026,
+        "perCapita": 1863,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 10,
+      "dependentDeduction": 330000,
+      "dokujiKinto": 2000
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 2,
+          "amount": 20851
+        },
+        {
+          "stage": 3,
+          "amount": 33362
+        },
+        {
+          "stage": 4,
+          "amount": 57132
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 5,
+          "amount": 70893
+        },
+        {
+          "stage": 6,
+          "amount": 83403
+        }
+      ],
+      "taxed": [
+        [
+          800000,
+          7,
+          87574
+        ],
+        [
+          1250000,
+          8,
+          91744
+        ],
+        [
+          2000000,
+          9,
+          104254
+        ],
+        [
+          2900000,
+          10,
+          125105
+        ],
+        [
+          4000000,
+          11,
+          141786
+        ],
+        [
+          5200000,
+          12,
+          158466
+        ],
+        [
+          6200000,
+          13,
+          175147
+        ],
+        [
+          7200000,
+          14,
+          191827
+        ],
+        [
+          8200000,
+          15,
+          208508
+        ],
+        [
+          10000000,
+          16,
+          225189
+        ],
+        [
+          15000000,
+          17,
+          241869
+        ],
+        [
+          null,
+          18,
+          258550
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 56130,
+      "medRate": 0.1048,
+      "medCap": 850000,
+      "kodomoKinto": 1362,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "owariasahi": {
+    "name": "尾張旭市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5500,
+      "kintoBase": 320000,
+      "kintoAdd": 289000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.078,
+        "perCapita": 30200,
+        "perHousehold": 22000,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0275,
+        "perCapita": 11500,
+        "perHousehold": 7600,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0231,
+        "perCapita": 11700,
+        "perHousehold": 5800,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0029,
+        "perCapita": 1260,
+        "perHousehold": 750,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 15100
+        },
+        {
+          "stage": 2,
+          "amount": 26300
+        },
+        {
+          "stage": 3,
+          "amount": 45100
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 59200
+        },
+        {
+          "stage": 5,
+          "amount": 65800
+        }
+      ],
+      "taxed": [
+        [
+          1200000,
+          6,
+          79000
+        ],
+        [
+          2100000,
+          7,
+          85600
+        ],
+        [
+          3200000,
+          8,
+          98800
+        ],
+        [
+          4200000,
+          9,
+          111900
+        ],
+        [
+          5200000,
+          10,
+          125100
+        ],
+        [
+          6200000,
+          11,
+          138300
+        ],
+        [
+          7200000,
+          12,
+          151500
+        ],
+        [
+          8000000,
+          13,
+          158100
+        ],
+        [
+          10000000,
+          14,
+          164700
+        ],
+        [
+          null,
+          15,
+          171200
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 56130,
+      "medRate": 0.1048,
+      "medCap": 850000,
+      "kodomoKinto": 1362,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "tokyo23": {
+    "name": "東京23区（新宿区）",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5000,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0751,
+        "perCapita": 47600,
+        "perHousehold": 0,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.028,
+        "perCapita": 17600,
+        "perHousehold": 0,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0243,
+        "perCapita": 17800,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0027,
+        "perCapita": 1873,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 19800
+        },
+        {
+          "stage": 2,
+          "amount": 27720
+        },
+        {
+          "stage": 3,
+          "amount": 51480
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 63360
+        },
+        {
+          "stage": 5,
+          "amount": 79200
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          6,
+          87120
+        ],
+        [
+          2500000,
+          7,
+          95040
+        ],
+        [
+          3750000,
+          8,
+          110880
+        ],
+        [
+          5000000,
+          9,
+          122760
+        ],
+        [
+          6250000,
+          10,
+          146520
+        ],
+        [
+          7500000,
+          11,
+          166320
+        ],
+        [
+          10000000,
+          12,
+          194040
+        ],
+        [
+          15000000,
+          13,
+          229680
+        ],
+        [
+          25000000,
+          14,
+          269280
+        ],
+        [
+          35000000,
+          15,
+          308880
+        ],
+        [
+          45000000,
+          16,
+          348480
+        ],
+        [
+          55000000,
+          17,
+          403920
+        ],
+        [
+          null,
+          18,
+          459360
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 53300,
+      "medRate": 0.0988,
+      "medCap": 850000,
+      "kodomoKinto": 1300,
+      "kodomoRate": 0.0026,
+      "kodomoCap": 21000
+    }
+  },
+  "yokohama": {
+    "name": "横浜市",
+    "resTax": {
+      "incomeRate": 0.10025,
+      "separateRate": 0.05,
+      "kintoYen": 6200,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0833,
+        "perCapita": 40870,
+        "perHousehold": 0,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0262,
+        "perCapita": 13380,
+        "perHousehold": 0,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0284,
+        "perCapita": 16200,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0034,
+        "perCapita": 1770,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 2,
+          "amount": 15880
+        },
+        {
+          "stage": 3,
+          "amount": 27000
+        },
+        {
+          "stage": 4,
+          "amount": 46470
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 5,
+          "amount": 71490
+        },
+        {
+          "stage": 6,
+          "amount": 79440
+        }
+      ],
+      "taxed": [
+        [
+          1200000,
+          7,
+          85000
+        ],
+        [
+          1600000,
+          8,
+          87380
+        ],
+        [
+          2100000,
+          9,
+          100880
+        ],
+        [
+          2500000,
+          10,
+          103270
+        ],
+        [
+          3200000,
+          11,
+          123130
+        ],
+        [
+          4200000,
+          12,
+          139020
+        ],
+        [
+          5200000,
+          13,
+          154900
+        ],
+        [
+          6200000,
+          14,
+          170790
+        ],
+        [
+          7200000,
+          15,
+          186680
+        ],
+        [
+          10000000,
+          16,
+          198600
+        ],
+        [
+          20000000,
+          17,
+          238320
+        ],
+        [
+          30000000,
+          18,
+          258180
+        ],
+        [
+          null,
+          19,
+          278040
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 52531,
+      "medRate": 0.103,
+      "medCap": 850000,
+      "kodomoKinto": 1330,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "osaka": {
+    "name": "大阪市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5300,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.095,
+        "perCapita": 34990,
+        "perHousehold": 33908,
+        "cap": 660000
+      },
+      "sup": {
+        "rate": 0.0306,
+        "perCapita": 11191,
+        "perHousehold": 10845,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.026,
+        "perCapita": 18682,
+        "perHousehold": 0,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0028,
+        "perCapita": 1841,
+        "perHousehold": 0,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 2,
+          "amount": 37181
+        },
+        {
+          "stage": 3,
+          "amount": 53830
+        },
+        {
+          "stage": 4,
+          "amount": 76027
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 5,
+          "amount": 94340
+        },
+        {
+          "stage": 6,
+          "amount": 110988
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          7,
+          122087
+        ],
+        [
+          2000000,
+          8,
+          138735
+        ],
+        [
+          3000000,
+          9,
+          166482
+        ],
+        [
+          4000000,
+          10,
+          194229
+        ],
+        [
+          5000000,
+          11,
+          221976
+        ],
+        [
+          6000000,
+          12,
+          244174
+        ],
+        [
+          7000000,
+          13,
+          266372
+        ],
+        [
+          10000000,
+          14,
+          288569
+        ],
+        [
+          null,
+          15,
+          332964
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 64931,
+      "medRate": 0.1151,
+      "medCap": 850000,
+      "kodomoKinto": 1373,
+      "kodomoRate": 0.0024,
+      "kodomoCap": 21000
+    }
+  },
+  "kyoto": {
+    "name": "京都市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5600,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0794,
+        "perCapita": 30080,
+        "perHousehold": 17930,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0266,
+        "perCapita": 10360,
+        "perHousehold": 6180,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0251,
+        "perCapita": 11090,
+        "perHousehold": 5370,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0028,
+        "perCapita": 1170,
+        "perHousehold": 660,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 24487
+        },
+        {
+          "stage": 2,
+          "amount": 36945
+        },
+        {
+          "stage": 3,
+          "amount": 58855
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 77328
+        },
+        {
+          "stage": 5,
+          "amount": 85920
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          6,
+          94512
+        ],
+        [
+          1900000,
+          7,
+          115992
+        ],
+        [
+          4000000,
+          8,
+          137472
+        ],
+        [
+          5500000,
+          9,
+          158952
+        ],
+        [
+          7000000,
+          10,
+          180432
+        ],
+        [
+          8500000,
+          11,
+          201912
+        ],
+        [
+          10000000,
+          12,
+          223392
+        ],
+        [
+          11500000,
+          13,
+          244872
+        ],
+        [
+          null,
+          14,
+          266352
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 59590,
+      "medRate": 0.1015,
+      "medCap": 850000,
+      "kodomoKinto": 1350,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  },
+  "kobe": {
+    "name": "神戸市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 6200,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0738,
+        "perCapita": 33700,
+        "perHousehold": 21800,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0297,
+        "perCapita": 13510,
+        "perHousehold": 8740,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0278,
+        "perCapita": 13970,
+        "perHousehold": 6880,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0026,
+        "perCapita": 1330,
+        "perHousehold": 830,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 18556
+        },
+        {
+          "stage": 2,
+          "amount": 34348
+        },
+        {
+          "stage": 3,
+          "amount": 53693
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 71064
+        },
+        {
+          "stage": 5,
+          "amount": 78960
+        }
+      ],
+      "taxed": [
+        [
+          1200000,
+          6,
+          90804
+        ],
+        [
+          1900000,
+          7,
+          97911
+        ],
+        [
+          2900000,
+          8,
+          116072
+        ],
+        [
+          4000000,
+          9,
+          132258
+        ],
+        [
+          5000000,
+          10,
+          142128
+        ],
+        [
+          6000000,
+          11,
+          150024
+        ],
+        [
+          7000000,
+          12,
+          173712
+        ],
+        [
+          8000000,
+          13,
+          185556
+        ],
+        [
+          10000000,
+          14,
+          205296
+        ],
+        [
+          null,
+          15,
+          225036
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 58427,
+      "medRate": 0.1077,
+      "medCap": 850000,
+      "kodomoKinto": 1351,
+      "kodomoRate": 0.0024,
+      "kodomoCap": 21000
+    }
+  },
+  "fukuoka": {
+    "name": "福岡市",
+    "resTax": {
+      "incomeRate": 0.1,
+      "separateRate": 0.05,
+      "kintoYen": 5500,
+      "kintoBase": 350000,
+      "kintoAdd": 310000,
+      "shotokuBase": 350000,
+      "shotokuAdd": 420000,
+      "singleAdd": 100000,
+      "divCreditRate": 0.028,
+      "divCreditHalfRate": 0.014
+    },
+    "kokuho": {
+      "med": {
+        "rate": 0.0558,
+        "perCapita": 19807,
+        "perHousehold": 18664,
+        "cap": 670000
+      },
+      "sup": {
+        "rate": 0.0314,
+        "perCapita": 10441,
+        "perHousehold": 9838,
+        "cap": 260000
+      },
+      "kaigo": {
+        "rate": 0.0261,
+        "perCapita": 10160,
+        "perHousehold": 7751,
+        "cap": 170000
+      },
+      "kodomo": {
+        "rate": 0.0028,
+        "perCapita": 1039,
+        "perHousehold": 911,
+        "cap": 30000
+      },
+      "rounding": 100,
+      "dependentDeduction": 0,
+      "dokujiKinto": 0
+    },
+    "kaigo": {
+      "nonTaxed": [
+        {
+          "stage": 1,
+          "amount": 20282
+        },
+        {
+          "stage": 2,
+          "amount": 32700
+        },
+        {
+          "stage": 3,
+          "amount": 56707
+        }
+      ],
+      "selfNonTaxed": [
+        {
+          "stage": 4,
+          "amount": 74506
+        },
+        {
+          "stage": 5,
+          "amount": 82784
+        }
+      ],
+      "taxed": [
+        [
+          1250000,
+          6,
+          91063
+        ],
+        [
+          2000000,
+          7,
+          107620
+        ],
+        [
+          3000000,
+          8,
+          132455
+        ],
+        [
+          4000000,
+          9,
+          149012
+        ],
+        [
+          5000000,
+          10,
+          165568
+        ],
+        [
+          6000000,
+          11,
+          182125
+        ],
+        [
+          7000000,
+          12,
+          198682
+        ],
+        [
+          8000000,
+          13,
+          206960
+        ],
+        [
+          9000000,
+          14,
+          215239
+        ],
+        [
+          null,
+          15,
+          223517
+        ]
+      ]
+    },
+    "koki": {
+      "medKinto": 66340,
+      "medRate": 0.117,
+      "medCap": 850000,
+      "kodomoKinto": 1339,
+      "kodomoRate": 0.0025,
+      "kodomoCap": 21000
+    }
+  }
+};
+
+    // 配当控除（住民税）：名古屋市の5%減税は市民税分(2.24%->2.128%)のみ適用、県民税分(0.56%)は不変 => 2.688% / 1.344%。他市は標準2.8% / 1.4%。
+    function calcDividendCreditRes(taxableTotal, divIncome, city) {
+      if (divIncome <= 0) return 0;
+      const dcr = CITY_DATA[city].resTax;
+      const baseRate = dcr.divCreditRate;
+      const halfRate = dcr.divCreditHalfRate;
+      if (taxableTotal <= 10000000) return Math.floor(divIncome * baseRate);
+      const over10m = Math.min(divIncome, taxableTotal - 10000000);
+      return Math.floor((divIncome - over10m) * baseRate + over10m * halfRate);
+    }
+
+    function calcKaigoPremium(city, totalIncome, pensionRev, selfTaxed, householdTaxed) {
+      const kd = CITY_DATA[city].kaigo;
+      const nonPensionIncome = Math.max(0, totalIncome - calcNenkinShotoku(pensionRev, true));
+      const exemptJudgeSum = pensionRev + nonPensionIncome;
+
+      if (!householdTaxed && !selfTaxed) {
+        if (exemptJudgeSum <= 826500) return { stage: kd.nonTaxed[0].stage, amount: kd.nonTaxed[0].amount };
+        if (exemptJudgeSum <= 1200000) return { stage: kd.nonTaxed[1].stage, amount: kd.nonTaxed[1].amount };
+        return { stage: kd.nonTaxed[2].stage, amount: kd.nonTaxed[2].amount };
+      }
+      if (!selfTaxed) {
+        if (exemptJudgeSum <= 826500) return { stage: kd.selfNonTaxed[0].stage, amount: kd.selfNonTaxed[0].amount };
+        return { stage: kd.selfNonTaxed[1].stage, amount: kd.selfNonTaxed[1].amount };
+      }
+      for (const [lim, st, amt] of kd.taxed) {
+        if (lim === null || totalIncome < lim) return { stage: st, amount: amt };
+      }
+      const last = kd.taxed[kd.taxed.length - 1];
+      return { stage: last[1], amount: last[2] };
+    }
+
+    function calcGenekiMedicalCap(resTaxableTotal) {
+      if (resTaxableTotal >= 6900000) return 1680000;
+      if (resTaxableTotal >= 3800000) return 1110000;
+      return 530000;
+    }
+
+    // ---------- HOUSEHOLD SIMULATION FOR ARBITRARY PER-MEMBER MODES ----------
+    function simulateHousehold(city, modesByMemberId) {
+      const cd = CITY_DATA[city];
+      const head = members.find(m => m.isHead) || members[0];
+
+      const mStates = members.map(m => {
+        const mode = m.hasTokutei ? (modesByMemberId[m.id] || "none") : "none";
+        const isOver65 = (m.ageGroup === "75plus" || m.ageGroup === "70to74" || m.ageGroup === "65to69");
+        const pensionRev = (Number(m.pensionRev) || 0) * 10000;
+        const salaryRev = (Number(m.salaryRev) || 0) * 10000;
+        const otherBiz = (Number(m.otherBiz) || 0) * 10000;
+        const deductions = (Number(m.deductions) || 0) * 10000;
+        const medTotal = (Number(m.medTotal) || 0) * 10000;
+        const kaigoTotal = (Number(m.kaigoTotal) || 0) * 10000;
+
+        const pensionInc = calcNenkinShotoku(pensionRev, isOver65);
+        const salaryInc = calcKyuyoShotoku(salaryRev);
+        const baseTotalInc = pensionInc + salaryInc + otherBiz;
+
+        let declaredCapBeforeCarry = 0;
+        let declaredCapAfterCarry = 0;
+        let declaredDiv = 0;
+        let declaredProceeds = 0;
+        let divIsComp = false;
+        let withheldInNoneIT = 0;
+        let withheldInNoneRes = 0;
+
+        if (m.hasTokutei) {
+          const capGain = (Number(m.capGain) || 0) * 10000;
+          const capProceeds = Math.max(0, (Number(m.capProceeds) || 0) * 10000);
+          const divRev = Math.max(0, (Number(m.divRev) || 0) * 10000);
+          const otherLoss = Math.max(0, (Number(m.otherLoss) || 0) * 10000);
+          const carryLoss = Math.max(0, (Number(m.carryLoss) || 0) * 10000);
+
+          const netInAccountForNone = capGain < 0 ? Math.max(0, divRev + capGain) : (capGain + divRev);
+          const totalWithheldInNone = Math.floor(netInAccountForNone * 0.20315);
+          const withheldCapOnly = capGain > 0 ? Math.floor(capGain * 0.20315) : 0;
+          // 売却代金が未入力の場合は譲渡益で代用しない（代用すると後期高齢者医療の3割判定を誤るため）。未入力の場合は下のアラートで警告する。
+          const proceedsInput = capProceeds;
+
+          if (mode === "none") {
+            withheldInNoneIT = Math.floor(totalWithheldInNone * (0.15315 / 0.20315));
+            withheldInNoneRes = totalWithheldInNone - withheldInNoneIT;
+          } else if (mode === "separate") {
+            const netWithDiv = (capGain - otherLoss) + divRev;
+            if (netWithDiv > 0) {
+              const usedCarry = Math.min(netWithDiv, carryLoss);
+              declaredCapBeforeCarry = netWithDiv;
+              declaredCapAfterCarry = netWithDiv - usedCarry;
+            }
+            declaredProceeds = proceedsInput + divRev;
+          } else if (mode === "comprehensive") {
+            const netCap = capGain - otherLoss;
+            const declareCap = (netCap > 0 && carryLoss > 0);
+            if (declareCap) {
+              const usedCarry = Math.min(netCap, carryLoss);
+              declaredCapBeforeCarry = netCap;
+              declaredCapAfterCarry = netCap - usedCarry;
+              declaredProceeds = proceedsInput;
+            } else if (netCap > 0) {
+              withheldInNoneIT = Math.floor(withheldCapOnly * (0.15315 / 0.20315));
+              withheldInNoneRes = withheldCapOnly - withheldInNoneIT;
+            }
+            declaredDiv = divRev;
+            declaredProceeds += divRev;
+            divIsComp = true;
+          }
+        }
+
+        const gokeiShotoku = baseTotalInc + declaredCapBeforeCarry + declaredDiv;
+        const soShotokuTo = baseTotalInc + declaredCapAfterCarry + declaredDiv;
+        const keigenIncome = (isOver65 ? Math.max(0, pensionInc - 150000) : pensionInc) + salaryInc + otherBiz + declaredCapBeforeCarry + declaredDiv;
+        const isEarner = (salaryRev > 550000) || (isOver65 ? pensionRev > 1250000 : pensionRev > 600000);
+
+        return {
+          ...m, mode, isOver65, pensionRev, salaryRev, otherBiz, deductions, medTotal, kaigoTotal,
+          pensionInc, salaryInc, baseTotalInc,
+          declaredCapBeforeCarry, declaredCapAfterCarry, declaredDiv, declaredProceeds,
+          divIsComp, withheldInNoneIT, withheldInNoneRes,
+          gokeiShotoku, soShotokuTo, keigenIncome, isEarner
+        };
+      });
+
+      const taxpayer = mStates.find(m => m.id === head.id) || mStates[0];
+      const dependentsCount = mStates.filter(m => m.id !== taxpayer.id && m.gokeiShotoku <= 620000).length;
+
+      let totalIT = 0;
+      let totalRes = 0;
+      mStates.forEach(m => {
+        const deps = (m.id === taxpayer.id) ? dependentsCount : 0;
+        const itBasic = calcIncomeTaxBasicDeduction(m.gokeiShotoku);
+        const sogoShotoku = m.baseTotalInc + (m.divIsComp ? m.declaredDiv : 0);
+        const itDeductionsTotal = m.deductions + itBasic + deps * 380000;
+
+        const itTaxableSogo = Math.max(0, sogoShotoku - itDeductionsTotal);
+        const itUnusedDed = Math.max(0, itDeductionsTotal - sogoShotoku);
+        const itTaxableSep = Math.max(0, m.declaredCapAfterCarry - itUnusedDed);
+        const itTaxableTotal = (Math.floor(itTaxableSogo / 1000) + Math.floor(itTaxableSep / 1000)) * 1000;
+
+        let itSogo = calcProgressiveIncomeTax(itTaxableSogo);
+        if (m.divIsComp && m.declaredDiv > 0) {
+          itSogo = Math.max(0, itSogo - calcDividendCreditIT(itTaxableTotal, m.declaredDiv));
+        }
+        const itSep = (Math.floor(itTaxableSep / 1000) * 1000) * 0.15;
+        m.itTax = Math.floor((itSogo + itSep) * 1.021) + m.withheldInNoneIT;
+        totalIT += m.itTax;
+
+        // 住民税非課税基準（1級地：均等割35万×人数+31万 / 所得割35万×人数+42万、単身はいずれも45万。尾張旭市のみ2級地：均等割32万×人数+28.9万、単身42万）
+        const rt = cd.resTax;
+        const resKintoExemptLimit = deps === 0
+          ? (rt.kintoBase + rt.singleAdd)
+          : (rt.kintoBase * (1 + deps) + rt.kintoAdd);
+        const resShotokuExemptLimit = deps === 0
+          ? (rt.shotokuBase + rt.singleAdd)
+          : (rt.shotokuBase * (1 + deps) + rt.shotokuAdd);
+
+        m.resExempt = m.gokeiShotoku <= resKintoExemptLimit;
+        const resShotokuExempt = m.gokeiShotoku <= resShotokuExemptLimit;
+
+        const resBasic = m.gokeiShotoku <= 24000000 ? 430000 : 0;
+        const resDeductionsTotal = m.deductions + resBasic + deps * 330000;
+
+        m.resTaxableSogo = Math.max(0, sogoShotoku - resDeductionsTotal);
+        const resUnusedDed = Math.max(0, resDeductionsTotal - sogoShotoku);
+        m.resTaxableSep = Math.max(0, m.declaredCapAfterCarry - resUnusedDed);
+        m.resTaxableTotal = m.resTaxableSogo + m.resTaxableSep;
+
+        const resRateSogo = rt.incomeRate;
+        const resRateSep = rt.separateRate;
+
+        let resSogo = resShotokuExempt ? 0 : Math.max(0, Math.floor((Math.floor(m.resTaxableSogo / 1000) * 1000) * resRateSogo) - 2500);
+        if (!resShotokuExempt && m.divIsComp && m.declaredDiv > 0) {
+          resSogo = Math.max(0, resSogo - calcDividendCreditRes(m.resTaxableTotal, m.declaredDiv, city));
+        }
+        const resKinto = m.resExempt ? 0 : rt.kintoYen;
+        const resSep = resShotokuExempt ? 0 : Math.floor((Math.floor(m.resTaxableSep / 1000) * 1000) * resRateSep);
+        m.resTax = resKinto + resSogo + resSep + m.withheldInNoneRes;
+        totalRes += m.resTax;
+      });
+
+      const householdTaxed = mStates.some(m => !m.resExempt);
+
+      // Kokuho
+      const kokuhoMembers = mStates.filter(m => m.insurance === "kokuho");
+      let totalKokuho = 0;
+      let kokuhoReductionLabel = "加入者なし";
+      if (kokuhoMembers.length > 0) {
+        const headInKokuho = kokuhoMembers.some(m => m.id === taxpayer.id);
+        const keigenGroup = headInKokuho ? kokuhoMembers : [...kokuhoMembers, taxpayer];
+        const keigenIncomeSum = keigenGroup.reduce((s, m) => s + m.keigenIncome, 0);
+        const earnerCount = keigenGroup.filter(m => m.isEarner).length;
+        const gBonus = Math.max(0, earnerCount - 1) * 100000;
+        const cnt = kokuhoMembers.length;
+
+        let redRate = 0;
+        if (keigenIncomeSum <= 430000 + gBonus) { redRate = 0.7; kokuhoReductionLabel = "7割軽減"; }
+        else if (keigenIncomeSum <= 430000 + 310000 * cnt + gBonus) { redRate = 0.5; kokuhoReductionLabel = "5割軽減"; }
+        else if (keigenIncomeSum <= 430000 + 570000 * cnt + gBonus) { redRate = 0.2; kokuhoReductionLabel = "2割軽減"; }
+        else { kokuhoReductionLabel = "軽減なし"; }
+
+        const rateBaseSum = kokuhoMembers.reduce((s, m) => s + Math.max(0, m.soShotokuTo - 430000), 0);
+        const kaigo2Count = kokuhoMembers.filter(m => m.ageGroup === "40to64").length;
+        const kaigo2BaseSum = kokuhoMembers.filter(m => m.ageGroup === "40to64").reduce((s, m) => s + Math.max(0, m.soShotokuTo - 430000), 0);
+        const adultCount = kokuhoMembers.filter(m => m.ageGroup !== "under18").length;
+
+        const kh = cd.kokuho;
+        // 国保加入扶養の独自控除（名古屋市のみ：国保の被保険者である扶養親族1人につき33万円）
+        const kokuhoDependentsCount = kokuhoMembers.filter(m => m.id !== taxpayer.id && m.gokeiShotoku <= 620000).length;
+        const dedBaseSum = Math.max(0, rateBaseSum - kokuhoDependentsCount * (kh.dependentDeduction || 0));
+        const dedKaigo2Sum = Math.max(0, kaigo2BaseSum - (taxpayer.ageGroup === "40to64" ? kokuhoDependentsCount * (kh.dependentDeduction || 0) : 0));
+        const dokujiKinto = redRate > 0 ? (kh.dokujiKinto || 0) * cnt : 0;
+
+        const med = Math.min(kh.med.cap, Math.floor(dedBaseSum * kh.med.rate) + Math.floor((kh.med.perCapita * cnt + kh.med.perHousehold) * (1 - redRate)));
+        const sup = Math.min(kh.sup.cap, Math.floor(dedBaseSum * kh.sup.rate) + Math.floor((kh.sup.perCapita * cnt + kh.sup.perHousehold) * (1 - redRate)));
+        const kaigo = kaigo2Count > 0 ? Math.min(kh.kaigo.cap, Math.floor(dedKaigo2Sum * kh.kaigo.rate) + Math.floor((kh.kaigo.perCapita * kaigo2Count + kh.kaigo.perHousehold) * (1 - redRate))) : 0;
+        const kodomo = Math.min(kh.kodomo.cap, Math.floor(dedBaseSum * kh.kodomo.rate) + Math.floor((kh.kodomo.perCapita * adultCount + kh.kodomo.perHousehold) * (1 - redRate)));
+        totalKokuho = Math.max(0, Math.floor((med + sup + kaigo + kodomo - dokujiKinto) / (kh.rounding || 100)) * (kh.rounding || 100));
+      }
+
+      // Koki
+      const kokiMembers = mStates.filter(m => m.insurance === "koki");
+      let totalKoki = 0;
+      let kokiReductionLabel = "加入者なし";
+      let kokiCopayRatio = 0.1;
+      let kokiCopayLabel = "加入者なし";
+      let maxKokiResTaxable = 0;
+      if (kokiMembers.length > 0) {
+        const headInKoki = kokiMembers.some(m => m.id === taxpayer.id);
+        const kokiKeigenGroup = headInKoki ? kokiMembers : [...kokiMembers, taxpayer];
+        const kokiKeigenIncomeSum = kokiKeigenGroup.reduce((s, m) => s + m.keigenIncome, 0);
+        const kokiEarnerCount = kokiKeigenGroup.filter(m => m.isEarner).length;
+        const gBonus = Math.max(0, kokiEarnerCount - 1) * 100000;
+        const kCnt = kokiMembers.length;
+
+        const kk = CITY_DATA[city].koki;
+        let medKinto = kk.medKinto, kodomoKinto = kk.kodomoKinto;
+        if (kokiKeigenIncomeSum <= 430000 + gBonus) {
+          medKinto = Math.floor(kk.medKinto * 0.28); kodomoKinto = Math.floor(kk.kodomoKinto * 0.3); kokiReductionLabel = "7.2割軽減(医療)";
+        } else if (kokiKeigenIncomeSum <= 430000 + 310000 * kCnt + gBonus) {
+          medKinto = Math.floor(kk.medKinto * 0.5); kodomoKinto = Math.floor(kk.kodomoKinto * 0.5); kokiReductionLabel = "5割軽減";
+        } else if (kokiKeigenIncomeSum <= 430000 + 570000 * kCnt + gBonus) {
+          medKinto = Math.floor(kk.medKinto * 0.8); kodomoKinto = Math.floor(kk.kodomoKinto * 0.8); kokiReductionLabel = "2割軽減";
+        } else {
+          kokiReductionLabel = "軽減なし";
+        }
+
+        kokiMembers.forEach(m => {
+          const base = Math.max(0, m.soShotokuTo - 430000);
+          const med = Math.min(kk.medCap, Math.floor((Math.floor(base * kk.medRate) + medKinto) / 100) * 100);
+          const kodomo = Math.min(kk.kodomoCap, Math.floor((Math.floor(base * kk.kodomoRate) + kodomoKinto) / 100) * 100);
+          m.kokiPremium = med + kodomo;
+          totalKoki += m.kokiPremium;
+        });
+
+        maxKokiResTaxable = Math.max(...kokiMembers.map(m => m.resTaxableTotal));
+        const kokiRevs = kokiMembers.reduce((s, m) => s + m.pensionRev + m.salaryRev + m.otherBiz + (m.hasTokutei ? m.declaredProceeds : 0), 0);
+        const age70to74Revs = mStates.filter(m => m.ageGroup === "70to74").reduce((s, m) => s + m.pensionRev + m.salaryRev + m.otherBiz + (m.hasTokutei ? m.declaredProceeds : 0), 0);
+        const koki2WariSum = kokiMembers.reduce((s, m) => s + m.pensionRev + Math.max(0, m.gokeiShotoku - m.pensionInc), 0);
+
+        let is3Wari = false;
+        if (maxKokiResTaxable >= 1450000) {
+          if (kCnt >= 2) {
+            is3Wari = (kokiRevs >= 5200000);
+          } else {
+            const selfRev = kokiRevs;
+            if (selfRev >= 3830000) {
+              is3Wari = (age70to74Revs > 0) ? ((selfRev + age70to74Revs) >= 5200000) : true;
+            }
+          }
+        }
+        if (is3Wari) {
+          kokiCopayRatio = 0.3; kokiCopayLabel = "現役並み（3割）";
+        } else if (maxKokiResTaxable >= 280000 && koki2WariSum >= (kCnt >= 2 ? 3200000 : 2000000)) {
+          kokiCopayRatio = 0.2; kokiCopayLabel = "一定以上（2割）";
+        } else {
+          kokiCopayRatio = 0.1; kokiCopayLabel = householdTaxed ? "一般（1割）" : "非課税（1割）";
+        }
+      }
+
+      // Kaigo & Medical Copay
+      let totalKaigoPrem = 0;
+      let totalMedCopay = 0;
+      let totalKaigoCopay = 0;
+      const members65Plus = mStates.filter(m => m.isOver65);
+      const cnt65Plus = members65Plus.length;
+      const sum65PlusForCopay = members65Plus.reduce((s, m) => s + m.pensionRev + Math.max(0, m.gokeiShotoku - m.pensionInc), 0);
+
+      mStates.forEach(m => {
+        if (m.isOver65) {
+          const kRes = calcKaigoPremium(city, m.gokeiShotoku, m.pensionRev, !m.resExempt, householdTaxed);
+          m.kaigoPrem = kRes.amount;
+          m.kaigoStage = `第${kRes.stage}段階`;
+          totalKaigoPrem += m.kaigoPrem;
+
+          let kRatio = 0.1;
+          if (!m.resExempt) {
+            if (m.gokeiShotoku >= 2200000 && sum65PlusForCopay >= (cnt65Plus >= 2 ? 4630000 : 3400000)) kRatio = 0.3;
+            else if (m.gokeiShotoku >= 1600000 && sum65PlusForCopay >= (cnt65Plus >= 2 ? 3460000 : 2800000)) kRatio = 0.2;
+          }
+          m.kaigoCopayLabel = `${Math.round(kRatio * 10)}割`;
+          m.kaigoCost = Math.floor(m.kaigoTotal * kRatio);
+          totalKaigoCopay += m.kaigoCost;
+        } else {
+          m.kaigoPrem = 0; m.kaigoStage = "-"; m.kaigoCopayLabel = "-"; m.kaigoCost = 0;
+        }
+
+        if (m.insurance === "koki") {
+          m.medLabel = `${Math.round(kokiCopayRatio * 10)}割`;
+          const cap = kokiCopayRatio === 0.3 ? calcGenekiMedicalCap(maxKokiResTaxable) : (householdTaxed ? 216000 : 96000);
+          m.medCost = Math.min(Math.floor(m.medTotal * kokiCopayRatio), cap);
+        } else if (m.ageGroup === "70to74") {
+          const r = (m.resTaxableTotal >= 1450000) ? 0.3 : 0.2;
+          m.medLabel = `${Math.round(r * 10)}割`;
+          const cap = r === 0.3 ? calcGenekiMedicalCap(m.resTaxableTotal) : (householdTaxed ? 216000 : 96000);
+          m.medCost = Math.min(Math.floor(m.medTotal * r), cap);
+        } else {
+          m.medLabel = "3割";
+          const cap = householdTaxed ? calcGenekiMedicalCap(m.resTaxableTotal) : 290000;
+          m.medCost = Math.min(Math.floor(m.medTotal * 0.3), cap);
+        }
+        totalMedCopay += m.medCost;
+      });
+
+      const totalBurden = totalIT + totalRes + totalKokuho + totalKoki + totalKaigoPrem + totalMedCopay + totalKaigoCopay;
+
+      return {
+        modesByMemberId,
+        city,
+        mStates,
+        householdTaxed,
+        dependentsCount,
+        kokuhoReductionLabel,
+        kokiReductionLabel,
+        kokiCopayLabel,
+        totalIT,
+        totalRes,
+        totalKokuho,
+        totalKoki,
+        totalKaigoPrem,
+        totalMedCopay,
+        totalKaigoCopay,
+        totalBurden
+      };
+    }
+
+    // ---------- COMBINATION OPTIMIZER (ALL MEMBERS UP TO 5) ----------
+    function buildAndEvaluateCombos(city) {
+      const tokuteiMembers = members.filter(m => m.hasTokutei);
+      const modeList = ["none", "separate", "comprehensive"];
+      const modeName = { none: "申告不要", separate: "申告分離", comprehensive: "配当総合" };
+
+      // Enumerate all combinations across all tokutei members (up to 5 members = 3^5 = 243)
+      const activeTokutei = tokuteiMembers;
+      let allAssignments = [{}];
+      activeTokutei.forEach(tm => {
+        const next = [];
+        allAssignments.forEach(a => {
+          modeList.forEach(md => {
+            next.push({ ...a, [tm.id]: md });
+          });
+        });
+        allAssignments = next;
+      });
+
+      const evaluated = allAssignments.map(assign => {
+        const sim = simulateHousehold(city, assign);
+        const filers = activeTokutei.filter(tm => assign[tm.id] !== "none");
+        return { assign, sim, filers };
+      });
+
+      // Baseline: 全員 申告無し
+      const noneEntry = evaluated.find(e => e.filers.length === 0) || evaluated[0];
+      const combos = [];
+
+      combos.push({
+        id: "none",
+        title: "全員 申告無し（申告不要）",
+        subtitle: "特定口座は全員源泉徴収で完結",
+        entry: noneEntry
+      });
+
+      // Individual-only bests ("〇〇だけ申告")
+      activeTokutei.forEach(tm => {
+        const onlyThis = evaluated.filter(e => e.filers.length === 1 && e.filers[0].id === tm.id);
+        if (onlyThis.length > 0) {
+          onlyThis.sort((a, b) => a.sim.totalBurden - b.sim.totalBurden);
+          const bestThis = onlyThis[0];
+          combos.push({
+            id: `only_${tm.id}`,
+            title: `${tm.label} だけ申告`,
+            subtitle: `最適方式：${modeName[bestThis.assign[tm.id]]}`,
+            entry: bestThis
+          });
+        }
+      });
+
+      // Both / All-filers best ("両方 / 全員申告")
+      if (activeTokutei.length >= 2) {
+        const allFiler = evaluated.filter(e => e.filers.length === activeTokutei.length);
+        if (allFiler.length > 0) {
+          allFiler.sort((a, b) => a.sim.totalBurden - b.sim.totalBurden);
+          const bestAll = allFiler[0];
+          const desc = activeTokutei.map(tm => `${tm.label.split("（")[0]}:${modeName[bestAll.assign[tm.id]]}`).join(" / ");
+          combos.push({
+            id: "all",
+            title: activeTokutei.length === 2 ? "両方とも申告" : "特定口座あり全員が申告",
+            subtitle: `最適：${desc}`,
+            entry: bestAll
+          });
+        }
+      }
+
+      // If 3+ filers, also check global best across partial subsets
+      evaluated.sort((a, b) => a.sim.totalBurden - b.sim.totalBurden);
+      const globalBest = evaluated[0];
+      let bestCombo = combos[0];
+      combos.forEach(c => {
+        if (c.entry.sim.totalBurden < bestCombo.entry.sim.totalBurden) bestCombo = c;
+      });
+      if (globalBest.sim.totalBurden < bestCombo.entry.sim.totalBurden) {
+        const desc = globalBest.filers.map(tm => `${tm.label.split("（")[0]}:${modeName[globalBest.assign[tm.id]]}`).join(" / ");
+        const extra = {
+          id: "partial_best",
+          title: "一部メンバーのみ申告（最適）",
+          subtitle: desc,
+          entry: globalBest
+        };
+        combos.push(extra);
+        bestCombo = extra;
+      }
+
+      return { combos, noneEntry, bestCombo };
+    }
+
+    function fmtYen(v) {
+      return Math.round(v).toLocaleString("ja-JP") + "円";
+    }
+
+    // ---------- RENDER MEMBERS UI ----------
+    function renderMembersUI() {
+      const container = document.getElementById("members-list");
+      container.innerHTML = members.map((m) => `
+        <div class="rounded-xl border ${m.hasTokutei ? "border-indigo-300 bg-indigo-50/20" : "border-slate-200 bg-slate-50/60"} p-3.5 space-y-2.5">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <input type="text" data-mid="${m.id}" data-field="label" value="${m.label}" class="member-input font-bold text-xs sm:text-sm bg-white border border-slate-300 rounded-md px-2 py-1 w-32 sm:w-36" />
+              ${m.isHead ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-white">世帯主</span>' : ''}
+            </div>
+            <div class="flex items-center gap-1.5 text-[11px]">
+              <label class="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-indigo-200 cursor-pointer">
+                <input type="checkbox" data-mid="${m.id}" data-field="hasTokutei" class="member-check rounded text-indigo-600" ${m.hasTokutei ? "checked" : ""} />
+                <span class="font-semibold text-indigo-700">特定口座あり</span>
+              </label>
+              ${!m.isHead ? `<button type="button" data-action="set-head" data-mid="${m.id}" class="px-2 py-1 rounded bg-white border border-slate-300 hover:bg-slate-100 text-slate-700">世帯主に</button>` : ''}
+              ${members.length > 1 ? `<button type="button" data-action="remove" data-mid="${m.id}" class="px-2 py-1 rounded bg-white border border-rose-200 text-rose-600 hover:bg-rose-50">削除</button>` : ''}
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">年齢区分</label>
+              <select data-mid="${m.id}" data-field="ageGroup" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs">
+                <option value="75plus" ${m.ageGroup==="75plus"?"selected":""}>75歳以上</option>
+                <option value="70to74" ${m.ageGroup==="70to74"?"selected":""}>70〜74歳</option>
+                <option value="65to69" ${m.ageGroup==="65to69"?"selected":""}>65〜69歳</option>
+                <option value="40to64" ${m.ageGroup==="40to64"?"selected":""}>40〜64歳</option>
+                <option value="18to39" ${m.ageGroup==="18to39"?"selected":""}>18〜39歳</option>
+                <option value="under18" ${m.ageGroup==="under18"?"selected":""}>18歳未満</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">医療保険</label>
+              <select data-mid="${m.id}" data-field="insurance" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs">
+                <option value="koki" ${m.insurance==="koki"?"selected":""}>後期高齢者</option>
+                <option value="kokuho" ${m.insurance==="kokuho"?"selected":""}>国民健康保険</option>
+                <option value="shaho" ${m.insurance==="shaho"?"selected":""}>職場社保</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">年金収入(万)</label>
+              <input type="number" min="0" step="5" data-mid="${m.id}" data-field="pensionRev" value="${m.pensionRev}" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">給与収入(万)</label>
+              <input type="number" min="0" step="10" data-mid="${m.id}" data-field="salaryRev" value="${m.salaryRev}" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5" title="事業・不動産等の所得（後期3割判定は収入ベース）">他所得(万)</label>
+              <input type="number" min="0" step="5" data-mid="${m.id}" data-field="otherBiz" value="${m.otherBiz}" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">社保等控除(万)</label>
+              <input type="number" min="0" step="5" data-mid="${m.id}" data-field="deductions" value="${m.deductions}" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">医療費10割(万)</label>
+              <input type="number" min="0" step="5" data-mid="${m.id}" data-field="medTotal" value="${m.medTotal}" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs" />
+            </div>
+            <div>
+              <label class="block text-[10px] text-slate-500 mb-0.5">介護費10割(万)</label>
+              <input type="number" min="0" step="5" data-mid="${m.id}" data-field="kaigoTotal" value="${m.kaigoTotal}" class="member-input w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs" />
+            </div>
+          </div>
+
+          ${m.hasTokutei ? `
+          <div class="pt-2 border-t border-indigo-200/70">
+            <div class="text-[10px] font-bold text-indigo-700 mb-1.5">この人の特定口座（源泉徴収あり）取引（万円）</div>
+            <div class="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-xs">
+              <div>
+                <label class="block text-[10px] text-slate-500 mb-0.5">譲渡益/損</label>
+                <input type="number" step="5" data-mid="${m.id}" data-field="capGain" value="${m.capGain}" class="member-input w-full rounded border border-indigo-200 bg-white px-1.5 py-1 text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-500 mb-0.5">売却代金 <span class="text-rose-600 font-bold">※譲渡益がある場合は必須</span></label>
+                <input type="number" min="0" step="10" data-mid="${m.id}" data-field="capProceeds" value="${m.capProceeds}" class="member-input w-full rounded border border-indigo-200 bg-white px-1.5 py-1 text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-500 mb-0.5">配当金</label>
+                <input type="number" min="0" step="5" data-mid="${m.id}" data-field="divRev" value="${m.divRev}" class="member-input w-full rounded border border-indigo-200 bg-white px-1.5 py-1 text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-500 mb-0.5">他口座損</label>
+                <input type="number" min="0" step="5" data-mid="${m.id}" data-field="otherLoss" value="${m.otherLoss}" class="member-input w-full rounded border border-indigo-200 bg-white px-1.5 py-1 text-xs" />
+              </div>
+              <div>
+                <label class="block text-[10px] text-slate-500 mb-0.5">繰越損失</label>
+                <input type="number" min="0" step="5" data-mid="${m.id}" data-field="carryLoss" value="${m.carryLoss}" class="member-input w-full rounded border border-indigo-200 bg-white px-1.5 py-1 text-xs" />
+              </div>
+            </div>
+          </div>
+          ` : ''}
+        </div>
+      `).join("");
+
+      container.querySelectorAll(".member-input").forEach(el => {
+        el.addEventListener("input", e => {
+          const mid = Number(e.target.dataset.mid);
+          const field = e.target.dataset.field;
+          const mem = members.find(x => x.id === mid);
+          if (!mem) return;
+          if (field === "label" || field === "ageGroup" || field === "insurance") {
+            mem[field] = e.target.value;
+          } else {
+            mem[field] = Number(e.target.value) || 0;
+          }
+          updateAll();
+        });
+      });
+
+      container.querySelectorAll(".member-check").forEach(el => {
+        el.addEventListener("change", e => {
+          const mid = Number(e.target.dataset.mid);
+          const mem = members.find(x => x.id === mid);
+          if (!mem) return;
+          mem.hasTokutei = e.target.checked;
+          renderMembersUI();
+          updateAll();
+        });
+      });
+
+      container.querySelectorAll("[data-action]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const mid = Number(btn.dataset.mid);
+          const act = btn.dataset.action;
+          if (act === "set-head") {
+            members.forEach(x => x.isHead = (x.id === mid));
+          } else if (act === "remove" && members.length > 1) {
+            const removed = members.find(x => x.id === mid);
+            members = members.filter(x => x.id !== mid);
+            if (removed && removed.isHead && members.length > 0) members[0].isHead = true;
+          }
+          renderMembersUI();
+          updateAll();
+        });
+      });
+    }
+
+    // ---------- UPDATE OUTPUTS ----------
+    function updateAll() {
+      const city = document.getElementById("inp-city").value;
+
+      document.getElementById("hdr-city").value = city;
+      document.getElementById("city-badge").textContent = CITY_DATA[city].name + `（${members.length}人世帯）`;
+
+      const { combos, noneEntry, bestCombo } = buildAndEvaluateCombos(city);
+
+      if (!selectedComboId || !combos.some(c => c.id === selectedComboId)) {
+        selectedComboId = bestCombo.id;
+      }
+      const selectedCombo = combos.find(c => c.id === selectedComboId) || bestCombo;
+
+      // Top Verdict Banner
+      const diffFromNone = noneEntry.sim.totalBurden - bestCombo.entry.sim.totalBurden;
+      const banner = document.getElementById("verdict-banner");
+      const vTitle = document.getElementById("verdict-title");
+      const vDesc = document.getElementById("verdict-desc");
+      const vDiff = document.getElementById("verdict-diff");
+
+      if (bestCombo.id === "none") {
+        banner.className = "rounded-2xl p-5 border shadow-sm bg-slate-100 border-slate-300";
+        vTitle.textContent = "世帯全体では「全員 申告無し（申告不要）」が最もお得です";
+        vDesc.textContent = "誰か1人でも申告すると、世帯の保険料増加・軽減消失・窓口負担上昇・扶養外れのいずれかが還付額を上回ります。";
+        vDiff.textContent = "±0円（基準）";
+        vDiff.className = "text-2xl font-bold text-slate-800";
+      } else {
+        banner.className = "rounded-2xl p-5 border shadow-sm bg-emerald-50 border-emerald-200";
+        vTitle.textContent = `世帯ベストは「${bestCombo.title}」です`;
+        vDesc.textContent = `${bestCombo.subtitle}。全員申告無しより世帯全体で年間 約${fmtYen(diffFromNone)} 手取りが増えます。`;
+        vDiff.textContent = `+${fmtYen(diffFromNone)}`;
+        vDiff.className = "text-2xl font-bold text-emerald-700";
+      }
+
+      // Combo Cards
+      document.getElementById("combo-cards").innerHTML = combos.map(c => {
+        const isBest = c.id === bestCombo.id;
+        const isSel = c.id === selectedCombo.id;
+        const diff = noneEntry.sim.totalBurden - c.entry.sim.totalBurden;
+        const diffText = c.id === "none" ? "基準（±0円）" : (diff >= 0 ? `+${fmtYen(diff)} お得` : `${fmtYen(diff)} 損`);
+        const diffColor = c.id === "none" ? "text-slate-600" : (diff >= 0 ? "text-emerald-700" : "text-rose-600");
+        return `
+          <button type="button" data-combo="${c.id}" class="text-left rounded-xl p-3.5 border transition ${isSel ? "border-indigo-600 bg-indigo-50/40 ring-2 ring-indigo-500/20" : "border-slate-200 bg-white hover:bg-slate-50"}">
+            <div class="flex items-center justify-between gap-2 mb-1">
+              <span class="text-[11px] font-bold ${isBest ? "text-emerald-700" : "text-slate-500"}">${isBest ? "★ 世帯ベスト" : "比較パターン"}</span>
+              ${isSel ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-600 text-white font-semibold">表示中</span>' : ''}
+            </div>
+            <div class="text-sm font-bold text-slate-900">${c.title}</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">${c.subtitle}</div>
+            <div class="mt-2.5 pt-2 border-t border-slate-100 flex items-baseline justify-between">
+              <span class="text-sm font-bold text-slate-900">${fmtYen(c.entry.sim.totalBurden)}</span>
+              <span class="text-xs font-bold ${diffColor}">${diffText}</span>
+            </div>
+          </button>
+        `;
+      }).join("");
+
+      document.querySelectorAll("[data-combo]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          selectedComboId = btn.dataset.combo;
+          updateAll();
+        });
+      });
+
+      const baseSim = noneEntry.sim;
+      const selSim = selectedCombo.entry.sim;
+      document.getElementById("selected-combo-badge").textContent = `表示中: ${selectedCombo.title}`;
+      document.getElementById("col-sel-status").textContent = selectedCombo.title;
+      document.getElementById("col-sel-breakdown").textContent = selectedCombo.title;
+
+      // Alerts
+      const alerts = [];
+      if (!baseSim.householdTaxed && selSim.householdTaxed) {
+        alerts.push("【住民税非課税世帯から課税世帯へ転落】このパターンでは世帯内で住民税課税者が発生し、65歳以上の全員の介護保険料や高額療養費区分が上がります。");
+      }
+      if (selSim.kokiCopayLabel !== baseSim.kokiCopayLabel) {
+        alerts.push(`【後期高齢者 窓口負担割合の上昇】世帯の後期高齢者全員の窓口負担が「${baseSim.kokiCopayLabel}」から「${selSim.kokiCopayLabel}」に変わります。`);
+      }
+      if (selSim.kokiReductionLabel !== baseSim.kokiReductionLabel) {
+        alerts.push(`【後期高齢者 均等割軽減の変化】世帯合算所得の変化により軽減区分が「${baseSim.kokiReductionLabel}」→「${selSim.kokiReductionLabel}」になります。`);
+      }
+      if (selSim.dependentsCount < baseSim.dependentsCount) {
+        alerts.push("【扶養外れ】申告により合計所得が62万円を超え、世帯主の税法上の扶養人数が減少します。");
+      }
+      if (members.some(m => m.hasTokutei && (Number(m.capGain) || 0) > 0 && (Number(m.capProceeds) || 0) <= 0)) {
+        alerts.push("【売却代金が未入力です】譲渡益があるのに売却代金が入力されていません。後期高齢者医療の3割判定では売却代金（譲渡対価）が収入に算入されるため、実際より窓口負担が低く出る可能性があります。売却代金を入力してください。");
+      }
+      if (members.some(m => m.hasTokutei && m.capGain < 0 && m.divRev > 0)) {
+        alerts.push("【特定口座内の譲渡損と配当の注意】同一特定口座内の譲渡損と配当は「申告不要」でも口座内で自動通算されますが、「配当総合課税」を選ぶと譲渡損との通算は解除されます。");
+      }
+      document.getElementById("alerts-box").innerHTML = alerts.map(msg =>
+        `<div class="bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm rounded-xl px-4 py-2.5">${msg}</div>`
+      ).join("");
+
+      // Status Table
+      const statusRows = [
+        ["住民税 非課税世帯判定", baseSim.householdTaxed ? "課税世帯" : "非課税世帯", selSim.householdTaxed ? "課税世帯" : "非課税世帯"],
+        ["後期高齢者医療 均等割軽減", baseSim.kokiReductionLabel, selSim.kokiReductionLabel],
+        ["後期高齢者医療 窓口負担", baseSim.kokiCopayLabel, selSim.kokiCopayLabel],
+        ["国民健康保険 均等割軽減", baseSim.kokuhoReductionLabel, selSim.kokuhoReductionLabel],
+        ["世帯主の税法上の扶養人数", `${baseSim.dependentsCount}人`, `${selSim.dependentsCount}人`]
+      ];
+      document.getElementById("status-tbody").innerHTML = statusRows.map(r => `
+        <tr class="hover:bg-slate-50">
+          <td class="px-3.5 py-2 font-medium text-slate-800">${r[0]}</td>
+          <td class="px-3.5 py-2">${r[1]}</td>
+          <td class="px-3.5 py-2 ${r[2] !== r[1] ? "font-bold text-rose-600" : ""}">${r[2]}</td>
+        </tr>
+      `).join("");
+
+      // Breakdown Table
+      const rows = [
+        ["世帯 所得税合計", baseSim.totalIT, selSim.totalIT],
+        ["世帯 住民税合計", baseSim.totalRes, selSim.totalRes],
+        ["世帯 国民健康保険料（税）", baseSim.totalKokuho, selSim.totalKokuho],
+        ["世帯 後期高齢者医療保険料", baseSim.totalKoki, selSim.totalKoki],
+        ["世帯 介護保険料（65歳以上計）", baseSim.totalKaigoPrem, selSim.totalKaigoPrem],
+        ["世帯 医療費 自己負担目安", baseSim.totalMedCopay, selSim.totalMedCopay],
+        ["世帯 介護費 自己負担目安", baseSim.totalKaigoCopay, selSim.totalKaigoCopay]
+      ];
+      document.getElementById("breakdown-tbody").innerHTML = rows.map(r => {
+        const diff = r[2] - r[1];
+        const diffStr = diff === 0 ? "±0円" : (diff > 0 ? `+${fmtYen(diff)}` : fmtYen(diff));
+        const diffCls = diff > 0 ? "text-rose-600 font-semibold" : (diff < 0 ? "text-emerald-700 font-semibold" : "text-slate-400");
+        return `
+          <tr class="hover:bg-slate-50">
+            <td class="px-4 py-2 font-medium text-slate-800">${r[0]}</td>
+            <td class="px-4 py-2 text-right tabular-nums">${fmtYen(r[1])}</td>
+            <td class="px-4 py-2 text-right tabular-nums">${fmtYen(r[2])}</td>
+            <td class="px-4 py-2 text-right tabular-nums ${diffCls}">${diffStr}</td>
+          </tr>
+        `;
+      }).join("") + (() => {
+        const tDiff = selSim.totalBurden - baseSim.totalBurden;
+        const tDiffStr = tDiff === 0 ? "±0円" : (tDiff > 0 ? `+${fmtYen(tDiff)} (負担増)` : `${fmtYen(tDiff)} (お得)`);
+        const tCls = tDiff > 0 ? "text-rose-700" : (tDiff < 0 ? "text-emerald-700" : "text-slate-700");
+        return `
+          <tr class="bg-slate-100 font-bold text-slate-900">
+            <td class="px-4 py-2.5">世帯年間負担 合計</td>
+            <td class="px-4 py-2.5 text-right tabular-nums">${fmtYen(baseSim.totalBurden)}</td>
+            <td class="px-4 py-2.5 text-right tabular-nums">${fmtYen(selSim.totalBurden)}</td>
+            <td class="px-4 py-2.5 text-right tabular-nums ${tCls}">${tDiffStr}</td>
+          </tr>
+        `;
+      })();
+
+      // Member-by-member Detail
+      const modeName = { none: "申告不要", separate: "申告分離", comprehensive: "配当総合" };
+      document.getElementById("member-detail-tbody").innerHTML = baseSim.mStates.map((mn, i) => {
+        const mb = selSim.mStates[i];
+        return `
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-2 font-semibold text-slate-900">${mn.label}${mn.isHead ? " (世帯主)" : ""}</td>
+            <td class="px-3 py-2">${mb.hasTokutei ? `<span class="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-semibold">${modeName[mb.mode]}</span>` : '<span class="text-slate-400">口座なし</span>'}</td>
+            <td class="px-3 py-2 text-right">${mn.resExempt ? "非課税" : "課税"} → ${mb.resExempt ? "非課税" : "課税"}</td>
+            <td class="px-3 py-2 text-right tabular-nums">${mn.isOver65 ? `${fmtYen(mn.kaigoPrem)}(${mn.kaigoStage}) → ${fmtYen(mb.kaigoPrem)}(${mb.kaigoStage})` : "-"}</td>
+            <td class="px-3 py-2 text-right">医療 ${mn.medLabel}→${mb.medLabel} / 介護 ${mn.kaigoCopayLabel}→${mb.kaigoCopayLabel}</td>
+          </tr>
+        `;
+      }).join("");
+
+      updateChart(combos);
+    }
+
+    function updateChart(combos) {
+      const ctx1 = document.getElementById("chart-breakdown").getContext("2d");
+      if (chartBreakdown) chartBreakdown.destroy();
+      chartBreakdown = new Chart(ctx1, {
+        type: "bar",
+        data: {
+          labels: combos.map(c => c.title.replace("（申告不要）", "")),
+          datasets: [
+            { label: "所得税・住民税", data: combos.map(c => Math.round((c.entry.sim.totalIT + c.entry.sim.totalRes) / 1000) / 10), backgroundColor: "#4f46e5" },
+            { label: "国保・後期・介護保険料", data: combos.map(c => Math.round((c.entry.sim.totalKokuho + c.entry.sim.totalKoki + c.entry.sim.totalKaigoPrem) / 1000) / 10), backgroundColor: "#0ea5e9" },
+            { label: "医療費・介護費自己負担", data: combos.map(c => Math.round((c.entry.sim.totalMedCopay + c.entry.sim.totalKaigoCopay) / 1000) / 10), backgroundColor: "#f59e0b" }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: { x: { stacked: true }, y: { stacked: true, title: { display: true, text: "万円" } } },
+          plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } } }
+        }
+      });
+    }
+
+    // ---------- TAB / FLOW / PRESETS ----------
+    function switchTab(tabId) {
+      ["sim", "flow", "rates"].forEach(t => document.getElementById(`tab-${t}`).classList.toggle("hidden", t !== tabId));
+      document.querySelectorAll(".tab-btn").forEach(btn => {
+        const isActive = btn.dataset.tab === tabId;
+        btn.classList.toggle("active", isActive);
+        if (!isActive) btn.classList.add("bg-slate-800", "text-slate-200");
+        else btn.classList.remove("bg-slate-800", "text-slate-200");
+      });
+    }
+
+    function renderFlowDetail(key) {
+      const info = FLOW_DETAILS[key] || FLOW_DETAILS.loss_yes;
+      document.getElementById("flow-detail-box").innerHTML = `
+        <span class="inline-block text-xs font-bold px-2.5 py-0.5 rounded-full bg-indigo-600 text-white mb-2">${info.badge}</span>
+        <h3 class="text-base font-bold text-slate-900">${info.title}</h3>
+        <p class="text-sm text-slate-700 mt-2 leading-relaxed">${info.body}</p>
+      `;
+    }
+
+    function applyPreset(name) {
+      switchTab("sim");
+      selectedComboId = null;
+      if (name === "couple_both") {
+        document.getElementById("inp-city").value = "nagoya";
+        members = [
+          { id: 1, label: "夫（76歳）", isHead: true, ageGroup: "75plus", insurance: "koki", pensionRev: 180, salaryRev: 0, otherBiz: 0, deductions: 22, medTotal: 30, kaigoTotal: 0, hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 30, otherLoss: 0, carryLoss: 0 },
+          { id: 2, label: "妻（75歳）", isHead: false, ageGroup: "75plus", insurance: "koki", pensionRev: 80, salaryRev: 0, otherBiz: 0, deductions: 10, medTotal: 20, kaigoTotal: 0, hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 25, otherLoss: 0, carryLoss: 0 }
+        ];
+      } else if (name === "gisei_head") {
+        document.getElementById("inp-city").value = "nagoya";
+        members = [
+          { id: 1, label: "母（78歳・後期）", isHead: false, ageGroup: "75plus", insurance: "koki", pensionRev: 90, salaryRev: 0, otherBiz: 0, deductions: 5, medTotal: 40, kaigoTotal: 80, hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 25, otherLoss: 0, carryLoss: 0 },
+          { id: 2, label: "子（45歳・世帯主）", isHead: true, ageGroup: "40to64", insurance: "shaho", pensionRev: 0, salaryRev: 500, otherBiz: 0, deductions: 75, medTotal: 10, kaigoTotal: 0, hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 20, otherLoss: 0, carryLoss: 0 }
+        ];
+      } else if (name === "geneki_trap") {
+        document.getElementById("inp-city").value = "nagoya";
+        members = [
+          { id: 1, label: "夫（77歳・後期）", isHead: true, ageGroup: "75plus", insurance: "koki", pensionRev: 300, salaryRev: 0, otherBiz: 0, deductions: 35, medTotal: 120, kaigoTotal: 0, hasTokutei: true, capGain: 120, capProceeds: 600, divRev: 20, otherLoss: 50, carryLoss: 0 },
+          { id: 2, label: "妻（75歳・後期）", isHead: false, ageGroup: "75plus", insurance: "koki", pensionRev: 100, salaryRev: 0, otherBiz: 0, deductions: 10, medTotal: 60, kaigoTotal: 0, hasTokutei: false, capGain: 0, capProceeds: 0, divRev: 0, otherLoss: 0, carryLoss: 0 }
+        ];
+      } else if (name === "kokuho_couple") {
+        document.getElementById("inp-city").value = "owariasahi";
+        members = [
+          { id: 1, label: "夫（68歳・国保）", isHead: true, ageGroup: "65to69", insurance: "kokuho", pensionRev: 150, salaryRev: 0, otherBiz: 0, deductions: 20, medTotal: 20, kaigoTotal: 0, hasTokutei: true, capGain: 80, capProceeds: 200, divRev: 20, otherLoss: 0, carryLoss: 0 },
+          { id: 2, label: "妻（63歳・国保）", isHead: false, ageGroup: "40to64", insurance: "kokuho", pensionRev: 0, salaryRev: 100, otherBiz: 0, deductions: 15, medTotal: 15, kaigoTotal: 0, hasTokutei: true, capGain: 0, capProceeds: 0, divRev: 30, otherLoss: 0, carryLoss: 0 }
+        ];
+      }
+      renderMembersUI();
+      updateAll();
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
+      document.getElementById("hdr-city").addEventListener("change", () => { document.getElementById("inp-city").value = document.getElementById("hdr-city").value; updateAll(); });
+      document.getElementById("inp-city").addEventListener("change", updateAll);
+      document.getElementById("btn-add-member").addEventListener("click", () => {
+        if (members.length >= 5) return;
+        members.push({
+          id: nextMemberId++, label: `家族${members.length + 1}`, isHead: false,
+          ageGroup: "65to69", insurance: "kokuho",
+          pensionRev: 80, salaryRev: 0, otherBiz: 0, deductions: 10, medTotal: 10, kaigoTotal: 0,
+          hasTokutei: false, capGain: 0, capProceeds: 0, divRev: 0, otherLoss: 0, carryLoss: 0
+        });
+        renderMembersUI();
+        updateAll();
+      });
+      document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("click", () => applyPreset(btn.dataset.preset)));
+      document.querySelectorAll("[data-flow]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll("[data-flow]").forEach(b => b.classList.remove("selected"));
+          btn.classList.add("selected");
+          renderFlowDetail(btn.dataset.flow);
+        });
+      });
+      renderFlowDetail("loss_yes");
+      renderMembersUI();
+      updateAll();
+    });
+  </script>
+
+  <!-- 免責の注意書き（ページ下部） -->
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+    <div class="bg-red-50 border-2 border-red-400 rounded-xl p-4 text-sm text-red-900 leading-relaxed">
+      <strong class="font-bold">⚠ まだ作成中です。</strong>このシミュレーターは試作中のものです。計算結果の正確性について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。
+    </div>
+  </div>
+</body>
+</html>

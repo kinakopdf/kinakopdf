@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>きなこPDF 多機能版｜無料PDF編集ソフト（開発中）</title>
+<meta name="description" content="きなこPDFの多機能版。パスワード保護、圧縮、分割、フォーム入力、印鑑・スタンプ、しおり、ヘッダー/透かし、会計向けの証憑OCRなどが入った実験版です。開発中のため注意書きをご確認ください。">
+<link rel="canonical" href="https://kinakopdf.github.io/kinakopdf/trial-multi.html">
+<meta property="og:title" content="きなこPDF 多機能版（開発中）">
+<meta property="og:description" content="安定版にない機能を試せる実験版です。開発中のため、使う前に注意書きをご確認ください。">
+<meta property="og:url" content="https://kinakopdf.github.io/kinakopdf/trial-multi.html">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://kinakopdf.github.io/kinakopdf/assets/kinako_pdf.png">
+<style>
+:root{--cream:#fdf6e3;--ink:#3a3129;--muted:#7a6f63;--red:#c0392b;--soft:#fffaf0;--line:#f0e2c8}
+*{box-sizing:border-box}
+body{font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;line-height:1.9;margin:0;color:var(--ink);background:#fffdf7}
+header,section,footer{max-width:780px;margin:0 auto;padding:28px 22px}
+header{background:linear-gradient(180deg,#fdf6e3,#fffaf0);text-align:center;border-bottom:3px solid var(--line)}
+header img.icon{width:120px;height:120px;border-radius:28px;box-shadow:0 4px 16px rgba(0,0,0,.15)}
+h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em}
+.tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px}
+.btn{display:inline-block;background:var(--red);color:#fff;padding:15px 34px;border-radius:999px;text-decoration:none;font-weight:bold;margin:14px 0 6px;box-shadow:0 3px 10px rgba(192,57,43,.35)}
+.btn:hover{opacity:.9}
+h2{font-size:1.25em;border:none;margin:0 0 10px;padding-left:12px;border-left:6px solid var(--red)}
+.card{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:18px 0}
+.note{background:#f6f6f6;border-left:4px solid var(--red);padding:12px 16px;border-radius:0 12px 12px 0}
+ul{padding-left:1.2em}
+li{margin:8px 0}
+small{color:var(--muted)}
+footer{text-align:center;color:var(--muted);border-top:1px solid var(--line)}
+a{color:var(--red)}
+.warning{background:#fdecea;border:2px solid var(--red);border-radius:12px;padding:14px 18px;margin:18px 0;font-weight:bold}
+</style>
+</head>
+<body>
+<div class="warning">⚠ 開発中のバージョンです。このページのソフトは、まだ実験中の多機能版です。不具合が残っている可能性があります。大切なファイルは、必ずコピーを取ってからお使いください。動作の正確性について責任は負えません。あくまで試用としてお使いください。</div>
+<header>
+<img class="icon" src="assets/kinako_pdf.png" alt="きなこPDFのアイコン">
+<h1>きなこPDF 多機能版</h1>
+<p class="tagline">安定版にない機能を試せる実験版です</p>
+<p>無料のPDF編集ソフトです。安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。</p>
+<a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.3-trial-multi/KinakoPDF-trial-multi.exe">多機能版をダウンロード（KinakoPDF-trial-multi.exe）</a>
+<p><small>インストール不要。ダウンロードしてダブルクリックするだけで起動します。安定版とは別のファイルです。</small></p>
+<p><a href="index.html">← きなこPDFのトップページに戻る</a></p>
+</header>
+
+<section>
+<div class="card">
+<h2>入っている機能</h2>
+<p>安定版の機能（墨消し・トリミング・文字編集・折りたたみ表示・Excel出力など）に加えて、次の機能が入っています。</p>
+<ul>
+<li><strong>パスワード保護・解除</strong> — PDFにパスワードをかける・はずす（AES-256）</li>
+<li><strong>PDF圧縮</strong> — ファイルサイズを小さくする</li>
+<li><strong>PDF分割</strong> — ページ範囲を指定して分ける（例：1-3,5）</li>
+<li><strong>フォーム入力</strong> — PDFの入力欄に文字を入れて確定（フラット化）</li>
+<li><strong>電子印鑑・スタンプ</strong> — 日付入りの丸い印鑑と、四角いスタンプ8種類</li>
+<li><strong>しおりの表示・編集</strong> — しおり（ブックマーク）を見る・直す</li>
+<li><strong>ヘッダー・フッター・透かし</strong> — ページ番号や透かし文字を入れる</li>
+<li><strong>証憑OCR→一覧Excel/CSV（半自動）</strong> — 領収書や請求書の日付・取引先・金額の候補を出して、確認してから一覧にします（会計向け）</li>
+<li><strong>電帳法リネーム</strong> — ファイル名を「日付_取引先_金額.pdf」に自動でつけ直す（確認してから変更）</li>
+<li><strong>インボイス番号チェック</strong> — 登録番号（T＋13桁）が正しいか確認</li>
+<li><strong>複数PDF横断検索</strong> — フォルダ内のPDFをまとめて文字検索</li>
+<li><strong>2つのPDFのテキスト比較</strong> — 2つのPDFの文字の違いを見る</li>
+<li><strong>個人情報パターンの墨消し候補</strong> — メールアドレス・電話番号・マイナンバー・口座番号の候補を出して、選んだものだけ墨消し</li>
+<li><strong>署名の挿入</strong> — 画像の署名や、手書きパッドで書いた署名を入れる</li>
+<li><strong>写真をPDF化</strong> — 写真を選ぶと、書類を自動で切り抜き・傾き補正してPDFにします（四隅を手で直すこともできます）</li>
+</ul>
+<p><small>2026-11-20更新：「写真をPDF化」を追加しました。フォーム入力の「元に戻す」で同名の欄が壊れる問題と、印刷プレビューと実際の印刷の余白のズレも直しました。</small></p>
+<p><small>2026-11-18更新：回転したページの文字選択、墨消し済みの文字の除外、折りたたみ表示中の範囲OCRのズレなどを直しました。</small></p>
+</div>
+
+<div class="card">
+<h2>多機能版を使うときのお願い</h2>
+<ul>
+<li>まだ実験中の機能です。思ったとおりに動かないことがあります。</li>
+<li>大切なファイルは、必ずコピーを取ってからお試しください。</li>
+<li>墨消しは元に戻りません。消す前に、よく確認してください。</li>
+<li>証憑OCR（領収書・請求書の読み取り）は半自動です。日付・取引先・金額は、必ずご自身で確認してからお使いください。</li>
+<li>感想や不具合の報告は、トップページの「ご感想フォーム」からお送りください。ただし、OCRの読み取り精度についてのご意見は、今は対応できません。</li>
+</ul>
+</div>
+</section>
+
+<div class="warning">⚠ 開発中のバージョンです。このページのソフトは、まだ実験中の多機能版です。不具合が残っている可能性があります。大切なファイルは、必ずコピーを取ってからお使いください。動作の正確性について責任は負えません。あくまで試用としてお使いください。</div>
+
+<footer>
+<p><a href="index.html">きなこPDFのトップページに戻る</a></p>
+<p><small>運営：KINAKO</small></p>
+</footer>
+</body>
+</html>

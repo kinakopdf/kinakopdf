@@ -53,7 +53,7 @@ from core import (
     HIGHLIGHT_OPACITY,
     TEXT_LINE_SPACING,
     clip_stroke_by_rects,
-    collect_text_only_redact_raw_rects,
+    split_text_only_redact_raw_rects,
     get_later_user_erase_rects,
     is_rect_substantially_erased,
     logger,
@@ -433,15 +433,17 @@ class ThumbnailTask(QRunnable):
                 page_rect = fitz.Rect(page.rect)
                 page_rot = page.rotation % 360
                 crop_rect = get_effective_cropbox(page)
-                text_redact_rects = collect_text_only_redact_raw_rects(self.ann_list)
-                if text_redact_rects:
+                text_redact_rects, keep_image_rects = (
+                    split_text_only_redact_raw_rects(self.ann_list)
+                )
+                if text_redact_rects or keep_image_rects:
                     temp_doc = fitz.open()
                     try:
                         temp_doc.insert_pdf(self.doc, from_page=self.page_idx, to_page=self.page_idx)
                         temp_page = temp_doc[0]
                         temp_page.set_rotation(0)
                         temp_page.set_cropbox(temp_page.mediabox)
-                        PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, text_redact_rects)
+                        PDFDocumentManager.apply_text_only_redactions_to_page(temp_page, text_redact_rects, keep_image_rects)
                         if temp_page.rotation != page_rot:
                             temp_page.set_rotation(page_rot)
                         if crop_rect != temp_page.mediabox:
@@ -556,6 +558,15 @@ class PageManager(QDockWidget):
         buttons.addWidget(self.btn_insert)
         buttons.addWidget(self.btn_delete)
         top_layout.addLayout(buttons)
+
+        extract_buttons = QHBoxLayout()
+        self.btn_extract = QPushButton("📄 選択ページを抽出")
+        self.btn_extract.setToolTip(
+            "選択中のページだけを、注釈・墨消しを反映した新しいPDFとして保存します"
+        )
+        self.btn_extract.clicked.connect(self.extract_selected_pages)
+        extract_buttons.addWidget(self.btn_extract)
+        top_layout.addLayout(extract_buttons)
 
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
@@ -724,7 +735,8 @@ class PageManager(QDockWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         if not skip_text_redact_fill:
-            for r_raw in collect_text_only_redact_raw_rects(ann_list):
+            # 画像を残す消去（OCR文字の不可視置換）は白塗りしない
+            for r_raw in split_text_only_redact_raw_rects(ann_list)[0]:
                 vr = raw_rect_to_view_rect_from_geom(crop_rect, page_rect, page_rot, r_raw)
                 qrect = QRectF(
                     (vr.x0 - page_rect.x0) * sx,
@@ -824,6 +836,9 @@ class PageManager(QDockWidget):
                     painter.drawPath(path)
 
             elif ann["type"] == "text":
+                # 不可視テキスト（OCRレイヤーの置換）は字形を描かない
+                if ann.get("invisible"):
+                    continue
                 text_bbox = estimate_text_bbox_in_pdf(ann)
                 if is_rect_substantially_erased(text_bbox, later_erases):
                     continue
@@ -1280,6 +1295,83 @@ class PageManager(QDockWidget):
             else 0
         )
         self.on_pages_dropped(target_idx, extracted_doc)
+
+    def extract_selected_pages(self):
+        """選択中のページだけを新しいPDFとして保存する（抽出）。
+
+        注釈・墨消しは通常の保存と同じ bake_annotations_to_doc で焼き込み、
+        画面で見ている状態のまま抽出する。抽出元の文書は変更しない。
+        """
+        viewer = self.main.viewer
+        doc = viewer.current_pdf
+        if not doc:
+            QMessageBox.information(self, "案内", "先にPDFを開いてください。")
+            return
+
+        selected = self.list_widget.selectedItems()
+        if not selected:
+            QMessageBox.information(self, "案内", "抽出したいページを選択してください。")
+            return
+
+        rows = sorted(set(self.list_widget.row(item) for item in selected))
+        rows = [r for r in rows if 0 <= r < len(doc)]
+        if not rows:
+            QMessageBox.information(self, "案内", "抽出したいページを選択してください。")
+            return
+
+        default_path = ""
+        if viewer.current_file:
+            src = Path(viewer.current_file)
+            default_path = str(src.with_name(f"{src.stem}_抽出.pdf"))
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "選択ページを抽出して保存",
+            default_path,
+            "PDF Files (*.pdf)",
+        )
+        if not filepath:
+            return
+        if not filepath.lower().endswith(".pdf"):
+            filepath += ".pdf"
+
+        extracted = None
+        try:
+            extracted = PDFDocumentManager.extract_pages_as_doc(
+                doc, rows, viewer.page_annotations
+            )
+            # 抽出元文書のメタデータ（タイトル・作成者など）を引き継ぐ
+            try:
+                extracted.set_metadata(dict(doc.metadata or {}))
+            except Exception:
+                logger.debug("Extract metadata copy skipped", exc_info=True)
+            _saved_doc, err = PDFDocumentManager.save_safely(
+                source_doc=extracted,
+                page_annotations={},
+                filepath=filepath,
+                current_file=None,
+            )
+            if err is not None:
+                raise err
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "抽出エラー",
+                f"選択ページの抽出に失敗しました。\n{e}",
+            )
+            return
+        finally:
+            if extracted is not None:
+                try:
+                    with FITZ_LOCK:
+                        extracted.close()
+                except Exception:
+                    logger.debug("Failed to close extracted doc", exc_info=True)
+
+        QMessageBox.information(
+            self,
+            "抽出完了",
+            f"{len(rows)} ページを抽出して保存しました。\n保存先: {filepath}",
+        )
 
     def delete_page(self):
         viewer = self.main.viewer
