@@ -18,23 +18,28 @@ body{font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif;line-height:
 header,section,footer{max-width:780px;margin:0 auto;padding:28px 22px}
 header{background:linear-gradient(180deg,#fdf6e3,#fffaf0);text-align:center;border-bottom:3px solid var(--line)}
 header img.icon{width:120px;height:120px;border-radius:28px;box-shadow:0 4px 16px rgba(0,0,0,.15)}
-h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em}
-.tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px}
+h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em;text-align:center}
+.tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px;text-align:center;text-indent:0}
 .btn{display:inline-block;background:var(--red);color:#fff;padding:15px 34px;border-radius:999px;text-decoration:none;font-weight:bold;margin:14px 0 6px;box-shadow:0 3px 10px rgba(192,57,43,.35)}
 .btn:hover{opacity:.9}
-h2{font-size:1.25em;border:none;margin:0 0 10px;padding-left:12px;border-left:6px solid var(--red)}
+p{text-align:left;text-indent:1em;margin:12px 0}
+.center{text-align:center;text-indent:0}
+.catch{text-align:center;text-indent:0;font-size:1.05em;line-height:2.1;margin:14px 0 4px}
+h2{font-size:1.35em;text-align:center;margin:0 0 14px;padding-bottom:8px;border-bottom:3px solid var(--line)}
+h3{font-size:1.08em;text-align:left;margin:20px 0 6px;padding-left:10px;border-left:5px solid var(--red)}
 .card{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin:18px 0}
 .note{background:#f6f6f6;border-left:4px solid var(--red);padding:12px 16px;border-radius:0 12px 12px 0}
-.slot{border:2px dashed #bbb;padding:16px;margin:16px 0;color:#555;border-radius:12px;background:#fff}
 ul{padding-left:1.2em}
 li{margin:8px 0}
 small{color:var(--muted)}
 footer{text-align:center;color:var(--muted);border-top:1px solid var(--line)}
+footer p{text-align:center;text-indent:0}
 a{color:var(--red)}
 .story{background:#fff;border:1px solid var(--line);border-radius:16px;padding:22px;margin:18px 0}
 .story p{margin:10px 0}
 .pill{display:inline-block;background:#fbeee8;color:var(--red);border-radius:999px;padding:2px 12px;font-size:.85em;font-weight:bold;margin-right:6px}
-.trial{background:#f4f1ea;border:1px dashed #b9a98a;border-radius:12px;padding:12px 16px;margin:16px 0;font-size:.95em}
+.trial{background:#f4f1ea;border:1px dashed #b9a98a;border-radius:12px;padding:12px 16px;margin:16px 0;font-size:.85em;line-height:1.8}
+.trial p{margin:8px 0}
 </style>
 </head>
 <body>
@@ -42,33 +47,33 @@ a{color:var(--red)}
 <img class="icon" src="assets/kinako_pdf.png" alt="きなこPDFのアイコン">
 <h1>きなこPDF</h1>
 <p class="tagline">無料PDF編集ソフト・完全ローカルで安全</p>
-<p>無料のPDFフリーソフトです。安心・安全。クラウドへのアップロードなし。<br>PDFの処理はすべて自分のパソコンの中で行います。無料でPDF編集ができます。</p>
-<a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.4/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a>
-<p><small>インストール不要。ダウンロードしてダブルクリックするだけで起動します。USBメモリに入れて持ち運ぶこともできます。<br>
-exe 版は GitHub Actions で自動ビルドしています。</small></p>
-<p><a href="chromebook.html">Chromebookの方はこちら →</a></p>
+<p class="catch">無料で使えるPDF編集ソフトです。<br>完全ローカルで、書類を外に送らない安心設計。<br>PDFの処理はすべて、自分のパソコンの中で完結します。</p>
+<p class="center"><a class="btn" href="https://github.com/kinakopdf/kinakopdf/releases/download/v1.0.5/KinakoPDF.exe">無料ダウンロード（KinakoPDF.exe）</a></p>
+<p><small>現在の安定版は v1.0.5（2026-11-21公開）です。インストール不要。ダウンロードしてダブルクリックするだけで起動します。USBメモリに入れて持ち運ぶこともできます。exe 版は GitHub Actions で自動ビルドしています。</small></p>
+<p>今回の更新で、ベータ版で試していた機能が正式版に入りました。「📝 文字データ」（文字データの表示・修正と、スキャンPDFの内部文字の差し替え）、見開きリーダーの強化、ボタンの整理と並び替えなどです。</p>
+<p class="center"><a href="chromebook.html">Chromebookの方はこちら →</a></p>
 <div class="trial">
-<p><strong>多機能版</strong> — 安定版にない機能を試せる実験版です。機能の一覧と開発中の注意書きは、別ページにまとめました。<br>
-<a href="trial-multi.html">多機能版はこちら →</a></p>
+<p><strong>ベータ版（お試し）</strong> — ベータ版の機能は v1.0.5 で正式版に取り込まれました。新しいベータ版は準備中です。</p>
+<p><strong>多機能版</strong> — 安定版にない機能を試せる実験版です。<a href="trial-multi.html">多機能版はこちら →</a></p>
 </div>
 </header>
 
 <section>
 <div class="story">
 <h2>なぜ作ったのか</h2>
-<p>今は、個人情報の流出のニュースがあとを絶ちません。便利なAIに書類をアップロードすれば、面倒な作業は一瞬で片付きます。しかし、その書類の中には名前や住所、金額など、大切な個人情報が入っています。</p>
+<p>個人情報の流出のニュースは、あとを絶ちません。便利なAIに書類をアップロードすれば、面倒な作業は一瞬で片付きます。しかし、その書類の中には、名前や住所、カード番号など、大切な個人情報が入っています。</p>
 <p>きなこPDFは、そんな不安から生まれました。<strong>AIにアップロードする前に、自分のパソコンの中で個人情報を消しておくためのソフト</strong>です。墨消しで名前や住所を物理的に消してからアップロードすれば、大切な情報を外に出さずにすみます。</p>
-<p>作ったのは、プロの会社ではなく個人です。だからこそ「自分の大切な書類を、自分で守れる道具」を目指しました。派手な機能はありませんが、安心して使えることをいちばんに考えています。</p>
+<p>作ったのは大きな会社ではなく、個人です。目指したのは「自分の大切な書類を、自分で守れる道具」。機能の派手さよりも、安心して使えることをいちばんに考えて作っています。</p>
 </div>
 
 <div class="card">
 <h2>安心して使える理由</h2>
 <ul>
-<li><strong>完全ローカル</strong> — PDFの処理はすべて自分のパソコンの中で行います。クラウドへのアップロードは一切ありません。</li>
+<li><strong>完全ローカル</strong> — PDFの処理はすべて自分のパソコンの中で完結する設計です。</li>
 <li><strong>オープンソース</strong> — ソースコードをすべて公開しています。中身がどうなっているか、誰でも確認できます。</li>
-<li><strong>使う部品は2つだけ</strong> — 画面を作る PyQt6 と、PDFを扱う PyMuPDF。この2つだけを、極限まで絞って使っています。部品が少なければ、余計なものが混ざる心配も少なくなります。</li>
+<li><strong>使う部品は2つだけ</strong> — 使う部品（ライブラリ）は、画面を作る PyQt6 と、PDFを扱う PyMuPDF の2つだけに絞っています。部品が少なければ、余計なものが混ざる心配も少なくなります。</li>
 </ul>
-<p><small>個人制作のソフトのため、Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。これは、まだ広く知られていない個人のソフトに出やすいもので、ウイルスということではありません。不安な方は、上の「オープンソース」のソースコードをご確認ください。</small></p>
+<p><small>個人制作のソフトのため、Windowsのセキュリティ警告（「WindowsによってPCが保護されました」など）が出ることがあります。これは、まだ広く知られていない個人のソフトに出やすい表示で、ウイルス感染の警告とは別ものです。出たときの起動のしかたは、下の「はじめての きなこPDF」に手順を書いてあります。不安な方は、上の「オープンソース」のソースコードをご確認ください。</small></p>
 </div>
 </section>
 
@@ -76,11 +81,11 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <h2>できること</h2>
 <div class="card">
 <ul>
-<li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 文字を上から塗りつぶすのではありません。選んだ文字や画像のデータを完全に削除し、復旧できないようにします。だから、保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
+<li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 上から塗りつぶす方式とは違い、選んだ文字や画像のデータを完全に削除し、復旧できないようにします。保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
 <li><span class="pill">編集</span><strong>テキスト編集</strong> — 既存の文字・数字の書き換え、新しい文字の追加</li>
 <li><span class="pill">編集</span><strong>ペン・マーカー・トリミング・回転・折りたたみ表示</strong> — ページの並べ替え・挿入・削除も。折りたたみ表示は、ページの一部の帯を隠して詰めて表示する機能です（表示だけ・PDFは変わりません）</li>
 <li><span class="pill">読む</span><strong>見開き全画面リーダー</strong> — F5で本のように見開きで読めます（表紙の有無も選べます）。通常画面で全ページを縦にスクロールして読む表示もあります</li>
-<li><span class="pill">OCR</span><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、文字を外部のサービスに送ることはありません。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
+<li><span class="pill">OCR</span><strong>スキャン明細の色抜き・OCR（Windows専用）</strong> — 範囲OCR（Ctrl+Alt+O）つき。OCRはWindowsに標準で入っている機能だけを使い、処理はパソコンの中で完結します。その代わり、読み取りの精度には限界があります。手書き文字や、かすれた文字・小さな文字はうまく読めないことがあります。結果は必ず目で確認してください。</li>
 <li><span class="pill">計算</span><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計します</li>
 <li><span class="pill">便利</span><strong>フォルダ一括読込</strong> — 複数PDFをまとめて1つの本として読み込み（結合機能）</li>
 <li><span class="pill">便利</span><strong>Excel出力</strong> — PDFの表をExcel（.xlsx）に書き出せます</li>
@@ -91,10 +96,10 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 </section>
 
 <section>
-<h2>無料のPDFフリーソフトをお探しの方へ</h2>
+<h2>こんな方におすすめです</h2>
 <div class="card">
-<p>きなこPDFは、無料で使えるPDFフリーソフトです。無料PDF編集ソフトを探している方に、安全な選択肢として作りました。PDFをサーバーに送るオンラインの無料編集サイトと違って、きなこPDFは完全ローカルです。PDFの処理はすべて自分のパソコンの中で行うので、個人情報や大事な書類がインターネットに出ることはありません。</p>
-<p>安全なPDF編集がしたい方、墨消しで個人情報を確実に消したい方、スキャンした書類をOCRで読みたい方におすすめです。インストール不要で、ダウンロードしてダブルクリックするだけ。Windowsのパソコンで使えます。</p>
+<p>オンラインの編集サイトは便利ですが、書類をサーバーに送ることに不安を感じる方も多いと思います。きなこPDFは、PDFを外部に送らず、自分のパソコンの中だけで編集できるように作りました。</p>
+<p>墨消しで個人情報を確実に消したい方、スキャンした書類をOCRで文字にしたい方、面倒な登録やインストールなしにすぐ使いたい方におすすめです。Windowsのパソコンでお使いいただけます。</p>
 </div>
 </section>
 
@@ -107,18 +112,68 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 <li>PDFを開いて、墨消しや編集をする</li>
 </ol>
 <p><small>ソースコード版を使う場合：Python 3.11以上、PyQt6、PyMuPDF（requirements.txtに記載）が必要です。<code>python secure_local_pdf_editor.pyw</code> で起動します。新しいライブラリは追加していません。</small></p>
-<p><small>※ Windowsでの起動は、2026-11-16に確認しました。</small></p>
+<p><small>※ 安定版 v1.0.5 を公開中です（2026-11-21）。</small></p>
 </div>
 </section>
 
 <section>
-<h2>会計事務所向け（近日公開）</h2>
-<p>今はPDFソフトのみ公開中です。会計事務所向けのページに育てていきます。</p>
-<p><strong>確定申告シミュレーター（試作中）</strong> — 特定口座（源泉徴収あり）の確定申告で、申告したほうが得かどうかを世帯全体で試算できます（名古屋市・尾張旭市対応）。<br>
+<h2>はじめての きなこPDF</h2>
+<div class="card">
+<h3>きなこPDFって、なに？</h3>
+<p>無料で使えるPDFの編集ソフトです。いちばんの特徴は「ぜんぶ自分のパソコンの中でやる」こと。インターネットにファイルを送らないので、名前や住所、カード番号の入った書類でも安心して使えます。</p>
+<p>インストールはいりません。ダウンロードしてダブルクリックするだけ。Windowsのパソコンで使えます。</p>
+
+<h3>はじめの5分</h3>
+<ol>
+<li>ホームページの「無料ダウンロード（KinakoPDF.exe）」からダウンロードする</li>
+<li>ダウンロードした exe をダブルクリックする</li>
+<li>PDFを開く（ドラッグ＆ドロップでも開けます）</li>
+<li>まずはコピーを作って試すのがおすすめです。大事な原本はそのまま残しておけます</li>
+</ol>
+<p><strong>青い画面「WindowsによってPCが保護されました」が出たら</strong></p>
+<p>初めて起動するとき、Windows 11では青い警告画面が出ることがあります。これは、発行元がまだ知られていないアプリへの確認で、個人で作ったソフトにはよく出るものです（ウイルスということではありません）。次の手順で起動できます。</p>
+<ol>
+<li>画面の「詳細情報」という文字を押す</li>
+<li>「実行」ボタンが出てくるので、それを押す</li>
+</ol>
+<p><small>※ 青い画面が出ずに、ダブルクリックしても何も起きない場合は、「スマートアプリコントロール」という別の仕組みが止めていることがあります。そのときは、Windowsセキュリティ →「アプリとブラウザー コントロール」→「スマートアプリコントロールの設定」から一時的にオフにすると起動できます。セキュリティを下げる操作なので、起動できたらオンに戻してください。不安な方は、ソースコードを公開しているので中身を確認できます。</small></p>
+
+<h3>まず覚えたい3つのこと</h3>
+<p><strong>1. 墨消し — 消したい文字を、データごと消す</strong></p>
+<p>名前や住所など、見せたくない部分を選びます。上から塗りつぶすのではなく、文字のデータそのものを消すので、保存したあと他のソフトで開いても復活しません。AIに書類を渡す前に、ここで個人情報を消しておくのが、きなこPDFのいちばんの使い方です。</p>
+<p><strong>2. 文字の書き換え — 数字や文字を直す</strong></p>
+<p>PDFの中の文字をそのまま書き換えたり、新しい文字を足したりできます。ドラッグで文字を選ぶと「📋 コピー」ボタンが出て、押すとコピーして画面が閉じます。</p>
+<p><strong>3. 見開きで読む — 本みたいに読む</strong></p>
+<p>F5キーで見開きの全画面リーダーになります。左クリックで次へ、右クリックで前へ進みます。表紙あり・なしも選べます。ふつうに縦にスクロールして読む表示もあります。</p>
+
+<h3>あると便利なもの</h3>
+<ul>
+<li><strong>フォルダ一括読込</strong> — 複数のPDFをまとめて1冊の本として読む</li>
+<li><strong>Excel出力</strong> — PDFの表をExcel（.xlsx）に書き出す</li>
+<li><strong>表の電卓</strong> — Ctrl+クリックでPDF内の数字を選ぶと合計する</li>
+<li><strong>OCR（Windows専用）</strong> — スキャンした書類の文字を読み取る。範囲OCRは Ctrl+Alt+O</li>
+<li><strong>文字検索・印刷・最近開いたファイル</strong></li>
+</ul>
+
+<h3>気をつけること</h3>
+<ul>
+<li>墨消しは元に戻せません。消す前は、かならずコピーを取っておいてください。</li>
+<li>墨消ししたあと、文字が本当に残っていないか自動で確かめる機能があります。でも大切な部分は、保存後に自分の目でも確かめてください。</li>
+<li>OCRはWindowsに標準で入っている機能だけを使っています。手書きや、かすれた文字・小さな文字はうまく読めないことがあります。結果はかならず目で確認してください。</li>
+<li>パスワード付きPDFを上書き保存すると、暗号化が解除される場合があります。保存時の確認ダイアログをよく読んでから選んでください。</li>
+</ul>
+
+<h3>もっと試したい人へ（多機能版）</h3>
+<p>もっと多くの機能を試したい人は、ホームページの上のほうにある「多機能版」のページを見てください。FAXで切れた書類を1枚に戻す機能や、傾き補正・台形補正、会計向けの機能などが入っています。実験版なので、気になるところがあれば感想フォームから教えてください。</p>
+</div>
+</section>
+
+<section>
+<h2>会計事務所向け</h2>
+<p>会計のお仕事に役立つ道具も、少しずつ公開しています。</p>
+<p><strong>確定申告シミュレーター（試作中）</strong> — 特定口座（源泉徴収あり）の確定申告で、申告したほうが得かどうかを世帯全体で試算できます（名古屋市・尾張旭市・東京23区・横浜市・大阪市・京都市・神戸市・福岡市対応）。<br>
 <a href="shinkoku-simulator.html">確定申告シミュレーター（試作中）を開く →</a><br>
-<small>まだ作成中です。計算結果について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。</small></p>
-<div class="slot">会計ソフトのおすすめ — アフィリエイト枠（ASP・商品未定。登録済みのASPがあれば差し替え）</div>
-<div class="slot">伝票印刷のおすすめ — アフィリエイト枠（ASP・商品未定）</div>
+<small>試作中です。計算結果について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。</small></p>
 </section>
 
 <section>
@@ -134,9 +189,9 @@ exe 版は GitHub Actions で自動ビルドしています。</small></p>
 
 <section>
 <h2>ライセンス・ソースコード公開</h2>
-<p>きなこPDFはオープンソース（AGPL-3.0）で公開します。使っている PyQt6（GPLv3）と PyMuPDF（AGPLv3）の条件に合わせ、ソースコードとライセンス表示を一緒に配布します。</p>
+<p>きなこPDFはオープンソース（AGPL-3.0）で公開しています。使っている PyQt6（GPLv3）と PyMuPDF（AGPLv3）の条件に合わせ、ソースコードとライセンス表示を一緒に配布しています。</p>
 <p><a href="https://github.com/kinakopdf/kinakopdf">ソースコード（GitHub）</a> / <a href="https://github.com/kinakopdf/kinakopdf/blob/main/LICENSE">ライセンス・サードパーティ表示</a></p>
-<p><small>詳しくは配布物に同梱の THIRD_PARTY_NOTICES をご覧ください。これは法律相談ではありません。</small></p>
+<p><small>詳しくは配布物に同梱の THIRD_PARTY_NOTICES をご覧ください。</small></p>
 </section>
 
 <footer>

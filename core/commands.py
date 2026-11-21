@@ -598,10 +598,10 @@ class DeletePagesCommand(BaseCommand):
         super().__init__()
         self.deleted_indices = sorted(set(deleted_indices))
         self.prev_page_idx = prev_page_idx
-        self.backup_doc = fitz.open()
         self.deleted_records = []
 
         with FITZ_LOCK:
+            self.backup_doc = fitz.open()
             for doc_pos, idx in enumerate(self.deleted_indices):
                 self.backup_doc.insert_pdf(doc, from_page=idx, to_page=idx)
                 annots = copy.deepcopy(page_annotations.get(idx, []))
@@ -1144,10 +1144,10 @@ class ReplacePagesContentCommand(BaseCommand):
         super().__init__()
         self.page_indices = list(page_indices)
         self.prev_page_idx = prev_page_idx
-        self.backup_doc = fitz.open()
         self.saved_annots = {}
 
         with FITZ_LOCK:
+            self.backup_doc = fitz.open()
             for i, p_idx in enumerate(self.page_indices):
                 self.backup_doc.insert_pdf(doc, from_page=p_idx, to_page=p_idx)
                 if p_idx in page_annotations and page_annotations[p_idx]:

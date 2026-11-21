@@ -1,5 +1,7 @@
 # Secure Local PDF Editor（安全・完全ローカル PDF エディタ）
 
+**公式ホームページ（ダウンロードはこちら）: https://kinakopdf.github.io/kinakopdf/**
+
 PDF を開いて編集・保存する、完全ローカルのデスクトップアプリです。
 ネットワークには一切接続しません。PDF の処理はすべて自分のパソコンの中で行います。
 

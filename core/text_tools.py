@@ -14,6 +14,8 @@
 """
 import contextlib
 import math
+import os
+import tempfile
 
 import fitz
 
@@ -403,6 +405,12 @@ def strip_text_layer_to_doc(doc):
                     new_page.insert_image(new_page.rect, stream=png)
                     if saved_rot:
                         new_page.set_rotation(saved_rot)
+            try:
+                toc = doc.get_toc()
+                if toc:
+                    out.set_toc(toc)
+            except Exception:
+                pass
             return out
         except Exception:
             out.close()
@@ -422,7 +430,20 @@ def save_image_only_pdf(doc, page_annotations, path):
             if stripped is None:
                 raise ValueError("PDFが開かれていません。")
             try:
-                stripped.save(path, garbage=4, deflate=True)
+                # 既存ファイルを壊さないよう、同じフォルダの一時ファイルに
+                # 保存してから置き換える（アトミック保存）
+                target_dir = os.path.dirname(os.path.abspath(path))
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=target_dir, suffix=".tmp.pdf"
+                )
+                os.close(fd)
+                try:
+                    stripped.save(tmp_path, garbage=4, deflate=True)
+                    os.replace(tmp_path, path)
+                except Exception:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_path)
+                    raise
             finally:
                 stripped.close()
 
