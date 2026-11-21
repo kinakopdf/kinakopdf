@@ -2034,7 +2034,7 @@ class FullscreenSpreadReader(QWidget):
 
         左ボタンは常に「次へ」、右ボタンは常に「前へ」。
         クリックした位置（左半分／右半分）や綴じ方向には依存しない。
-        （2026-11-20 MIWA の希望で、綴じ方向連動のクリック判定から戻した）
+        （2026-11-20 KINAKO の希望で、綴じ方向連動のクリック判定から戻した）
         """
         return button != Qt.MouseButton.RightButton
 
