@@ -155,8 +155,10 @@ class _BatchApplyWorker(QRunnable):
                         step_i,
                         f"{p_idx + 1} / {self.total_doc_pages} ページ目の色抜き画像を作成中...",
                     )
+                    with FITZ_LOCK:
+                        src_page = src_doc[step_i]
                     page_qimg = render_page_to_qimage(
-                        src_doc[step_i],
+                        src_page,
                         dpi=self.render_dpi,
                         max_pixels=PREVIEW_MAX_RENDER_PIXELS,
                     )
