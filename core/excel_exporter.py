@@ -5,7 +5,9 @@ PDF -> Excel (.xlsx) 変換・書き出しエンジン (core/excel_exporter.py)
 正規の Office Open XML (.xlsx) ファイルを生成します。
 """
 import datetime
+import os
 import re
+import tempfile
 import unicodedata
 import zipfile
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -648,17 +650,29 @@ def write_xlsx_from_sheets(
         '</Properties>'
     )
 
-    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("[Content_Types].xml", content_types_xml.encode("utf-8"))
-        zf.writestr("_rels/.rels", root_rels_xml.encode("utf-8"))
-        zf.writestr("docProps/core.xml", core_xml.encode("utf-8"))
-        zf.writestr("docProps/app.xml", app_xml.encode("utf-8"))
-        zf.writestr("xl/workbook.xml", workbook_xml.encode("utf-8"))
-        zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml.encode("utf-8"))
-        zf.writestr("xl/styles.xml", styles_xml.encode("utf-8"))
-        zf.writestr("xl/sharedStrings.xml", shared_strings_xml.encode("utf-8"))
-        for idx_s, ws_xml in enumerate(worksheet_xmls, start=1):
-            zf.writestr(f"xl/worksheets/sheet{idx_s}.xml", ws_xml.encode("utf-8"))
+    # 既存ファイルを壊さないよう、同じフォルダの一時ファイルに書いてから置き換える
+    _target_dir = os.path.dirname(os.path.abspath(output_path))
+    _fd, _tmp_path = tempfile.mkstemp(dir=_target_dir, suffix=".tmp.xlsx")
+    os.close(_fd)
+    try:
+        with zipfile.ZipFile(_tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", content_types_xml.encode("utf-8"))
+            zf.writestr("_rels/.rels", root_rels_xml.encode("utf-8"))
+            zf.writestr("docProps/core.xml", core_xml.encode("utf-8"))
+            zf.writestr("docProps/app.xml", app_xml.encode("utf-8"))
+            zf.writestr("xl/workbook.xml", workbook_xml.encode("utf-8"))
+            zf.writestr("xl/_rels/workbook.xml.rels", workbook_rels_xml.encode("utf-8"))
+            zf.writestr("xl/styles.xml", styles_xml.encode("utf-8"))
+            zf.writestr("xl/sharedStrings.xml", shared_strings_xml.encode("utf-8"))
+            for idx_s, ws_xml in enumerate(worksheet_xmls, start=1):
+                zf.writestr(f"xl/worksheets/sheet{idx_s}.xml", ws_xml.encode("utf-8"))
+        os.replace(_tmp_path, output_path)
+    except Exception:
+        try:
+            os.unlink(_tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def export_pdf_document_to_xlsx(
