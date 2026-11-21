@@ -254,7 +254,12 @@ class MainWindow(QMainWindow):
         toolbar/anchor は「バーに表示」のときの戻り先（固定要素のアンカーの
         直前に挿入する）。実際の配置は _apply_toolbar_layout() が行うので、
         ここではツールバーやメニューへは追加しない。
+
+        ただしショートカットは配置先に依らず効かせたいので、ウィンドウ
+        自体へも登録しておく（act_save と同じ方式）。これをしないと、
+        「隠す」にした項目はショートカットまで無効になってしまう。
         """
+        self.addAction(action)
         self._movable_items[key] = {
             "action": action,
             "label": label,
@@ -725,6 +730,15 @@ class MainWindow(QMainWindow):
             elif loc == "erase":
                 self.menu_erase_modes.addAction(action)
             # "hidden" のときはどこにも置かない
+
+        # 「保存」メニューが空っぽなら、ボタンの矢印が空のメニューを
+        # 開いてしまわないよう、ボタンからメニューを外す（項目が
+        # 戻ってきたら付け直す）。本体クリックの保存はそのまま使える。
+        if self.menu_save.actions():
+            if self.btn_save.menu() is not self.menu_save:
+                self.btn_save.setMenu(self.menu_save)
+        elif self.btn_save.menu() is not None:
+            self.btn_save.setMenu(None)
 
     def open_toolbar_layout_dialog(self):
         titles, places = self._load_toolbar_layout()

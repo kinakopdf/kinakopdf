@@ -195,6 +195,86 @@ class TestToolbarCustomize(unittest.TestCase):
         self.assertIn(win.act_save_as, win.menu_save.actions())
         self.assertIn(win.act_ocr, win.menu_more_features.actions())
 
+    def test_anchor_order_preserved(self):
+        # 同じアンカーを共有する項目をまとめてバーへ出しても、相対順序は
+        # レジストリ登録順のまま崩れないこと（レビュー指摘の検証）。
+        # 「その他」へ出してからバーへ戻す往復でも順序が保たれること。
+        win = self.win
+        keys = list(win._movable_items.keys())
+        top_keys = [
+            k for k in keys if win._movable_items[k]["toolbar"] is self.top_toolbar
+        ]
+        edit_keys = [
+            k for k in keys if win._movable_items[k]["toolbar"] is self.edit_toolbar
+        ]
+
+        def bar_sequence(toolbar, group_keys):
+            acts = toolbar.actions()
+            placed = [
+                k for k in group_keys if win._movable_items[k]["action"] in acts
+            ]
+            return sorted(
+                placed, key=lambda k: acts.index(win._movable_items[k]["action"])
+            )
+
+        for via in ("bar", "more"):
+            win._save_toolbar_layout({}, {k: via for k in keys})
+            win._apply_toolbar_layout()
+            self._app.processEvents()
+            win._save_toolbar_layout({}, {k: "bar" for k in keys})
+            win._apply_toolbar_layout()
+            self._app.processEvents()
+            self.assertEqual(bar_sequence(self.top_toolbar, top_keys), top_keys)
+            self.assertEqual(bar_sequence(self.edit_toolbar, edit_keys), edit_keys)
+
+    def test_empty_save_menu_detaches_from_button(self):
+        # 保存メニューが空になったら、矢印が空メニューを開かないよう
+        # ボタンからメニューが外れること。項目が戻れば付け直されること。
+        win = self.win
+        self.assertIs(win.btn_save.menu(), win.menu_save)
+        win._save_toolbar_layout({}, {"save_as": "more"})
+        win._apply_toolbar_layout()
+        self.assertEqual(len(win.menu_save.actions()), 0)
+        self.assertIsNone(win.btn_save.menu())
+        win._save_toolbar_layout({}, {"save_as": "save"})
+        win._apply_toolbar_layout()
+        self.assertIs(win.btn_save.menu(), win.menu_save)
+        self.assertIn(win.act_save_as, win.menu_save.actions())
+
+    def test_hidden_items_keep_shortcuts(self):
+        # 「隠す」にした項目でもショートカットは効き続けること
+        # （ウィンドウへも登録してあるため）。
+        win = self.win
+        fired = []
+        win.act_ocr.triggered.disconnect()
+        win.act_ocr.triggered.connect(
+            lambda checked=False: fired.append("ocr")
+        )
+        win._save_toolbar_layout(
+            {}, {"ocr": "hidden", "mode:region_ocr": "hidden"}
+        )
+        win._apply_toolbar_layout()
+        win.show()
+        self._app.processEvents()
+        QTest.qWaitForWindowActive(win, timeout=3000)
+        QTest.keyClick(
+            win.viewer,
+            Qt.Key.Key_O,
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.ShiftModifier,
+        )
+        self._app.processEvents()
+        self.assertEqual(fired, ["ocr"])
+        QTest.keyClick(
+            win.viewer,
+            Qt.Key.Key_O,
+            Qt.KeyboardModifier.ControlModifier
+            | Qt.KeyboardModifier.AltModifier,
+        )
+        self._app.processEvents()
+        self.assertEqual(win.viewer.mode, "region_ocr")
+        win.hide()
+
     # ---------------------------------------------------------------
     # 編集ダイアログ
     # ---------------------------------------------------------------
