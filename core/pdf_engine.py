@@ -585,6 +585,107 @@ class PDFDocumentManager:
                 sub_doc.close()
 
     @classmethod
+    def build_merged_two_pages_doc(cls, doc, first_idx, second_idx,
+                                   orientation="horizontal",
+                                   trim_first=0.0, trim_second=0.0):
+        """2ページを左右または上下に並べた、1ページだけの新しい文書を返す。
+
+        FAXで1枚の書類が2ページに分かれて届いた場合などに、2ページを
+        1枚にくっつけるための合成処理。画像化はせず、show_pdf_page で
+        元ページをそのまま貼るので、文字データや画質は保たれる。
+        呼び出し側が返り値の文書を所有する（元文書は変更しない）。
+
+        - orientation="horizontal": first を左、second を右に並べる。
+          orientation="vertical": first を上、second を下に並べる。
+        - trim_first / trim_second は各ページの「内側」から削る量（pt）。
+          左右なら first の右端と second の左端、上下なら first の下端と
+          second の上端を削る。はみ出し防止のため、各ページの内側の
+          辺の長さから 20pt を残す範囲に丸める。
+        - 回転付きページは remove_rotation() で回転を見た目どおり内容へ
+          焼き込んでから貼るため、表示どおりの向きで結合される。
+        - サイズの異なる2ページは、並べる方向と直交する軸で中央寄せする
+          （左右なら縦方向、上下なら横方向）。
+        """
+        if orientation not in ("horizontal", "vertical"):
+            raise ValueError(f"orientation が不正です: {orientation!r}")
+        if first_idx == second_idx:
+            raise ValueError("結合する2ページに同じページが指定されています")
+        with FITZ_LOCK:
+            for idx in (first_idx, second_idx):
+                if not (0 <= idx < len(doc)):
+                    raise ValueError(f"ページ番号が範囲外です: {idx}")
+
+            # 回転・CropBox を正規化した作業用コピー（元文書は触らない）
+            work = fitz.open()
+            try:
+                work.insert_pdf(doc, from_page=first_idx, to_page=first_idx)
+                work.insert_pdf(doc, from_page=second_idx, to_page=second_idx)
+                pages = [work[0], work[1]]
+                for page in pages:
+                    if page.rotation:
+                        page.remove_rotation()
+
+                rects = [page.rect for page in pages]
+                crops = [page.cropbox for page in pages]
+                sizes = [(r.width, r.height) for r in rects]
+
+                def _clamp_trim(trim, length):
+                    return max(0.0, min(float(trim), max(0.0, length - 20.0)))
+
+                if orientation == "horizontal":
+                    trim_a = _clamp_trim(trim_first, sizes[0][0])
+                    trim_b = _clamp_trim(trim_second, sizes[1][0])
+                    kept = [sizes[0][0] - trim_a, sizes[1][0] - trim_b]
+                    new_w = kept[0] + kept[1]
+                    new_h = max(sizes[0][1], sizes[1][1])
+                    # clip はメディアボックス座標（cropbox 基準）で指定する
+                    clips = [
+                        fitz.Rect(crops[0].x0, crops[0].y0,
+                                  crops[0].x1 - trim_a, crops[0].y1),
+                        fitz.Rect(crops[1].x0 + trim_b, crops[1].y0,
+                                  crops[1].x1, crops[1].y1),
+                    ]
+                    targets = [
+                        fitz.Rect(0, (new_h - sizes[0][1]) / 2,
+                                  kept[0], (new_h + sizes[0][1]) / 2),
+                        fitz.Rect(kept[0], (new_h - sizes[1][1]) / 2,
+                                  new_w, (new_h + sizes[1][1]) / 2),
+                    ]
+                else:
+                    trim_a = _clamp_trim(trim_first, sizes[0][1])
+                    trim_b = _clamp_trim(trim_second, sizes[1][1])
+                    kept = [sizes[0][1] - trim_a, sizes[1][1] - trim_b]
+                    new_w = max(sizes[0][0], sizes[1][0])
+                    new_h = kept[0] + kept[1]
+                    clips = [
+                        fitz.Rect(crops[0].x0, crops[0].y0,
+                                  crops[0].x1, crops[0].y1 - trim_a),
+                        fitz.Rect(crops[1].x0, crops[1].y0 + trim_b,
+                                  crops[1].x1, crops[1].y1),
+                    ]
+                    targets = [
+                        fitz.Rect((new_w - sizes[0][0]) / 2, 0,
+                                  (new_w + sizes[0][0]) / 2, kept[0]),
+                        fitz.Rect((new_w - sizes[1][0]) / 2, kept[0],
+                                  (new_w + sizes[1][0]) / 2, new_h),
+                    ]
+
+                merged = fitz.open()
+                try:
+                    page = merged.new_page(width=new_w, height=new_h)
+                    for pos in (0, 1):
+                        page.show_pdf_page(
+                            targets[pos], work, pos,
+                            clip=clips[pos], keep_proportion=False,
+                        )
+                except Exception:
+                    merged.close()
+                    raise
+                return merged
+            finally:
+                work.close()
+
+    @classmethod
     def _verify_page_text_only_redaction(cls, page, page_idx, view_rects):
         page_bound = page.rect
         clipped_rects = [vr & page_bound for vr in view_rects if not (vr & page_bound).is_empty]

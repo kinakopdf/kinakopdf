@@ -62,6 +62,7 @@ from ui import rgb_tuple_to_qcolor
 from core.commands import (
     DeletePagesCommand,
     InsertPagesCommand,
+    MergeTwoPagesCommand,
     ReorderPagesCommand,
     RotatePagesCommand,
 )
@@ -567,6 +568,17 @@ class PageManager(QDockWidget):
         self.btn_extract.clicked.connect(self.extract_selected_pages)
         extract_buttons.addWidget(self.btn_extract)
         top_layout.addLayout(extract_buttons)
+
+        merge_buttons = QHBoxLayout()
+        self.btn_merge = QPushButton("🧩 2ページを1枚に結合")
+        self.btn_merge.setToolTip(
+            "選んだ2ページを、左右または上下に並べた1ページにくっつけます"
+            "（FAXで2枚に分かれて届いた書類用）。2ページ選んでいないときは、"
+            "開いているページと次のページが対象になります"
+        )
+        self.btn_merge.clicked.connect(self.merge_selected_pages)
+        merge_buttons.addWidget(self.btn_merge)
+        top_layout.addLayout(merge_buttons)
 
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
@@ -1295,6 +1307,72 @@ class PageManager(QDockWidget):
             else 0
         )
         self.on_pages_dropped(target_idx, extracted_doc)
+
+    def merge_selected_pages(self):
+        """2ページを1枚に結合する（FAXで2枚に分かれた書類用）。
+
+        ページ一覧で2ページ選んでいればその2ページ、選んでいなければ
+        開いているページと次のページを対象に、結合ダイアログを開く。
+        実行は MergeTwoPagesCommand で Undo 可能にする。
+        """
+        from PyQt6.QtWidgets import QDialog
+
+        from ui.merge_pages_dialog import MergePagesDialog
+
+        viewer = self.main.viewer
+        doc = viewer.current_pdf
+        if not doc or len(doc) < 2:
+            QMessageBox.information(
+                self, "🧩 2ページを1枚に結合",
+                "結合するには、2ページ以上のPDFを開いてください。")
+            return
+
+        viewer.cancel_active_interaction()
+        selected = self.list_widget.selectedItems()
+        rows = sorted(set(self.list_widget.row(item) for item in selected))
+        rows = [r for r in rows if 0 <= r < len(doc)]
+        if len(rows) == 2:
+            first_idx, second_idx = rows
+        elif viewer.current_page_idx + 1 < len(doc):
+            first_idx = viewer.current_page_idx
+            second_idx = first_idx + 1
+        else:
+            QMessageBox.information(
+                self, "🧩 2ページを1枚に結合",
+                "ページ一覧で、くっつけたい2ページを選んでください。\n"
+                "（Ctrlキーを押しながらクリックすると、2ページ選べます）")
+            return
+
+        try:
+            dialog = MergePagesDialog(
+                self, doc, first_idx, second_idx, viewer.page_annotations)
+        except Exception as e:
+            QMessageBox.critical(
+                self, "🧩 2ページを1枚に結合",
+                f"プレビューの準備に失敗しました。\n{e}")
+            return
+
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            merged_doc = dialog.build_merged_doc()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "🧩 2ページを1枚に結合",
+                f"結合に失敗しました。\n{e}")
+            return
+        finally:
+            dialog.dispose()
+
+        cmd = MergeTwoPagesCommand(
+            doc, first_idx, second_idx, merged_doc,
+            viewer.page_annotations, viewer.current_page_idx,
+            take_ownership=True)
+        cmd.redo(viewer)
+        viewer.history.push(cmd)
+
+        self.main.statusBar().showMessage(
+            f"{first_idx + 1}ページ目と{second_idx + 1}ページ目を1枚に結合しました")
 
     def extract_selected_pages(self):
         """選択中のページだけを新しいPDFとして保存する（抽出）。

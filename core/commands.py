@@ -761,6 +761,122 @@ class InsertPagesCommand(BaseCommand):
         viewer.notify_pages_updated(None)
 
 
+class MergeTwoPagesCommand(BaseCommand):
+    """2ページを1ページに結合するコマンド（FAXで2枚に分かれた書類用）。
+
+    merged_doc は結合済みの1ページだけを持つ文書
+    （PDFDocumentManager.build_merged_two_pages_doc の結果）。
+    元の2ページは backup_doc に退避し、Undo で元の2ページに戻す。
+    結合側ページの注釈は merged_doc へ焼き込み済みの前提で、viewer 側の
+    注釈は結合時に破棄する（ReplacePagesContentCommand と同じ規約）。
+    結合位置は若い方のページ位置（first_idx）になる。
+    """
+
+    def __init__(self, doc, first_idx, second_idx, merged_doc,
+                 page_annotations, prev_page_idx, take_ownership=False):
+        super().__init__()
+        if first_idx == second_idx:
+            raise ValueError("結合する2ページに同じページが指定されています")
+        self.first_idx, self.second_idx = sorted((first_idx, second_idx))
+        self.prev_page_idx = prev_page_idx
+        self.backup_doc = fitz.open()
+        self.saved_annots = {}
+
+        with FITZ_LOCK:
+            for pos, idx in enumerate((self.first_idx, self.second_idx)):
+                self.backup_doc.insert_pdf(doc, from_page=idx, to_page=idx)
+                if page_annotations.get(idx):
+                    self.saved_annots[idx] = copy.deepcopy(page_annotations[idx])
+
+            if take_ownership:
+                self.merged_doc = merged_doc
+            else:
+                self.merged_doc = fitz.open()
+                self.merged_doc.insert_pdf(merged_doc)
+
+    def dispose(self):
+        for attr in ("backup_doc", "merged_doc"):
+            d = getattr(self, attr, None)
+            if d is not None:
+                try:
+                    with FITZ_LOCK:
+                        d.close()
+                except Exception:
+                    logger.debug("Failed to close merge doc on dispose", exc_info=True)
+                setattr(self, attr, None)
+
+    def redo(self, viewer):
+        viewer.clear_calc_selection()
+        doc = viewer.current_pdf
+        if doc is None:
+            logger.debug("MergeTwoPagesCommand.redo: no document; no-op")
+            return
+        i, j = self.first_idx, self.second_idx
+        if not (0 <= i < len(doc) and 0 <= j < len(doc)):
+            logger.debug("MergeTwoPagesCommand.redo: page indices out of range; no-op")
+            return
+
+        with FITZ_LOCK:
+            doc.insert_pdf(self.merged_doc, start_at=i)
+            # 挿入で元ページは i+1 と j+1 にずれる。後ろから消す。
+            doc.delete_page(j + 1)
+            doc.delete_page(i + 1)
+
+        # 注釈の付け替え: 結合した2ページ分は破棄（焼き込み済み）。
+        # i より前は不変、i と j の間は「挿入+1」と「手前の削除-1」で相殺され不変、
+        # j より後ろは1つ前に詰まる。
+        new_annots = {}
+        for old_idx, anns in viewer.page_annotations.items():
+            if old_idx in (i, j) or not anns:
+                continue
+            if old_idx < i:
+                new_idx = old_idx
+            elif old_idx < j:
+                new_idx = old_idx
+            else:
+                new_idx = old_idx - 1
+            new_annots[new_idx] = anns
+        viewer.page_annotations = new_annots
+
+        viewer.load_pdf(doc, i, fit_view=True)
+        viewer.notify_pages_updated(None)
+
+    def undo(self, viewer):
+        viewer.clear_calc_selection()
+        doc = viewer.current_pdf
+        if doc is None:
+            logger.debug("MergeTwoPagesCommand.undo: no document; no-op")
+            return
+        i, j = self.first_idx, self.second_idx
+
+        with FITZ_LOCK:
+            if 0 <= i < len(doc):
+                doc.delete_page(i)
+            doc.insert_pdf(self.backup_doc, from_page=0, to_page=0, start_at=i)
+            doc.insert_pdf(self.backup_doc, from_page=1, to_page=1, start_at=j)
+
+        # 注釈の付け替え（redo の逆変換）。結合ページ（位置 i）の注釈は
+        # 焼き込み済み前提のため元々存在しないが、防御的に破棄する。
+        new_annots = {}
+        for cur_idx, anns in viewer.page_annotations.items():
+            if cur_idx == i or not anns:
+                continue
+            if cur_idx < i:
+                old_idx = cur_idx
+            elif cur_idx < j:
+                old_idx = cur_idx
+            else:
+                old_idx = cur_idx + 1
+            new_annots[old_idx] = anns
+        for idx, anns in self.saved_annots.items():
+            new_annots[idx] = copy.deepcopy(anns)
+        viewer.page_annotations = new_annots
+
+        target = _clamp_page_idx(viewer, self.prev_page_idx)
+        viewer.load_pdf(doc, target if target is not None else i, fit_view=True)
+        viewer.notify_pages_updated(None)
+
+
 class HistoryManager:
     def __init__(self, max_steps=MAX_UNDO_STEPS):
         self.max_steps = max_steps
