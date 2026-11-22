@@ -9,7 +9,20 @@ import re
 
 import fitz
 
-from core.geometry import JAPANESE_FONT
+from core.geometry import FITZ_LOCK, JAPANESE_FONT
+
+
+def _with_fitz_lock(fn):
+    """PyMuPDFはスレッド安全ではないため、このモジュールの公開関数は
+    FITZ_LOCK の中で実行する（RLockなので入れ子でも安全）。"""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with FITZ_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 # ============================================================
@@ -68,6 +81,7 @@ def _insert_textbox_jp(page, rect, text, fontsize=11.0, color=(0, 0, 0),
         )
 
 
+@_with_fitz_lock
 def apply_toc_to_pdf_bytes(data: bytes, toc) -> bytes:
     """PDF バイト列にしおり（TOC）を付け直して返す。toc が空ならそのまま返す。"""
     if not toc:
@@ -84,6 +98,7 @@ def apply_toc_to_pdf_bytes(data: bytes, toc) -> bytes:
 # 1. パスワード保護 / 解除
 # ============================================================
 
+@_with_fitz_lock
 def pdf_needs_password(data: bytes) -> bool:
     doc = fitz.open(stream=data, filetype="pdf")
     try:
@@ -92,6 +107,7 @@ def pdf_needs_password(data: bytes) -> bool:
         doc.close()
 
 
+@_with_fitz_lock
 def authenticate_pdf_bytes(data: bytes, password: str) -> bool:
     doc = fitz.open(stream=data, filetype="pdf")
     try:
@@ -102,6 +118,7 @@ def authenticate_pdf_bytes(data: bytes, password: str) -> bool:
         doc.close()
 
 
+@_with_fitz_lock
 def encrypt_pdf_bytes(data: bytes, user_password: str,
                       owner_password=None) -> bytes:
     """PDF バイト列にパスワードを設定して返す（AES-256）。
@@ -125,6 +142,7 @@ def encrypt_pdf_bytes(data: bytes, user_password: str,
         doc.close()
 
 
+@_with_fitz_lock
 def strip_password_pdf_bytes(data: bytes, password=None) -> bytes:
     """パスワード付き PDF の暗号化を解除したバイト列を返す。"""
     doc = fitz.open(stream=data, filetype="pdf")
@@ -141,6 +159,7 @@ def strip_password_pdf_bytes(data: bytes, password=None) -> bytes:
 # 2. PDF 圧縮
 # ============================================================
 
+@_with_fitz_lock
 def compress_pdf_bytes(data: bytes, max_image_dim: int = 1200,
                        jpeg_quality: int = 75) -> tuple:
     """画像のダウンサンプル＋JPEG再圧縮＋garbage/clean で圧縮する。
@@ -261,6 +280,7 @@ def parse_page_ranges(spec: str, page_count: int):
     return ranges
 
 
+@_with_fitz_lock
 def split_pdf_bytes(data: bytes, ranges) -> list:
     """指定範囲ごとに分割した PDF バイト列のリストを返す。
 
@@ -310,6 +330,7 @@ _FIELD_TYPE_NAMES = {
 }
 
 
+@_with_fitz_lock
 def list_form_fields(doc) -> list:
     """全ページのフォーム欄を [{name, type, type_name, value, page}] で返す。"""
     fields = []
@@ -343,6 +364,7 @@ def _clear_widget_value(doc, widget) -> None:
         pass
 
 
+@_with_fitz_lock
 def fill_form_fields(doc, values: dict) -> dict:
     """values {欄名: 入力値} をフォームに反映する。
 
@@ -391,6 +413,7 @@ def _pdf_string_literal(text: str) -> str:
     return "<" + (b"\xfe\xff" + text.encode("utf-16-be")).hex() + ">"
 
 
+@_with_fitz_lock
 def snapshot_form_field_values(doc, names=None) -> list:
     """フォーム欄の値をウィジェット単位で記録する（Undo 用スナップショット）。
 
@@ -484,6 +507,7 @@ def _restore_widget_value(doc, page, entry) -> bool:
     return True
 
 
+@_with_fitz_lock
 def set_form_field_values_by_widget(doc, entries) -> dict:
     """snapshot_form_field_values で記録した値をウィジェット単位で復元する。
 
@@ -516,6 +540,7 @@ def set_form_field_values_by_widget(doc, entries) -> dict:
     return {"filled": filled, "missing": missing}
 
 
+@_with_fitz_lock
 def flatten_form_fields(doc) -> dict:
     """フォーム欄を通常の表示に固定（フラット化）する。
 
@@ -643,6 +668,7 @@ def draw_text_stamp(page, rect, text: str, color=SEAL_RED,
     return r
 
 
+@_with_fitz_lock
 def apply_stamp_to_doc(doc, page_1based: int, kind: str, rect,
                        text="", date_text=None, color=SEAL_RED) -> fitz.Rect:
     """doc の指定ページに印鑑（kind="seal"）またはスタンプ（kind="stamp"）を押す。"""
@@ -660,6 +686,7 @@ def apply_stamp_to_doc(doc, page_1based: int, kind: str, rect,
 # 6. しおり表示・編集
 # ============================================================
 
+@_with_fitz_lock
 def get_bookmarks(doc) -> list:
     """しおりを [{level, title, page}]（page は1始まり）で返す。"""
     return [
@@ -692,6 +719,7 @@ def normalize_toc_entries(entries, page_count: int) -> list:
     return toc
 
 
+@_with_fitz_lock
 def set_bookmarks(doc, entries) -> int:
     """entries [{level, title, page}] をしおりとして設定する。件数を返す。"""
     toc = normalize_toc_entries(entries, len(doc))
@@ -699,6 +727,7 @@ def set_bookmarks(doc, entries) -> int:
     return len(toc)
 
 
+@_with_fitz_lock
 def add_bookmark(doc, title: str, page_1based: int, level: int = 1) -> int:
     """末尾にしおりを追加する。追加後の件数を返す。"""
     entries = get_bookmarks(doc)
@@ -706,6 +735,7 @@ def add_bookmark(doc, title: str, page_1based: int, level: int = 1) -> int:
     return set_bookmarks(doc, entries)
 
 
+@_with_fitz_lock
 def rename_bookmark(doc, index: int, new_title: str) -> None:
     """index 番目（0始まり）のしおりの名前を変更する。"""
     entries = get_bookmarks(doc)
@@ -717,6 +747,7 @@ def rename_bookmark(doc, index: int, new_title: str) -> None:
     set_bookmarks(doc, entries)
 
 
+@_with_fitz_lock
 def delete_bookmark(doc, index: int) -> None:
     """index 番目（0始まり）のしおりを削除する。"""
     entries = get_bookmarks(doc)
@@ -734,6 +765,7 @@ def _format_template(template: str, page_1based: int, total: int) -> str:
     return template.replace("{page}", str(page_1based)).replace("{total}", str(total))
 
 
+@_with_fitz_lock
 def apply_header_footer(doc, header: str = "", footer: str = "",
                         show_page_number: bool = False,
                         page_number_template: str = "{page} / {total}",

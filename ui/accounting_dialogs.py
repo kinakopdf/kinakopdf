@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 
 import fitz
+
+from core.geometry import FITZ_LOCK
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QImage, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
@@ -170,46 +172,47 @@ def show_voucher_dialog(parent):
             return
         table.setRowCount(0)
         for path in files:
-            name = os.path.basename(path)
-            try:
-                doc = fitz.open(path)
-            except Exception as e:
-                row = table.rowCount()
-                table.insertRow(row)
-                table.setItem(row, 0, QTableWidgetItem(name))
-                table.setItem(row, 5, QTableWidgetItem(f"開けませんでした: {e}"))
-                continue
-            try:
-                if doc.needs_pass:
+            with FITZ_LOCK:
+                name = os.path.basename(path)
+                try:
+                    doc = fitz.open(path)
+                except Exception as e:
                     row = table.rowCount()
                     table.insertRow(row)
                     table.setItem(row, 0, QTableWidgetItem(name))
-                    table.setItem(row, 5, QTableWidgetItem("パスワード付きのため読めません"))
+                    table.setItem(row, 5, QTableWidgetItem(f"開けませんでした: {e}"))
                     continue
-                fields = extract_voucher_fields_from_doc(doc)
-                note_text = ""
-                if not any([fields["date"], fields["vendor"],
-                            fields["amount"] is not None, fields["invoice_no"]]):
-                    if ocr_check.isChecked():
-                        ocr_text = _ocr_text_for_doc(doc)
-                        if ocr_text.strip():
-                            fields = extract_voucher_fields(ocr_text)
-                            note_text = "OCRで読み取り"
+                try:
+                    if doc.needs_pass:
+                        row = table.rowCount()
+                        table.insertRow(row)
+                        table.setItem(row, 0, QTableWidgetItem(name))
+                        table.setItem(row, 5, QTableWidgetItem("パスワード付きのため読めません"))
+                        continue
+                    fields = extract_voucher_fields_from_doc(doc)
+                    note_text = ""
+                    if not any([fields["date"], fields["vendor"],
+                                fields["amount"] is not None, fields["invoice_no"]]):
+                        if ocr_check.isChecked():
+                            ocr_text = _ocr_text_for_doc(doc)
+                            if ocr_text.strip():
+                                fields = extract_voucher_fields(ocr_text)
+                                note_text = "OCRで読み取り"
+                            else:
+                                note_text = "文字が読み取れませんでした"
                         else:
-                            note_text = "文字が読み取れませんでした"
-                    else:
-                        note_text = "文字層がありません"
-                row = table.rowCount()
-                table.insertRow(row)
-                table.setItem(row, 0, QTableWidgetItem(name))
-                table.setItem(row, 1, QTableWidgetItem(fields["date"]))
-                table.setItem(row, 2, QTableWidgetItem(fields["vendor"]))
-                table.setItem(row, 3, QTableWidgetItem(
-                    "" if fields["amount"] is None else str(fields["amount"])))
-                table.setItem(row, 4, QTableWidgetItem(fields["invoice_no"]))
-                table.setItem(row, 5, QTableWidgetItem(note_text))
-            finally:
-                doc.close()
+                            note_text = "文字層がありません"
+                    row = table.rowCount()
+                    table.insertRow(row)
+                    table.setItem(row, 0, QTableWidgetItem(name))
+                    table.setItem(row, 1, QTableWidgetItem(fields["date"]))
+                    table.setItem(row, 2, QTableWidgetItem(fields["vendor"]))
+                    table.setItem(row, 3, QTableWidgetItem(
+                        "" if fields["amount"] is None else str(fields["amount"])))
+                    table.setItem(row, 4, QTableWidgetItem(fields["invoice_no"]))
+                    table.setItem(row, 5, QTableWidgetItem(note_text))
+                finally:
+                    doc.close()
         parent.statusBar().showMessage(f"証憑を {table.rowCount()} 件読み取りました。")
 
     read_btn.clicked.connect(read_folder)
@@ -335,17 +338,18 @@ def show_densho_rename_dialog(parent):
             return
         table.setRowCount(0)
         for path in files:
-            name = os.path.basename(path)
-            try:
-                doc = fitz.open(path)
-            except Exception:
-                continue
-            try:
-                if doc.needs_pass:
+            with FITZ_LOCK:
+                name = os.path.basename(path)
+                try:
+                    doc = fitz.open(path)
+                except Exception:
                     continue
-                fields = extract_voucher_fields_from_doc(doc)
-            finally:
-                doc.close()
+                try:
+                    if doc.needs_pass:
+                        continue
+                    fields = extract_voucher_fields_from_doc(doc)
+                finally:
+                    doc.close()
             proposed = suggest_densho_filename(
                 fields["date"], fields["vendor"], fields["amount"],
                 original_name=name)
@@ -623,20 +627,21 @@ def show_compare_dialog(parent):
         if os.path.abspath(path_a) == os.path.abspath(path_b):
             _warn(dlg, "エラー", "同じファイル同士は比較できません。")
             return
-        try:
-            doc_a = fitz.open(path_a)
-            doc_b = fitz.open(path_b)
-        except Exception as e:
-            QMessageBox.critical(dlg, "エラー", f"PDF を開けませんでした。\n{e}")
-            return
-        try:
-            res = compare_pdf_texts(doc_a, doc_b)
-        except Exception as e:
-            QMessageBox.critical(dlg, "エラー", f"比較に失敗しました。\n{e}")
-            return
-        finally:
-            doc_a.close()
-            doc_b.close()
+        with FITZ_LOCK:
+            try:
+                doc_a = fitz.open(path_a)
+                doc_b = fitz.open(path_b)
+            except Exception as e:
+                QMessageBox.critical(dlg, "エラー", f"PDF を開けませんでした。\n{e}")
+                return
+            try:
+                res = compare_pdf_texts(doc_a, doc_b)
+            except Exception as e:
+                QMessageBox.critical(dlg, "エラー", f"比較に失敗しました。\n{e}")
+                return
+            finally:
+                doc_a.close()
+                doc_b.close()
         state["result"] = res
         s = res["summary"]
         summary_label.setText(

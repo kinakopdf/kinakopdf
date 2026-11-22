@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
 
 import fitz
 
@@ -868,12 +869,18 @@ class PDFDocumentManager:
                 work_doc.close()
                 work_doc = None
 
+                try:
+                    with open(temp_path, "rb") as _fsync_f:
+                        os.fsync(_fsync_f.fileno())
+                except Exception:
+                    logger.debug("fsync of temp file skipped", exc_info=True)
+
                 cls._verify_saved_pdf(
                     temp_path,
                     expected_pages=len(source_doc),
                 )
 
-            backup_path = abs_filepath + ".bak"
+            backup_path = abs_filepath + ".bak-" + uuid.uuid4().hex[:12]
             try:
                 cls._atomic_replace_preserving_acl(temp_path, abs_filepath, backup_path)
                 temp_path = None

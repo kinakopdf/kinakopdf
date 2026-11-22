@@ -24,6 +24,20 @@ import re
 import unicodedata
 
 import fitz
+from core.geometry import FITZ_LOCK
+
+def _with_fitz_lock(fn):
+    """PyMuPDFはスレッド安全ではないため、このモジュールの公開関数は
+    FITZ_LOCK の中で実行する（RLockなので入れ子でも安全）。"""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with FITZ_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
 
 # ============================================================
 # 共通ヘルパー
@@ -188,6 +202,7 @@ def extract_voucher_fields(text: str) -> dict:
     }
 
 
+@_with_fitz_lock
 def extract_voucher_fields_from_doc(doc, page_limit: int = 3) -> dict:
     """fitz 文書の先頭 page_limit ページの文字層から証憑項目を抽出する。
 
@@ -419,6 +434,7 @@ def find_invoice_numbers(text: str) -> list:
     return results
 
 
+@_with_fitz_lock
 def find_invoice_numbers_in_doc(doc) -> list:
     """文書全体からインボイス番号を検出する。1件ごとに page（1始まり）を付ける。"""
     results = []
@@ -438,6 +454,7 @@ def find_invoice_numbers_in_doc(doc) -> list:
 # 11. 複数 PDF 横断検索
 # ============================================================
 
+@_with_fitz_lock
 def search_text_in_doc(doc, keyword: str, max_hits_per_doc: int = 50) -> list:
     """1文書内でキーワードを検索し、[{page, snippet}] を返す。"""
     if not keyword:
@@ -462,6 +479,7 @@ def search_text_in_doc(doc, keyword: str, max_hits_per_doc: int = 50) -> list:
     return hits
 
 
+@_with_fitz_lock
 def search_pdfs_in_folder(folder: str, keyword: str,
                           max_hits_per_file: int = 20) -> dict:
     """フォルダ内の PDF（直下のみ）を横断検索する。
@@ -509,6 +527,7 @@ def search_pdfs_in_folder(folder: str, keyword: str,
 # 12. 2つの PDF のテキスト比較
 # ============================================================
 
+@_with_fitz_lock
 def compare_pdf_texts(doc_a, doc_b, max_diff_lines_per_page: int = 200) -> dict:
     """2つの文書のページごとのテキストを比較する。
 
@@ -659,6 +678,7 @@ def _search_rects(page, text: str):
     return []
 
 
+@_with_fitz_lock
 def find_pii_candidates(doc) -> list:
     """文書全体から個人情報パターンに一致する文字列を検出し、候補として返す。
 
@@ -714,6 +734,7 @@ def find_pii_candidates(doc) -> list:
     return candidates
 
 
+@_with_fitz_lock
 def apply_pii_redactions(doc, selections) -> dict:
     """ユーザーが選んだ候補だけを物理的に墨消しする。
 
@@ -755,6 +776,7 @@ def apply_pii_redactions(doc, selections) -> dict:
 # 14. 手書き署名・署名画像挿入
 # ============================================================
 
+@_with_fitz_lock
 def insert_signature_image(doc, page_1based: int, image_bytes: bytes,
                            rect) -> fitz.Rect:
     """署名画像（PNG/JPG のバイト列）を指定ページの指定位置に挿入する。
@@ -785,6 +807,7 @@ def insert_signature_image(doc, page_1based: int, image_bytes: bytes,
     return r
 
 
+@_with_fitz_lock
 def draw_freehand_signature(page, points, width: float = 2.0,
                             color=(0, 0, 0)) -> int:
     """マウスで描いた手書き署名の軌跡（PDF 座標の点列）をページに描く。
