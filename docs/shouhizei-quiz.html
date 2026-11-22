@@ -85,15 +85,25 @@ function menu(){clearInterval(G.t);$("hud").innerHTML="";
  const prog=st.prog&&st.prog.i<st.prog.deck.length?st.prog:null;
  const pnames={normal:"通常モード",survival:"サバイバル",review:"間違えた問題だけ"};
  const plabel=p=>{const y=D.find(d=>d.year===p.f);return `${pnames[p.mode]||p.mode}・${y?y.label:"全年度ミックス"}・${p.i+1}問目から（現在 ${p.pts} 点）`};
- $("main").innerHTML=`${prog?`<div class="modes"><button class="mode" id="rs"><b>つづきから再開</b><span>${plabel(prog)}</span></button></div><div class="nav"><button class="btn sec" id="rmc">中断した記録を消す</button></div>`:""}<div class="row"><label>年度 <select id="yr"><option value="">全年度ミックス（${ALL.length}問）</option>${D.map(d=>`<option value="${d.year}">${d.label}（${d.questions.length}問）</option>`).join("")}</select></label></div>
+ $("main").innerHTML=`${prog?`<div class="modes"><button class="mode" id="rs"><b>つづきから再開</b><span>${plabel(prog)}</span></button></div><div class="nav"><button class="btn sec" id="rmc">中断した記録を消す</button></div>`:""}<div class="row"><label>年度 <select id="yr"><option value="">全年度ミックス（${ALL.length}問）</option>${D.map(d=>`<option value="${d.year}"${d.year==="R08"?" selected":""}>${d.label}（${d.questions.length}問）</option>`).join("")}</select></label></div>
  <div class="modes">
  <button class="mode" data-m="normal"><b>通常モード</b><span>全問を解く。連続正解のコンボと速さのボーナスあり ／ ${best("normal")}</span></button>
  <button class="mode" data-m="survival"><b>サバイバル</b><span>ライフ3つ、1問45秒。何問続くか挑戦 ／ ${best("survival")}</span></button>
  <button class="mode" data-m="review" ${w?"":"disabled style='opacity:.45;cursor:default'"}><b>間違えた問題だけ（${w}問）</b><span>過去に間違えた問題を再出題。正解すると苦手リストから消えます</span></button>
- </div>${w?'<div class="nav"><button class="btn sec" id="clr">苦手リストを空にする</button></div>':''}`;
+ </div><div class="nav"><button class="btn sec" id="allq">📋 全問題・全解答リスト（${ALL.length}問）</button></div>${w?'<div class="nav"><button class="btn sec" id="clr">苦手リストを空にする</button></div>':''}`;
  document.querySelectorAll(".mode").forEach(b=>b.onclick=()=>{if(b.disabled)return;start(b.dataset.m,$("yr").value)});
  if(prog){$("rs").onclick=resume;$("rmc").onclick=()=>{st.prog=null;save();menu()}}
  if(w)$("clr").onclick=()=>{st.wrong=[];save();menu()};
+ $("allq").onclick=()=>listAll("");
+}
+function listAll(f){clearInterval(G.t);$("hud").innerHTML="";
+ const items=ALL.filter(q=>!f||q[5]===f);
+ $("main").innerHTML=`<div class="row"><label>年度 <select id="lf"><option value="">全年度（${ALL.length}問）</option>${D.map(d=>`<option value="${d.year}"${d.year===f?" selected":""}>${d.label}（${d.questions.length}問）</option>`).join("")}</select></label></div>
+ <p style="font-size:13px;color:var(--page-mute)">${items.length}問を表示中。見直し用の一覧です。</p>`+
+ items.map(q=>{const no=+q.key.split("#")[1]+1;return `<div style="border-top:1px solid var(--page-line);padding:12px 0"><span class="tag">${q[6]}</span> <span class="tag">No.${no}</span> <span class="tag">${q[0]}</span><div class="ctx"><b>資料</b>${q[1].replace(/\n/g,"<br>")}</div><p class="q">${q[2]}</p><p style="margin:6px 0"><b>正解：</b><span style="color:var(--page-accent);font-weight:700">${q[3][0]}</span></p><div class="exp">${q[4]}</div></div>`}).join("")+
+ `<div class="nav"><button class="btn sec" id="bk">メニューへ戻る</button></div>`;
+ $("lf").onchange=()=>{listAll($("lf").value);window.scrollTo(0,0)};
+ $("bk").onclick=menu;
 }
 function start(mode,f){
  let list=mode==="review"?st.wrong.map(byKey).filter(Boolean):ALL;
