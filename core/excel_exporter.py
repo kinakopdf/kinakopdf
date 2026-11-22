@@ -666,6 +666,11 @@ def write_xlsx_from_sheets(
             zf.writestr("xl/sharedStrings.xml", shared_strings_xml.encode("utf-8"))
             for idx_s, ws_xml in enumerate(worksheet_xmls, start=1):
                 zf.writestr(f"xl/worksheets/sheet{idx_s}.xml", ws_xml.encode("utf-8"))
+        try:
+            with open(_tmp_path, "rb") as _fsync_f:
+                os.fsync(_fsync_f.fileno())
+        except Exception:
+            pass
         os.replace(_tmp_path, output_path)
     except Exception:
         try:

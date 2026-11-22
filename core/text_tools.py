@@ -439,6 +439,9 @@ def save_image_only_pdf(doc, page_annotations, path):
                 os.close(fd)
                 try:
                     stripped.save(tmp_path, garbage=4, deflate=True)
+                    with contextlib.suppress(Exception):
+                        with open(tmp_path, "rb") as _fsync_f:
+                            os.fsync(_fsync_f.fileno())
                     os.replace(tmp_path, path)
                 except Exception:
                     with contextlib.suppress(OSError):
