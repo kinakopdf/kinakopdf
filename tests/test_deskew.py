@@ -534,3 +534,91 @@ class TestDeskewKeepsEdges(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRotatedCropBoxPage(unittest.TestCase):
+    """回転＋CropBox窓のあるスキャンPDFでも見える範囲がずれないこと。
+
+    2026-11-24 MIWA 実機報告の回帰テスト。スキャンアプリのPDFは
+    A4全体の画像に、伝票だけの切り抜き窓（CropBox）と回転を
+    組み合わせていることがある。remove_rotation() をそのまま使うと
+    窓の位置がずれて内容が欠けるため、normalize_page_rotation で
+    先に MediaBox を CropBox に合わせてから正規化する。
+    """
+
+    def _make_rotated_crop_doc(self):
+        # A4縦のページに、部分領域だけを窓（CropBox）として見せる。
+        # 窓の四隅ギリギリに枠を描く。CropBox と Rotate は実ファイル
+        # （スキャナ製PDF）と同じく生のキーで設定し、一度保存して
+        # 読み直したものを返す。
+        import tempfile
+
+        doc = fitz.open()
+        page = doc.new_page(width=595.68, height=842.4)
+        cb = fitz.Rect(100.0, 200.0, 400.0, 500.0)  # 300x300 の窓
+        page.draw_rect(cb, color=(0, 0, 0), width=3.0)
+        page.draw_rect(
+            fitz.Rect(cb.x0 + 10, cb.y0 + 10, cb.x1 - 10, cb.y1 - 10),
+            color=(0, 0, 0), width=1.5)
+        pdf_cb = f"[{cb.x0} {842.4 - cb.y1} {cb.x1} {842.4 - cb.y0}]"
+        doc.xref_set_key(page.xref, "CropBox", pdf_cb)
+        doc.xref_set_key(page.xref, "Rotate", "270")
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".pdf", delete=False)
+        tmp.close()
+        doc.save(tmp.name)
+        doc.close()
+        return fitz.open(tmp.name)
+
+    def test_normalize_preserves_visible_view(self):
+        from core.geometry import normalize_page_rotation
+
+        doc = self._make_rotated_crop_doc()
+        try:
+            before = doc[0].get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+            work = fitz.open()
+            try:
+                work.insert_pdf(doc, from_page=0, to_page=0)
+                page = work[0]
+                normalize_page_rotation(page)
+                self.assertEqual(page.rotation, 0)
+                after = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+                self.assertEqual(
+                    (after.width, after.height),
+                    (before.width, before.height))
+                # 見た目がほぼ一致する（再配置による微差のみ）
+                diff = sum(
+                    1 for a, b in zip(after.samples, before.samples)
+                    if abs(a - b) > 24)
+                self.assertLess(diff, len(before.samples) * 0.02)
+                # 枠のインク量もほぼ保たれる（端が消えていない）
+                ink_before = sum(
+                    1 for b in before.samples if b < 100)
+                ink_after = sum(
+                    1 for b in after.samples if b < 100)
+                self.assertGreater(ink_after, ink_before * 0.9)
+            finally:
+                work.close()
+        finally:
+            doc.close()
+
+    def test_deskew_on_rotated_crop_page_keeps_frame(self):
+        from core.deskew import build_deskewed_pages_doc
+
+        doc = self._make_rotated_crop_doc()
+        try:
+            out = build_deskewed_pages_doc(doc, [0], [3.0])
+            try:
+                page = out[0]
+                # 結果ページは「見えていた窓」と同じ大きさ
+                self.assertAlmostEqual(page.rect.width, 300.0, delta=1.0)
+                self.assertAlmostEqual(page.rect.height, 300.0, delta=1.0)
+                pix = page.get_pixmap(
+                    matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+                ink = sum(1 for b in pix.samples if b < 100)
+                # 枠が残っている（消えていない）こと
+                self.assertGreater(ink, 3000)
+            finally:
+                out.close()
+        finally:
+            doc.close()

@@ -30,6 +30,7 @@ from core.geometry import (
     estimate_text_bbox_in_pdf,
     get_crop_outside_rects,
     get_effective_cropbox,
+    normalize_page_rotation,
     raw_pdf_to_view_point,
     raw_rect_to_view_rect,
 )
@@ -623,8 +624,7 @@ class PDFDocumentManager:
                 work.insert_pdf(doc, from_page=second_idx, to_page=second_idx)
                 pages = [work[0], work[1]]
                 for page in pages:
-                    if page.rotation:
-                        page.remove_rotation()
+                    normalize_page_rotation(page)
 
                 rects = [page.rect for page in pages]
                 crops = [page.cropbox for page in pages]

@@ -26,6 +26,50 @@ except Exception:
 # MuPDF (fitz) のスレッド競合を防ぐ再入可能ロック
 FITZ_LOCK = threading.RLock()
 
+
+def normalize_page_rotation(page):
+    """ページの回転（/Rotate）を見た目どおりに焼き込み、回転を 0 にする。
+
+    fitz の remove_rotation() は、CropBox が MediaBox より小さい
+    ページ（スキャンアプリが切り抜き窓を持つPDFなど）で窓の位置を
+    取り違え、見えている範囲がずれて内容が欠けてしまう。
+    そこで、先に MediaBox を CropBox に合わせてから remove_rotation()
+    し、最後に既知のずれ量（窓の中心と MediaBox の中心の縦方向の
+    ずれの2倍）だけ内容を平行移動して補正する。ずれ量と方向は
+    回転角ごとに実測で確認した（2026-11-24、MIWA の実ファイルと
+    合成ファイルで検証）。回転がなければ何もしない。
+    """
+    if not page.rotation:
+        return
+    if page.cropbox == page.mediabox:
+        page.remove_rotation()
+        return
+    rotation = page.rotation
+    cb = page.cropbox
+    mb = page.mediabox
+    # 窓の中心と MediaBox の中心の縦方向のずれ（×2）
+    s = (cb.y0 + cb.y1) - (mb.y0 + mb.y1)
+    page.set_mediabox(cb)
+    page.remove_rotation()
+    if s:
+        if rotation == 90:
+            tx, ty = s, 0.0
+        elif rotation == 180:
+            tx, ty = 0.0, -s
+        elif rotation == 270:
+            tx, ty = -s, 0.0
+        else:
+            tx = ty = 0.0
+        if tx or ty:
+            try:
+                import pymupdf
+                from pymupdf import TOOLS, _format_g
+
+                cmd = (_format_g((1, 0, 0, 1, tx, ty)) + " cm ").encode("utf8")
+                TOOLS._insert_contents(page, cmd, False)
+            except Exception:
+                pass
+
 RGBTuple = Tuple[float, float, float]
 PointTuple = Tuple[float, float]
 RectTuple = Tuple[float, float, float, float]

@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.deskew import build_deskewed_pages_doc, detect_page_skew
-from core.geometry import FITZ_LOCK
+from core.geometry import FITZ_LOCK, normalize_page_rotation
 from core.pdf_engine import PDFDocumentManager
 
 # これ未満の角度は「まっすぐ」とみなして補正対象から外す（度）
@@ -67,9 +67,8 @@ class DeskewDialog(QDialog):
             doc, self._page_indices, page_annotations)
         with FITZ_LOCK:
             for page in self._src_doc:
-                if page.rotation:
-                    # 表示どおりの向きで検出・補正する（台形補正と同じ正規化）
-                    page.remove_rotation()
+                # 表示どおりの向きで検出・補正する（台形補正と同じ正規化）
+                normalize_page_rotation(page)
 
         # --- 傾き検出 ---
         self._detected = []   # [(angle|None, method|None), ...]

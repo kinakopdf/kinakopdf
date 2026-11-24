@@ -31,7 +31,7 @@ import math
 
 import fitz
 
-from core.geometry import FITZ_LOCK
+from core.geometry import FITZ_LOCK, normalize_page_rotation
 
 # 画像検出で描画する横幅（px）。小さいほど速く、大きいほど精密。
 _IMAGE_TARGET_WIDTH = 640
@@ -236,8 +236,7 @@ def build_deskewed_pages_doc(doc, page_indices, angles):
             for idx in page_indices:
                 work.insert_pdf(doc, from_page=idx, to_page=idx)
             for page in work:
-                if page.rotation:
-                    page.remove_rotation()
+                normalize_page_rotation(page)
 
             out = fitz.open()
             try:

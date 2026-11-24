@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from core.geometry import FITZ_LOCK
+from core.geometry import FITZ_LOCK, normalize_page_rotation
 from core.pdf_engine import PDFDocumentManager
 from core.photo_to_pdf import (
     build_corrected_image_page_doc,
@@ -57,9 +57,8 @@ class PerspectiveCorrectionDialog(QDialog):
             doc, [page_idx], page_annotations)
         with FITZ_LOCK:
             page = self._src_doc[0]
-            if page.rotation:
-                # 表示どおりの向きで画像化する（結合処理と同じ正規化）
-                page.remove_rotation()
+            # 表示どおりの向きで画像化する（結合処理と同じ正規化）
+            normalize_page_rotation(page)
             rect = page.rect
             self._page_size_pt = (rect.width, rect.height)
             self._dpi = page_render_dpi(rect.width, rect.height)
