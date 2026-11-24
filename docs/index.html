@@ -40,6 +40,11 @@ a{color:var(--red)}
 .pill{display:inline-block;background:#fbeee8;color:var(--red);border-radius:999px;padding:2px 12px;font-size:.85em;font-weight:bold;margin-right:6px}
 .trial{background:#f4f1ea;border:1px dashed #b9a98a;border-radius:12px;padding:12px 16px;margin:16px 0;font-size:.85em;line-height:1.8}
 .trial p{margin:8px 0}
+html{scroll-behavior:smooth}
+.toc{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:14px 18px;margin:0}
+.toc p{text-align:center;text-indent:0;margin:6px 0}
+.toc a{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 14px;margin:3px 2px;text-decoration:none;font-size:.95em}
+.toc a:hover{background:#fbeee8}
 </style>
 </head>
 <body>
@@ -69,9 +74,18 @@ a{color:var(--red)}
 </div>
 </header>
 
+<section style="padding-top:6px;padding-bottom:6px">
+<div class="toc">
+<p><strong>このページの内容</strong></p>
+<p><a href="#about">きなこPDFについて</a><a href="#features">できること</a><a href="#howto">使い方</a><a href="#tools">その他のソフト・ツール</a><a href="#accounting">会計事務所向け</a></p>
+<p><small>きなこPDFのほかに、ブラウザで使える道具も下のほうで公開しています。</small></p>
+</div>
+</section>
+
+
 <section>
 <div class="story">
-<h2>なぜ作ったのか</h2>
+<h2 id="about">なぜ作ったのか</h2>
 <p>個人情報の流出のニュースは、あとを絶ちません。便利なAIに書類をアップロードすれば、面倒な作業は一瞬で片付きます。しかし、その書類の中には、名前や住所、カード番号など、大切な個人情報が入っています。</p>
 <p>きなこPDFは、そんな不安から生まれました。<strong>AIにアップロードする前に、自分のパソコンの中で個人情報を消しておくためのソフト</strong>です。墨消しで名前や住所を物理的に消してからアップロードすれば、大切な情報を外に出さずにすみます。</p>
 <p>作ったのは大きな会社ではなく、個人です。目指したのは「自分の大切な書類を、自分で守れる道具」。機能の派手さよりも、安心して使えることをいちばんに考えて作っています。</p>
@@ -89,7 +103,7 @@ a{color:var(--red)}
 </section>
 
 <section>
-<h2>できること</h2>
+<h2 id="features">できること</h2>
 <div class="card">
 <ul>
 <li><span class="pill">墨消し</span><strong>墨消し（物理削除）</strong> — 上から塗りつぶす方式とは違い、選んだ文字や画像のデータを完全に削除し、復旧できないようにします。保存したあとのPDFをほかのソフトで開いても、消した内容は復活しません。消したあと、文字が本当に残っていないかを自動で検証する機能つきです</li>
@@ -115,7 +129,7 @@ a{color:var(--red)}
 </section>
 
 <section>
-<h2>使い方（3ステップ）</h2>
+<h2 id="howto">使い方（3ステップ）</h2>
 <div class="card">
 <ol>
 <li>上のボタンから KinakoPDF.exe をダウンロードする</li>
@@ -180,8 +194,8 @@ a{color:var(--red)}
 </section>
 
 <section>
-<h2>会計事務所向け</h2>
-<p>会計のお仕事に役立つ道具も、少しずつ公開しています。</p>
+<h2 id="tools">その他のソフト・ツール</h2>
+<p>きなこPDFのほかに、ブラウザでそのまま使える道具も公開しています。ダウンロードは不要で、どれも無料で使えます。</p>
 <p><strong>確定申告シミュレーター（試作品）</strong> — 特定口座（源泉徴収あり）の確定申告で、申告したほうが得かどうかを世帯全体で試算できます（名古屋市・尾張旭市・東京23区・横浜市・大阪市・京都市・神戸市・福岡市対応）。<br>
 <a href="shinkoku-simulator.html">確定申告シミュレーター（試作品）を開く →</a><br>
 <small>試作品です。計算結果について責任は負えません。あくまで試算としてお使いください。実際の申告は税務署・市役所にご確認ください。</small><br>
@@ -199,6 +213,11 @@ a{color:var(--red)}
 <p><strong>消費税法問題集（理論編）</strong> — 税理士試験・消費税法の本試験問題（第69回〜第76回）の理論問題を、論点ごとに4択へ分けた問題集です。全175問、条文や制度の取扱いを一問ずつ確認できます。スマホでもPCでも解けます。<br>
 <a href="shouhizei-quiz-riron.html">消費税法問題集（理論編）を開く →</a><br>
 <small>解答は大手予備校の解答速報を参考に作成したもので、公式の解答ではありません。学習の目安としてお使いください。</small></p>
+</section>
+
+<section>
+<h2 id="accounting">会計事務所向け</h2>
+<p>会計のお仕事向けの道具は、上の「その他のソフト・ツール」にまとめました。こちらは、おすすめの会計サービス（広告）のご案内です。</p>
 <div class="card">
 <p class="center"><span class="pill">広告</span><strong>おすすめの会計サービス（PR）</strong></p>
 <p>この欄はアフィリエイト広告です。リンク先でお申込みがあると、サイト運営に紹介料が入ることがあります。会計ソフトや請求書サービスを探している方へ、代表的なサービスを並べました。</p>
