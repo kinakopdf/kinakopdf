@@ -290,7 +290,35 @@ def detect_document_quad(image: QImage, max_dim: int = DETECT_MAX_DIM):
     if best is None:
         return None
     inv = 1.0 / scale if scale else 1.0
-    return [(x * inv, y * inv) for (x, y) in best[1]]
+    quad = [(x * inv, y * inv) for (x, y) in best[1]]
+    return _expand_quad(quad, image.width(), image.height())
+
+
+def _expand_quad(quad, img_w, img_h, ratio=0.015):
+    """検出した四隅を、中心から外側へ少し広げて返す。
+
+    二値化の境界は原稿の実物の端より内側に寄りやすく、そのまま
+    切り抜くと端の印刷が欠ける。平均辺長の ratio 倍だけ各頂点を
+    重心から遠ざけ、画像の範囲で丸める（2026-11-24、MIWA の
+    実機報告：小さい伝票で台形補正すると端が消える）。
+    """
+    cx = sum(p[0] for p in quad) / 4.0
+    cy = sum(p[1] for p in quad) / 4.0
+    mean_edge = sum(
+        _dist(quad[i], quad[(i + 1) % 4]) for i in range(4)) / 4.0
+    push = mean_edge * ratio
+    out = []
+    for (x, y) in quad:
+        dx, dy = x - cx, y - cy
+        norm = math.hypot(dx, dy)
+        if norm <= 0:
+            out.append((x, y))
+            continue
+        nx = x + dx / norm * push
+        ny = y + dy / norm * push
+        out.append((min(max(nx, 0.0), float(img_w - 1)),
+                    min(max(ny, 0.0), float(img_h - 1))))
+    return out
 
 
 # ============================================================

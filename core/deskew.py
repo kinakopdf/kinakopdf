@@ -13,8 +13,12 @@
 - 補正は show_pdf_page の任意角度 rotate（keep_proportion=True で
   角度が正確に出ることを実測済み）を使い、ページ内容を中心まわりに
   逆回転させて同じ大きさの新しいページに貼る。ベクタ・文字データは
-  保たれる。四隅に白い三角が出ないよう、回転後の内容がページ全体を
-  覆う倍率（カバー倍率）まで拡大して収める。
+  保たれる。端の内容が切れないよう、回転後の内容全体がページ内に
+  収まる倍率（フィット倍率＝カバー倍率の逆数）まで縮小して収める。
+  以前は白い三角を消すために拡大（カバー）していたが、小さい伝票
+  など端まで印刷がある原稿で端が消えるため、縮小方式に変更した
+  （2026-11-24、MIWA の実機報告）。周囲に白い余白が出るが、
+  内容は一切欠けない。
 - 角度の符号は「画面上で時計回りを正」とする PyMuPDF 座標系
   （get_text の行 dir の atan2）で統一する。検出値がそのまま
   show_pdf_page の rotate 引数になる（rotate=r で行の角度が -r
@@ -196,7 +200,8 @@ def cover_scale(width, height, angle_deg):
 
     中心まわりに angle_deg 回転させた (width, height) の矩形が、
     元と同じ大きさの矩形を完全に覆うための最小倍率。
-    四隅に白い三角を出さないために使う。
+    補正ではこの逆数をフィット倍率として使い、内容全体が
+    ページ内に収まるよう縮小する（端を欠けさせないため）。
     """
     th = math.radians(abs(angle_deg))
     if th == 0.0:
@@ -247,11 +252,13 @@ def build_deskewed_pages_doc(doc, page_indices, angles):
                     page = out.new_page(width=w, height=h)
                     th = math.radians(abs(angle))
                     cos_t, sin_t = math.cos(th), math.sin(th)
-                    # 回転後の外接矩形をカバー倍率だけ広げた貼り付け先。
-                    # keep_proportion=True のため、この矩形いっぱいに
-                    # 外接矩形がフィットし、内容はカバー倍率で拡大される。
-                    bw = (w * cos_t + h * sin_t) * cover_scale(w, h, angle)
-                    bh = (w * sin_t + h * cos_t) * cover_scale(w, h, angle)
+                    # 回転後の外接矩形をフィット倍率（カバー倍率の
+                    # 逆数）で縮めた貼り付け先。keep_proportion=True
+                    # のため、この矩形いっぱいに外接矩形がフィットし、
+                    # 内容全体がページ内に収まって端が欠けない。
+                    fit = 1.0 / cover_scale(w, h, angle)
+                    bw = (w * cos_t + h * sin_t) * fit
+                    bh = (w * sin_t + h * cos_t) * fit
                     cx, cy = w / 2.0, h / 2.0
                     target = fitz.Rect(
                         cx - bw / 2.0, cy - bh / 2.0,

@@ -480,5 +480,57 @@ class TestPageManagerDeskewWiring(_WindowTestBase):
             detect_skew_from_text(viewer.current_pdf[1]), 1.5, delta=0.3)
 
 
+class TestDeskewKeepsEdges(unittest.TestCase):
+    """端まで描いた原稿を補正しても、端の内容が欠けないこと。
+
+    2026-11-24 MIWA 実機報告（小さい伝票で端が消える）の回帰テスト。
+    以前の拡大（カバー）方式では 3° で上下の枠がほぼ消えた。
+    """
+
+    def _framed_doc(self):
+        doc = fitz.open()
+        page = doc.new_page(width=227.0, height=369.0)  # 伝票サイズ相当
+        m = 6.0
+        page.draw_rect(
+            fitz.Rect(m, m, 227.0 - m, 369.0 - m),
+            color=(0, 0, 0), width=2.0)
+        return doc
+
+    def _ink(self, page):
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(2, 2), colorspace=fitz.csGRAY)
+        return pix, sum(1 for b in pix.samples if b < 100)
+
+    def test_frame_survives_at_5_degrees(self):
+        from core.deskew import build_deskewed_pages_doc
+
+        doc = self._framed_doc()
+        try:
+            _, base = self._ink(doc[0])
+            out = build_deskewed_pages_doc(doc, [0], [5.0])
+            try:
+                pix, ink = self._ink(out[0])
+                # 縮小分を差し引いても枠の大部分が残る
+                self.assertGreater(ink, base * 0.6)
+                # 上辺・下辺が内寄りの位置に実在する（消えていない）
+                w, h, s = pix.width, pix.height, pix.samples
+
+                def band(y0, y1):
+                    c = 0
+                    for y in range(int(h * y0), int(h * y1)):
+                        row = s[y * w:(y + 1) * w]
+                        c += sum(
+                            1 for x in range(int(w * 0.3), int(w * 0.7))
+                            if row[x] < 100)
+                    return c
+
+                self.assertGreater(band(0.03, 0.12), 100)
+                self.assertGreater(band(0.88, 0.97), 100)
+            finally:
+                out.close()
+        finally:
+            doc.close()
+
+
 if __name__ == "__main__":
     unittest.main()
