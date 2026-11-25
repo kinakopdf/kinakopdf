@@ -539,6 +539,14 @@ class PageManager(QDockWidget):
         move_buttons.addWidget(self.btn_move_down)
         top_layout.addLayout(move_buttons)
 
+        reverse_buttons = QHBoxLayout()
+        self.btn_reverse = QPushButton("🔃 逆順にする")
+        self.btn_reverse.setToolTip(
+            "全ページの並びを逆順にします（元に戻す操作で戻せます）")
+        self.btn_reverse.clicked.connect(self.reverse_all_pages)
+        reverse_buttons.addWidget(self.btn_reverse)
+        top_layout.addLayout(reverse_buttons)
+
         rot_buttons = QHBoxLayout()
         self.btn_rot_left = QPushButton("↺ 選択ページを左90°回転")
         self.btn_rot_right = QPushButton("↻ 選択ページを右90°回転")
@@ -572,9 +580,19 @@ class PageManager(QDockWidget):
         bottom_layout = QVBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(4, 8, 4, 4)
 
+        sub_title_row = QHBoxLayout()
         self.lbl_sub = QLabel("📥 取り込み元PDF（ドラッグして上へ挿入）")
         self.lbl_sub.setStyleSheet("font-weight: bold;")
-        bottom_layout.addWidget(self.lbl_sub)
+        sub_title_row.addWidget(self.lbl_sub)
+        self.btn_open_sub_new_window = QPushButton("🗔 新規ウインドウで開く")
+        self.btn_open_sub_new_window.setToolTip(
+            "取り込み元のPDFを、別のウインドウで開きます")
+        self.btn_open_sub_new_window.clicked.connect(
+            self.open_sub_in_new_window)
+        self.btn_open_sub_new_window.setEnabled(False)
+        sub_title_row.addWidget(self.btn_open_sub_new_window)
+        sub_title_row.addStretch(1)
+        bottom_layout.addLayout(sub_title_row)
 
         self.sub_list_widget = SubPageListWidget(
             doc_provider=lambda: self.sub_pdf,
@@ -659,6 +677,22 @@ class PageManager(QDockWidget):
             if 0 <= r < self.list_widget.count():
                 self.list_widget.item(r).setSelected(True)
 
+    def reverse_all_pages(self):
+        """全ページの並びを逆順にする（Undo可能）。"""
+        viewer = self.main.viewer
+        doc = viewer.current_pdf
+        if not doc or len(doc) <= 1:
+            return
+
+        viewer.cancel_active_interaction()
+        order = list(range(len(doc)))[::-1]
+        # 今見ているページ（同じ内容のページ）を表示し続ける
+        next_idx = len(doc) - 1 - viewer.current_page_idx
+        self.on_reorder_requested(order, next_idx)
+
+        self.main.statusBar().showMessage(
+            f"全{len(doc)}ページを逆順にしました")
+
     def rotate_selected_main_pages(self, delta_angle):
         viewer = self.main.viewer
         doc = viewer.current_pdf
@@ -696,11 +730,20 @@ class PageManager(QDockWidget):
             f"{len(rotations)}ページを一括回転しました"
         )
 
+    def open_sub_in_new_window(self):
+        """取り込み元のPDFを新しいウインドウで開く。"""
+        if not self.sub_filepath:
+            return
+        self.main.spawn_new_window(self.sub_filepath)
+
     def close_sub_pdf(self):
         if self.sub_pdf is not None:
             with FITZ_LOCK:
                 self.sub_pdf.close()
             self.sub_pdf = None
+        btn = getattr(self, "btn_open_sub_new_window", None)
+        if btn is not None:
+            btn.setEnabled(False)
 
     def sync_selection(self, page_idx):
         if 0 <= page_idx < self.list_widget.count():
@@ -1238,6 +1281,7 @@ class PageManager(QDockWidget):
         self.sub_pdf = doc
         self.sub_filepath = filepath
         self.lbl_sub.setText(f"📥 取り込み元: {Path(filepath).name}")
+        self.btn_open_sub_new_window.setEnabled(True)
         self.refresh_sub_thumbnails()
 
     def insert_selected_sub_pages(self):
