@@ -20,8 +20,9 @@ header{background:linear-gradient(180deg,#fdf6e3,#fffaf0);text-align:center;bord
 header img.icon{width:120px;height:120px;border-radius:28px;box-shadow:0 4px 16px rgba(0,0,0,.15)}
 h1{font-size:2em;margin:12px 0 4px;letter-spacing:.05em;text-align:center}
 .tagline{color:var(--red);font-weight:bold;font-size:1.1em;margin:4px 0 12px;text-align:center;text-indent:0}
-.btn{display:inline-block;background:var(--red);color:#fff;padding:15px 34px;border-radius:999px;text-decoration:none;font-weight:bold;margin:14px 0 6px;box-shadow:0 3px 10px rgba(192,57,43,.35)}
-.btn:hover{opacity:.9}
+.btn{display:inline-block;background:var(--red);color:#fff;padding:15px 34px;border-radius:999px;text-decoration:none;font-weight:bold;margin:14px 0 6px;box-shadow:0 3px 10px rgba(192,57,43,.35);transition:transform .15s ease-out,opacity .15s ease-out;-webkit-tap-highlight-color:transparent}
+@media (hover:hover){.btn:hover{opacity:.9}}
+.btn:active{transform:scale(.96)}
 p{text-align:left;text-indent:1em;margin:12px 0}
 .center{text-align:center;text-indent:0}
 .catch{text-align:center;text-indent:0;font-size:1.05em;line-height:2.1;margin:14px 0 4px}
@@ -40,11 +41,20 @@ a{color:var(--red)}
 .pill{display:inline-block;background:#fbeee8;color:var(--red);border-radius:999px;padding:2px 12px;font-size:.85em;font-weight:bold;margin-right:6px}
 .trial{background:#f4f1ea;border:1px dashed #b9a98a;border-radius:12px;padding:12px 16px;margin:16px 0;font-size:.85em;line-height:1.8}
 .trial p{margin:8px 0}
-html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
 .toc{background:var(--soft);border:1px solid var(--line);border-radius:16px;padding:14px 18px;margin:0}
 .toc p{text-align:center;text-indent:0;margin:6px 0}
-.toc a{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 14px;margin:3px 2px;text-decoration:none;font-size:.95em}
-.toc a:hover{background:#fbeee8}
+.toc a{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 14px;margin:3px 2px;text-decoration:none;font-size:.95em;transition:background-color .15s ease-out,transform .15s ease-out;-webkit-tap-highlight-color:transparent}
+@media (hover:hover){.toc a:hover{background:#fbeee8}}
+.toc a:active{transform:scale(.96)}
+@media (prefers-reduced-motion:no-preference){
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px);filter:blur(4px)}to{opacity:1;transform:translateY(0);filter:blur(0)}}
+header img.icon,header h1,header .tagline,header .catch,header .catch+p{animation:fadeUp .3s ease-out both}
+header h1{animation-delay:.1s}
+header .tagline{animation-delay:.2s}
+header .catch{animation-delay:.3s}
+header .catch+p{animation-delay:.4s}
+}
 </style>
 </head>
 <body>
