@@ -1091,15 +1091,37 @@ class PDFViewer(QGraphicsView):
         self._hide_copy_popup()
         self._clear_text_selection_data()
 
-    def _copy_selected_text(self):
-        """選択中のテキストをクリップボードにコピーする（ポップアップは呼び出し側で閉じる）。"""
-        text = self._text_sel_text
+    def _copy_text_to_clipboard(self, text):
+        """テキストをクリップボードにコピーし、ステータス表示する。"""
         if not text:
             return
         clipboard = QApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(text)
         self._show_status_message(f"📋 テキストをコピーしました（{len(text)}文字）")
+
+    def _copy_selected_text(self):
+        """選択中のテキストをクリップボードにコピーする（ポップアップは呼び出し側で閉じる）。"""
+        self._copy_text_to_clipboard(self._text_sel_text)
+
+    def copy_text_at_scene_pos(self, scene_pos):
+        """指定位置にあるテキスト（追加テキスト注釈またはPDF内文字）をコピーする。
+
+        テキスト編集モードの右クリック用。コピーできたら True を返す。
+        """
+        _, hit_ann_idx = self._find_text_item_at_scene_pos(scene_pos)
+        if hit_ann_idx is not None and 0 <= hit_ann_idx < len(self.current_annotations):
+            text = str(self.current_annotations[hit_ann_idx].get("text", ""))
+            if text:
+                self._copy_text_to_clipboard(text)
+                return True
+        pdf_token = self._find_pdf_text_token_at_scene_pos(scene_pos)
+        if pdf_token is not None:
+            text = str(pdf_token.get("text", ""))
+            if text:
+                self._copy_text_to_clipboard(text)
+                return True
+        return False
 
     def clear_calc_selection(self):
         if not self.calc_selected_items and self.calc_highlight_group is None:
@@ -3730,7 +3752,18 @@ class PDFViewer(QGraphicsView):
 
         if (
             event.button() == Qt.MouseButton.RightButton
-            and self.mode in ("type", "text_erase")
+            and self.mode == "type"
+        ):
+            # テキスト編集モードの右クリックは、その位置のテキストをコピーする
+            # （追加テキストの削除は Shift+左クリックでも可能）。
+            # テキストが無い場所では従来どおりパン操作に回す。
+            if self.copy_text_at_scene_pos(raw_pos):
+                event.accept()
+                return
+
+        if (
+            event.button() == Qt.MouseButton.RightButton
+            and self.mode == "text_erase"
         ):
             _, hit_ann_idx = self._find_text_item_at_scene_pos(raw_pos)
             if hit_ann_idx is not None:
