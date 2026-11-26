@@ -179,6 +179,32 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         self._app.processEvents()
         self.assertFalse(self.pm.isFullScreen())
         self.assertEqual(self.pm.btn_fullscreen.text(), "全画面")
+        # ドックにあった状態から全画面にしたので、やめたらドックに戻る
+        self.assertFalse(self.pm.isFloating())
+
+    def test_redock_button_returns_from_maximized(self):
+        self.assertFalse(self.pm.btn_redock.isVisible())
+        self.pm.setFloating(True)
+        self._app.processEvents()
+        self.assertTrue(self.pm.btn_redock.isVisible())
+        self.pm.showMaximized()
+        self._app.processEvents()
+        self.assertTrue(self.pm.isMaximized())
+        self.pm.btn_redock.click()
+        self._app.processEvents()
+        self.assertFalse(self.pm.isFloating())
+        self.assertFalse(self.pm.isMaximized())
+
+    def test_native_redock_clears_maximized_state(self):
+        # タイトルバーのダブルクリック等で戻した場合も、最大化が残らないこと
+        self.pm.setFloating(True)
+        self._app.processEvents()
+        self.pm.showMaximized()
+        self._app.processEvents()
+        self.pm.setFloating(False)
+        self._app.processEvents()
+        self.assertFalse(self.pm.isFloating())
+        self.assertFalse(self.pm.isMaximized())
 
     def test_sub_panel_survives_collapsed_startup(self):
         # 前回の不具合の回帰テスト：畳んだ状態で起動しても、
@@ -219,8 +245,11 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         _make_pdf(path)
         self.pm.load_sub_pdf_from_path(path)
         self._app.processEvents()
+        from PyQt6.QtTest import QTest
+
         gen_before = self.pm._sub_generation_id
         self.pm.zoom_thumbnails(1)
+        QTest.qWait(350)  # 解像度の作り直しは少し待ってから始まる
         self.assertGreater(self.pm._sub_generation_id, gen_before)
 
 

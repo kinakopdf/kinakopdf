@@ -551,6 +551,11 @@ class PageManager(QDockWidget):
             "ページ管理のウインドウを全画面で表示します（もう一度押すと戻ります）")
         self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
         tools_row.addWidget(self.btn_fullscreen)
+        self.btn_redock = QPushButton("↩ 戻す")
+        self.btn_redock.setToolTip("ページ管理を元のドック位置に戻します")
+        self.btn_redock.clicked.connect(self.return_to_dock)
+        self.btn_redock.setVisible(False)
+        tools_row.addWidget(self.btn_redock)
         tools_row.addStretch(1)
         self.btn_zoom_out = QPushButton("－")
         self.btn_zoom_out.setToolTip("サムネイルを小さくします")
@@ -565,6 +570,10 @@ class PageManager(QDockWidget):
         tools_row.addWidget(self.btn_zoom_out)
         tools_row.addWidget(self.btn_zoom_reset)
         tools_row.addWidget(self.btn_zoom_in)
+        # 道具の行のボタンは、パネルを小さくするときの邪魔にならないよう最小幅を下げる
+        for _tb in (self.btn_fullscreen, self.btn_redock,
+                    self.btn_zoom_out, self.btn_zoom_reset, self.btn_zoom_in):
+            _tb.setMinimumSize(QSize(24, 24))
         top_layout.addLayout(tools_row)
 
         lbl_main = QLabel("📄 編集中のPDF（ドラッグまたはボタンで並び替え）")
@@ -698,6 +707,15 @@ class PageManager(QDockWidget):
         self._splitter_sizes_open = None
         self._sub_collapsed = False
         self._sub_state_before_expand = None
+        self._was_docked_before_fs = False
+        self._dock_width_before_float = None
+        self._quality_timer = QTimer(self)
+        self._quality_timer.setSingleShot(True)
+        self._quality_timer.timeout.connect(
+            self._rerender_thumbnails_for_quality)
+        self._settings_timer = QTimer(self)
+        self._settings_timer.setSingleShot(True)
+        self._settings_timer.timeout.connect(self._save_thumb_scale)
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
         splitter.setSizes([450, 350])
@@ -751,11 +769,16 @@ class PageManager(QDockWidget):
         self.resize(w, h)
 
     def toggle_fullscreen(self):
-        """ページ管理のウインドウを全画面表示にする／戻す。"""
+        """ページ管理のウインドウを全画面表示にする／戻す。
+        ドックにあった状態から全画面にした場合は、やめるとドックに戻る。"""
         if self.isFullScreen():
             self.showNormal()
             self.btn_fullscreen.setText("全画面")
+            if self._was_docked_before_fs:
+                self._was_docked_before_fs = False
+                QTimer.singleShot(0, self.return_to_dock)
         else:
+            self._was_docked_before_fs = not self.isFloating()
             self.btn_fullscreen.setText("全画面をやめる")
             if self.isFloating():
                 self.showFullScreen()
@@ -768,11 +791,30 @@ class PageManager(QDockWidget):
         if self.isFloating() and not self.isFullScreen():
             self.showFullScreen()
 
-    def _on_top_level_changed(self, floating):
-        if not floating and self.isFullScreen():
+    def return_to_dock(self):
+        """全画面・最大化を解除してから、元のドック位置に戻す。"""
+        if self.isFullScreen() or self.isMaximized():
             self.showNormal()
+            self.setWindowState(
+                self.windowState()
+                & ~(Qt.WindowState.WindowMaximized
+                    | Qt.WindowState.WindowFullScreen))
+        self.btn_fullscreen.setText("全画面")
+        self.setFloating(False)
+
+    def _on_top_level_changed(self, floating):
+        self.btn_redock.setVisible(floating)
+        if not floating and (self.isFullScreen() or self.isMaximized()):
+            # 最大化・全画面の状態がドックに残らないよう掃除する
+            self.showNormal()
+            self.setWindowState(
+                self.windowState()
+                & ~(Qt.WindowState.WindowMaximized
+                    | Qt.WindowState.WindowFullScreen))
             self.btn_fullscreen.setText("全画面")
         if floating:
+            if self._dock_width_before_float is None:
+                self._dock_width_before_float = self.width()
             QTimer.singleShot(0, self._resize_expanded)
             # 拡大表示中はサブPDFの欄を使わないので自動で畳む
             self._sub_state_before_expand = self._sub_collapsed
@@ -783,6 +825,15 @@ class PageManager(QDockWidget):
             self._sub_state_before_expand = None
             if restore != self._sub_collapsed:
                 self.set_sub_collapsed(restore, save=False)
+        if not floating and self._dock_width_before_float:
+            # ドックの幅を、切り離す前の幅に戻す
+            try:
+                self.main.resizeDocks(
+                    [self], [self._dock_width_before_float],
+                    Qt.Orientation.Horizontal)
+            except Exception:
+                logger.debug("Failed to restore dock width", exc_info=True)
+            self._dock_width_before_float = None
 
     def zoom_thumbnails(self, steps):
         """サムネイルの表示倍率を変える（Ctrl+ホイールとボタンから呼ばれる）。"""
@@ -803,13 +854,16 @@ class PageManager(QDockWidget):
         )
         self.list_widget.setIconSize(size)
         self.sub_list_widget.setIconSize(size)
-        settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
-        settings.setValue("page_manager/thumb_scale", self._thumb_scale)
+        self._settings_timer.start(500)
         # 大きく表示するときは描画の解像度も上げて、画質を保つ
         bucket = self._bucket_for(self._thumb_scale)
         if bucket != self._render_bucket:
             self._render_bucket = bucket
-            self._rerender_thumbnails_for_quality()
+            self._quality_timer.start(200)
+
+    def _save_thumb_scale(self):
+        settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
+        settings.setValue("page_manager/thumb_scale", self._thumb_scale)
 
     @staticmethod
     def _bucket_for(scale):
@@ -828,11 +882,9 @@ class PageManager(QDockWidget):
         """解像度の切り替えに合わせて、今あるサムネイルを作り直す（選択やスクロールはそのまま）。"""
         if self.main.viewer.current_pdf and self.list_widget.count():
             self._main_generation_id += 1
-            self._in_flight_main_thumbs.clear()
             self._pending_main_thumbs.update(range(self.list_widget.count()))
         if self.sub_pdf and self.sub_list_widget.count():
             self._sub_generation_id += 1
-            self._in_flight_sub_thumbs.clear()
             self._pending_sub_thumbs.update(range(self.sub_list_widget.count()))
         self._trigger_thumb_queue()
 
