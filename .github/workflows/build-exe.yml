@@ -39,6 +39,7 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-ocr"
   workflow_dispatch:
 
 jobs:
