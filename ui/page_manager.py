@@ -16,6 +16,7 @@ from PyQt6.QtCore import (
     QRectF,
     QRunnable,
     QSize,
+    QSettings,
     Qt,
     QThreadPool,
     QTimer,
@@ -106,6 +107,7 @@ class BasePageListWidget(QListWidget):
         super().__init__(parent)
         self.doc_provider = doc_provider
         self.annot_provider = annot_provider
+        self.zoom_callback = None
 
         self.setViewMode(QListWidget.ViewMode.IconMode)
         self.setIconSize(QSize(95, 130))
@@ -113,6 +115,17 @@ class BasePageListWidget(QListWidget):
         self.setMovement(QListWidget.Movement.Static)
         self.setSpacing(6)
         self.setDragEnabled(True)
+
+    def wheelEvent(self, event):
+        # Ctrl+ホイールでサムネイルの拡大・縮小（通常のホイールは一覧のスクロール）
+        if self.zoom_callback is not None and (
+            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            steps = 1 if event.angleDelta().y() > 0 else -1
+            self.zoom_callback(steps)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def startDrag(self, supportedActions):
         doc = self.doc_provider()
@@ -506,6 +519,7 @@ class PageManager(QDockWidget):
         self.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -513,6 +527,29 @@ class PageManager(QDockWidget):
         top_widget = QWidget()
         top_layout = QVBoxLayout(top_widget)
         top_layout.setContentsMargins(4, 4, 4, 4)
+
+        tools_row = QHBoxLayout()
+        self.btn_expand = QPushButton("🔍 拡大表示")
+        self.btn_expand.setToolTip(
+            "ページ管理を大きなウインドウとして切り離します。"
+            "横向きページの確認や回転作業がしやすくなります")
+        self.btn_expand.clicked.connect(self.toggle_expanded)
+        tools_row.addWidget(self.btn_expand)
+        tools_row.addStretch(1)
+        self.btn_zoom_out = QPushButton("－")
+        self.btn_zoom_out.setToolTip("サムネイルを小さくします")
+        self.btn_zoom_out.clicked.connect(lambda: self.zoom_thumbnails(-1))
+        self.btn_zoom_reset = QPushButton("標準")
+        self.btn_zoom_reset.setToolTip("サムネイルの大きさを標準に戻します")
+        self.btn_zoom_reset.clicked.connect(self.reset_thumb_zoom)
+        self.btn_zoom_in = QPushButton("＋")
+        self.btn_zoom_in.setToolTip(
+            "サムネイルを大きくします（一覧の上で Ctrl+ホイールでも変えられます）")
+        self.btn_zoom_in.clicked.connect(lambda: self.zoom_thumbnails(1))
+        tools_row.addWidget(self.btn_zoom_out)
+        tools_row.addWidget(self.btn_zoom_reset)
+        tools_row.addWidget(self.btn_zoom_in)
+        top_layout.addLayout(tools_row)
 
         lbl_main = QLabel("📄 編集中のPDF（ドラッグまたはボタンで並び替え）")
         lbl_main.setStyleSheet("font-weight: bold;")
@@ -581,12 +618,12 @@ class PageManager(QDockWidget):
         bottom_layout.setContentsMargins(4, 8, 4, 4)
 
         sub_title_row = QHBoxLayout()
-        self.lbl_sub = QLabel("📥 取り込み元PDF（ドラッグして上へ挿入）")
+        self.lbl_sub = QLabel("📥 サブPDF（ドラッグして上へ挿入）")
         self.lbl_sub.setStyleSheet("font-weight: bold;")
         sub_title_row.addWidget(self.lbl_sub)
         self.btn_open_sub_new_window = QPushButton("🗔 新規ウインドウで開く")
         self.btn_open_sub_new_window.setToolTip(
-            "取り込み元のPDFを、別のウインドウで開きます")
+            "サブPDFを、別のウインドウで開きます")
         self.btn_open_sub_new_window.clicked.connect(
             self.open_sub_in_new_window)
         self.btn_open_sub_new_window.setEnabled(False)
@@ -610,7 +647,7 @@ class PageManager(QDockWidget):
         bottom_layout.addLayout(sub_rot_buttons)
 
         sub_buttons = QHBoxLayout()
-        self.btn_open_sub = QPushButton("📂 取り込み元を開く")
+        self.btn_open_sub = QPushButton("📂 サブPDFを開く")
         self.btn_insert_selected = QPushButton("⬆ 選択ページを挿入")
 
         self.btn_open_sub.clicked.connect(self.open_sub_pdf)
@@ -629,6 +666,18 @@ class PageManager(QDockWidget):
 
         self.setWidget(splitter)
 
+        self.list_widget.zoom_callback = self.zoom_thumbnails
+        self.sub_list_widget.zoom_callback = self.zoom_thumbnails
+        settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
+        try:
+            self._thumb_scale = float(
+                settings.value("page_manager/thumb_scale", 1.0))
+        except (TypeError, ValueError):
+            self._thumb_scale = 1.0
+        self._thumb_scale = min(2.8, max(0.6, self._thumb_scale))
+        self.apply_thumb_scale()
+        self.topLevelChanged.connect(self._on_top_level_changed)
+
     def clear_thumbnail_cache(self):
         self._main_generation_id += 1
         self._sub_generation_id += 1
@@ -636,6 +685,57 @@ class PageManager(QDockWidget):
         self._pending_sub_thumbs.clear()
         self._in_flight_main_thumbs.clear()
         self._in_flight_sub_thumbs.clear()
+
+    # --- 拡大表示とサムネイルのズーム ---
+    _THUMB_BASE_W = 95
+    _THUMB_BASE_H = 130
+    _THUMB_SCALE_MIN = 0.6
+    _THUMB_SCALE_MAX = 2.8
+
+    def toggle_expanded(self):
+        """ページ管理を大きなウインドウとして切り離す／元の場所に戻す。"""
+        if self.isFloating():
+            self.setFloating(False)
+        else:
+            self.setFloating(True)
+            QTimer.singleShot(0, self._resize_expanded)
+
+    def _resize_expanded(self):
+        if not self.isFloating():
+            return
+        screen = self.main.screen() if self.main is not None else None
+        if screen is None:
+            self.resize(1000, 800)
+            return
+        avail = screen.availableGeometry()
+        w = max(700, int(avail.width() * 0.62))
+        h = max(600, int(avail.height() * 0.85))
+        self.resize(w, h)
+
+    def _on_top_level_changed(self, floating):
+        self.btn_expand.setText("↩ 元に戻す" if floating else "🔍 拡大表示")
+
+    def zoom_thumbnails(self, steps):
+        """サムネイルの表示倍率を変える（Ctrl+ホイールとボタンから呼ばれる）。"""
+        self._thumb_scale = min(
+            self._THUMB_SCALE_MAX,
+            max(self._THUMB_SCALE_MIN, self._thumb_scale * (1.2 ** steps)),
+        )
+        self.apply_thumb_scale()
+
+    def reset_thumb_zoom(self):
+        self._thumb_scale = 1.0
+        self.apply_thumb_scale()
+
+    def apply_thumb_scale(self):
+        size = QSize(
+            round(self._THUMB_BASE_W * self._thumb_scale),
+            round(self._THUMB_BASE_H * self._thumb_scale),
+        )
+        self.list_widget.setIconSize(size)
+        self.sub_list_widget.setIconSize(size)
+        settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
+        settings.setValue("page_manager/thumb_scale", self._thumb_scale)
 
     def move_selected_pages(self, direction):
         viewer = self.main.viewer
@@ -731,7 +831,7 @@ class PageManager(QDockWidget):
         )
 
     def open_sub_in_new_window(self):
-        """取り込み元のPDFを新しいウインドウで開く。"""
+        """サブPDFを新しいウインドウで開く。"""
         if not self.sub_filepath:
             return
         self.main.spawn_new_window(self.sub_filepath)
@@ -1126,7 +1226,7 @@ class PageManager(QDockWidget):
             if len(self.sub_pdf) == 1:
                 rows = [0]
             else:
-                self.main.statusBar().showMessage("回転したい取り込み元ページを選択してください")
+                self.main.statusBar().showMessage("回転したいサブPDFのページを選択してください")
                 return
         else:
             rows = [self.sub_list_widget.row(item) for item in selected]
@@ -1260,7 +1360,7 @@ class PageManager(QDockWidget):
     def open_sub_pdf(self):
         filepath, _ = QFileDialog.getOpenFileName(
             self,
-            "取り込み元のPDFを選択",
+            "サブPDFを選択",
             "",
             "PDF Files (*.pdf)",
         )
@@ -1280,13 +1380,13 @@ class PageManager(QDockWidget):
         self.close_sub_pdf()
         self.sub_pdf = doc
         self.sub_filepath = filepath
-        self.lbl_sub.setText(f"📥 取り込み元: {Path(filepath).name}")
+        self.lbl_sub.setText(f"📥 サブPDF: {Path(filepath).name}")
         self.btn_open_sub_new_window.setEnabled(True)
         self.refresh_sub_thumbnails()
 
     def insert_selected_sub_pages(self):
         if not self.sub_pdf:
-            QMessageBox.information(self, "案内", "先に取り込み元PDFを開いてください。")
+            QMessageBox.information(self, "案内", "先にサブPDFを開いてください。")
             return
 
         selected = self.sub_list_widget.selectedItems()
