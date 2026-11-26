@@ -114,17 +114,17 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         self._app.processEvents()
         self.assertTrue(self.pm._sub_collapsed)
         self.assertFalse(self.pm.sub_body.isVisible())
-        self.assertEqual(self.pm.btn_sub_collapse.text(), "▶ 開く")
+        self.assertEqual(self.pm.btn_sub_collapse.text(), "▶ ひらく")
         self.pm.set_sub_collapsed(False)
         self._app.processEvents()
         self.assertTrue(self.pm.sub_body.isVisible())
-        self.assertEqual(self.pm.btn_sub_collapse.text(), "▼ 畳む")
+        self.assertEqual(self.pm.btn_sub_collapse.text(), "▼ たたむ")
 
     def test_expand_auto_collapses_sub_and_restores(self):
         from PyQt6.QtCore import QSettings
 
         self.pm.set_sub_collapsed(False)  # 普段は開いた状態にしておく
-        self.pm.toggle_expanded()
+        self.pm.setFloating(True)
         self._app.processEvents()
         self.assertTrue(self.pm.isFloating())
         # 拡大表示中は自動で畳まれる（保存済みの好みは書き換わらない）
@@ -132,23 +132,42 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
         saved = settings.value("page_manager/sub_collapsed", False)
         self.assertIn(saved, (False, "false", "False", 0))
-        self.pm.toggle_expanded()
+        self.pm.setFloating(False)
         self._app.processEvents()
         self.assertFalse(self.pm.isFloating())
         # 戻すと元の開いた状態に戻る
         self.assertFalse(self.pm._sub_collapsed)
 
-    # --- 拡大表示 ---
-    def test_expand_toggle_floats_and_returns(self):
+    # --- 拡大表示（タイトルバーのダブルクリック等で切り離す） ---
+    def test_float_and_redock(self):
         self.assertFalse(self.pm.isFloating())
-        self.pm.toggle_expanded()
+        self.assertFalse(hasattr(self.pm, "btn_expand"))
+        self.pm.setFloating(True)
         self._app.processEvents()
         self.assertTrue(self.pm.isFloating())
-        self.assertEqual(self.pm.btn_expand.text(), "↩ 元に戻す")
-        self.pm.toggle_expanded()
+        self.pm.setFloating(False)
         self._app.processEvents()
         self.assertFalse(self.pm.isFloating())
-        self.assertEqual(self.pm.btn_expand.text(), "🔍 拡大表示")
+
+    # --- 画質（ズーム時の描画解像度） ---
+    def test_render_scale_doubles_when_zoomed(self):
+        from core.geometry import THUMBNAIL_RENDER_SCALE
+
+        self.assertEqual(self.pm._current_render_scale(), THUMBNAIL_RENDER_SCALE)
+        self.pm.zoom_thumbnails(1)
+        self.assertEqual(
+            self.pm._current_render_scale(), THUMBNAIL_RENDER_SCALE * 2.0)
+        self.pm.reset_thumb_zoom()
+        self.assertEqual(self.pm._current_render_scale(), THUMBNAIL_RENDER_SCALE)
+
+    def test_zoom_rerenders_sub_thumbnails_at_higher_quality(self):
+        path = str(Path(self._tmp.name) / "subq.pdf")
+        _make_pdf(path)
+        self.pm.load_sub_pdf_from_path(path)
+        self._app.processEvents()
+        gen_before = self.pm._sub_generation_id
+        self.pm.zoom_thumbnails(1)
+        self.assertGreater(self.pm._sub_generation_id, gen_before)
 
 
 if __name__ == "__main__":

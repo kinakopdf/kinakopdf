@@ -529,12 +529,14 @@ class PageManager(QDockWidget):
         top_layout.setContentsMargins(4, 4, 4, 4)
 
         tools_row = QHBoxLayout()
-        self.btn_expand = QPushButton("🔍 拡大表示")
-        self.btn_expand.setToolTip(
-            "ページ管理を大きなウインドウとして切り離します。"
-            "横向きページの確認や回転作業がしやすくなります")
-        self.btn_expand.clicked.connect(self.toggle_expanded)
-        tools_row.addWidget(self.btn_expand)
+        self.lbl_expand_hint = QLabel("タイトルバーのWクリックで拡大表示")
+        self.lbl_expand_hint.setStyleSheet("color: gray; font-size: 11px;")
+        self.lbl_expand_hint.setToolTip(
+            "上の「ページ管理・D&D取り込み」というタイトルバーを"
+            "ダブルクリックすると、大きなウインドウとして切り離せます。"
+            "ウインドウの最大化ボタンで全画面にもできます。"
+            "もう一度ダブルクリックすると元の場所に戻ります")
+        tools_row.addWidget(self.lbl_expand_hint)
         tools_row.addStretch(1)
         self.btn_zoom_out = QPushButton("－")
         self.btn_zoom_out.setToolTip("サムネイルを小さくします")
@@ -628,9 +630,9 @@ class PageManager(QDockWidget):
             self.open_sub_in_new_window)
         self.btn_open_sub_new_window.setEnabled(False)
         sub_title_row.addWidget(self.btn_open_sub_new_window)
-        self.btn_sub_collapse = QPushButton("▼ 畳む")
+        self.btn_sub_collapse = QPushButton("▼ たたむ")
         self.btn_sub_collapse.setToolTip(
-            "サブPDFの欄を畳んで、編集中のPDFの欄を広くします")
+            "サブPDFの欄をたたんで、編集中のPDFの欄を広くします")
         self.btn_sub_collapse.clicked.connect(self.toggle_sub_collapsed)
         sub_title_row.addWidget(self.btn_sub_collapse)
         sub_title_row.addStretch(1)
@@ -688,6 +690,7 @@ class PageManager(QDockWidget):
         except (TypeError, ValueError):
             self._thumb_scale = 1.0
         self._thumb_scale = min(2.8, max(0.6, self._thumb_scale))
+        self._render_bucket = 1 if self._thumb_scale > 1.05 else 0
         self.apply_thumb_scale()
         self.topLevelChanged.connect(self._on_top_level_changed)
         _sub_saved = settings.value("page_manager/sub_collapsed", False)
@@ -708,14 +711,6 @@ class PageManager(QDockWidget):
     _THUMB_SCALE_MIN = 0.6
     _THUMB_SCALE_MAX = 2.8
 
-    def toggle_expanded(self):
-        """ページ管理を大きなウインドウとして切り離す／元の場所に戻す。"""
-        if self.isFloating():
-            self.setFloating(False)
-        else:
-            self.setFloating(True)
-            QTimer.singleShot(0, self._resize_expanded)
-
     def _resize_expanded(self):
         if not self.isFloating():
             return
@@ -729,8 +724,8 @@ class PageManager(QDockWidget):
         self.resize(w, h)
 
     def _on_top_level_changed(self, floating):
-        self.btn_expand.setText("↩ 元に戻す" if floating else "🔍 拡大表示")
         if floating:
+            QTimer.singleShot(0, self._resize_expanded)
             # 拡大表示中はサブPDFの欄を使わないので自動で畳む
             self._sub_state_before_expand = self._sub_collapsed
             if not self._sub_collapsed:
@@ -762,6 +757,27 @@ class PageManager(QDockWidget):
         self.sub_list_widget.setIconSize(size)
         settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
         settings.setValue("page_manager/thumb_scale", self._thumb_scale)
+        # 大きく表示するときは描画の解像度も上げて、画質を保つ
+        bucket = 1 if self._thumb_scale > 1.05 else 0
+        if bucket != self._render_bucket:
+            self._render_bucket = bucket
+            self._rerender_thumbnails_for_quality()
+
+    def _current_render_scale(self):
+        """サムネイル描画の解像度。ズーム時は2倍にして拡大しても粗くならないようにする。"""
+        return THUMBNAIL_RENDER_SCALE * (2.0 if self._render_bucket else 1.0)
+
+    def _rerender_thumbnails_for_quality(self):
+        """解像度の切り替えに合わせて、今あるサムネイルを作り直す（選択やスクロールはそのまま）。"""
+        if self.main.viewer.current_pdf and self.list_widget.count():
+            self._main_generation_id += 1
+            self._in_flight_main_thumbs.clear()
+            self._pending_main_thumbs.update(range(self.list_widget.count()))
+        if self.sub_pdf and self.sub_list_widget.count():
+            self._sub_generation_id += 1
+            self._in_flight_sub_thumbs.clear()
+            self._pending_sub_thumbs.update(range(self.sub_list_widget.count()))
+        self._trigger_thumb_queue()
 
     def toggle_sub_collapsed(self):
         self._sub_state_before_expand = None
@@ -772,7 +788,7 @@ class PageManager(QDockWidget):
         self._sub_collapsed = bool(collapsed)
         self.sub_body.setVisible(not self._sub_collapsed)
         self.btn_sub_collapse.setText(
-            "▶ 開く" if self._sub_collapsed else "▼ 畳む")
+            "▶ ひらく" if self._sub_collapsed else "▼ たたむ")
         sizes = self._splitter.sizes()
         total = sum(sizes)
         if total > 0:
@@ -1116,7 +1132,7 @@ class PageManager(QDockWidget):
                         doc=self.main.viewer.current_pdf,
                         gen_id=self._main_generation_id,
                         ann_list=ann_list,
-                        thumb_scale=THUMBNAIL_RENDER_SCALE,
+                        thumb_scale=self._current_render_scale(),
                         font_family=self.main.viewer.preview_font_family,
                     )
                     task.signals.rendered.connect(self._on_thumbnail_rendered)
@@ -1138,7 +1154,7 @@ class PageManager(QDockWidget):
                         doc=self.sub_pdf,
                         gen_id=self._sub_generation_id,
                         ann_list=[],
-                        thumb_scale=THUMBNAIL_RENDER_SCALE,
+                        thumb_scale=self._current_render_scale(),
                         font_family=self.main.viewer.preview_font_family,
                     )
                     task.signals.rendered.connect(self._on_thumbnail_rendered)
