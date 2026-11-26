@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -115,6 +116,12 @@ class BasePageListWidget(QListWidget):
         self.setMovement(QListWidget.Movement.Static)
         self.setSpacing(6)
         self.setDragEnabled(True)
+        # 選択中のページが一目で分かるよう、はっきりした色にする
+        self.setStyleSheet(
+            "QListWidget::item:selected { "
+            "background: #ffab40; border: 2px solid #e65100; color: black; }"
+            "QListWidget::item:selected:!active { "
+            "background: #ffab40; border: 2px solid #e65100; color: black; }")
 
     def wheelEvent(self, event):
         # Ctrl+ホイールでサムネイルの拡大・縮小（通常のホイールは一覧のスクロール）
@@ -537,6 +544,11 @@ class PageManager(QDockWidget):
             "ウインドウの最大化ボタンで全画面にもできます。"
             "もう一度ダブルクリックすると元の場所に戻ります")
         tools_row.addWidget(self.lbl_expand_hint)
+        self.btn_fullscreen = QPushButton("全画面")
+        self.btn_fullscreen.setToolTip(
+            "ページ管理のウインドウを全画面で表示します（もう一度押すと戻ります）")
+        self.btn_fullscreen.clicked.connect(self.toggle_fullscreen)
+        tools_row.addWidget(self.btn_fullscreen)
         tools_row.addStretch(1)
         self.btn_zoom_out = QPushButton("－")
         self.btn_zoom_out.setToolTip("サムネイルを小さくします")
@@ -689,10 +701,15 @@ class PageManager(QDockWidget):
                 settings.value("page_manager/thumb_scale", 1.0))
         except (TypeError, ValueError):
             self._thumb_scale = 1.0
-        self._thumb_scale = min(2.8, max(0.6, self._thumb_scale))
-        self._render_bucket = 1 if self._thumb_scale > 1.05 else 0
+        self._thumb_scale = min(
+            self._THUMB_SCALE_MAX, max(self._THUMB_SCALE_MIN, self._thumb_scale))
+        self._render_bucket = self._bucket_for(self._thumb_scale)
         self.apply_thumb_scale()
         self.topLevelChanged.connect(self._on_top_level_changed)
+        # ボタンは自然な幅のままにして、広いウインドウでも間延びさせない
+        for _btn in self.findChildren(QPushButton):
+            _btn.setSizePolicy(
+                QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         _sub_saved = settings.value("page_manager/sub_collapsed", False)
         self.set_sub_collapsed(
             _sub_saved in (True, 1, "true", "True", "1"), save=False)
@@ -709,10 +726,10 @@ class PageManager(QDockWidget):
     _THUMB_BASE_W = 95
     _THUMB_BASE_H = 130
     _THUMB_SCALE_MIN = 0.6
-    _THUMB_SCALE_MAX = 2.8
+    _THUMB_SCALE_MAX = 5.0
 
     def _resize_expanded(self):
-        if not self.isFloating():
+        if not self.isFloating() or self.isFullScreen():
             return
         screen = self.main.screen() if self.main is not None else None
         if screen is None:
@@ -723,7 +740,28 @@ class PageManager(QDockWidget):
         h = max(600, int(avail.height() * 0.85))
         self.resize(w, h)
 
+    def toggle_fullscreen(self):
+        """ページ管理のウインドウを全画面表示にする／戻す。"""
+        if self.isFullScreen():
+            self.showNormal()
+            self.btn_fullscreen.setText("全画面")
+        else:
+            self.btn_fullscreen.setText("全画面をやめる")
+            if self.isFloating():
+                self.showFullScreen()
+            else:
+                # 切り離した直後はウインドウの準備が終わってから全画面にする
+                self.setFloating(True)
+                QTimer.singleShot(0, self._enter_fullscreen)
+
+    def _enter_fullscreen(self):
+        if self.isFloating() and not self.isFullScreen():
+            self.showFullScreen()
+
     def _on_top_level_changed(self, floating):
+        if not floating and self.isFullScreen():
+            self.showNormal()
+            self.btn_fullscreen.setText("全画面")
         if floating:
             QTimer.singleShot(0, self._resize_expanded)
             # 拡大表示中はサブPDFの欄を使わないので自動で畳む
@@ -758,14 +796,23 @@ class PageManager(QDockWidget):
         settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
         settings.setValue("page_manager/thumb_scale", self._thumb_scale)
         # 大きく表示するときは描画の解像度も上げて、画質を保つ
-        bucket = 1 if self._thumb_scale > 1.05 else 0
+        bucket = self._bucket_for(self._thumb_scale)
         if bucket != self._render_bucket:
             self._render_bucket = bucket
             self._rerender_thumbnails_for_quality()
 
+    @staticmethod
+    def _bucket_for(scale):
+        """表示倍率に応じた描画解像度の段階（0=標準、1=2倍、2=3倍）。"""
+        if scale > 2.4:
+            return 2
+        if scale > 1.05:
+            return 1
+        return 0
+
     def _current_render_scale(self):
-        """サムネイル描画の解像度。ズーム時は2倍にして拡大しても粗くならないようにする。"""
-        return THUMBNAIL_RENDER_SCALE * (2.0 if self._render_bucket else 1.0)
+        """サムネイル描画の解像度。ズーム時は段階的に上げて、拡大しても粗くならないようにする。"""
+        return THUMBNAIL_RENDER_SCALE * (1.0, 2.0, 3.0)[self._render_bucket]
 
     def _rerender_thumbnails_for_quality(self):
         """解像度の切り替えに合わせて、今あるサムネイルを作り直す（選択やスクロールはそのまま）。"""

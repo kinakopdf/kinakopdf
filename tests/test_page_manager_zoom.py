@@ -157,8 +157,36 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         self.pm.zoom_thumbnails(1)
         self.assertEqual(
             self.pm._current_render_scale(), THUMBNAIL_RENDER_SCALE * 2.0)
+        self.pm.zoom_thumbnails(5)  # 大きくズームしたら3倍の解像度
+        self.assertEqual(
+            self.pm._current_render_scale(), THUMBNAIL_RENDER_SCALE * 3.0)
         self.pm.reset_thumb_zoom()
         self.assertEqual(self.pm._current_render_scale(), THUMBNAIL_RENDER_SCALE)
+
+    # --- 選択中ページの色・全画面・ボタンの幅 ---
+    def test_selected_item_has_strong_color(self):
+        self.assertIn("item:selected", self.pm.list_widget.styleSheet())
+        self.assertIn("#ffab40", self.pm.list_widget.styleSheet())
+        self.assertIn("item:selected", self.pm.sub_list_widget.styleSheet())
+
+    def test_fullscreen_toggle(self):
+        self.pm.toggle_fullscreen()
+        self._app.processEvents()
+        self.assertTrue(self.pm.isFloating())
+        self.assertTrue(self.pm.isFullScreen())
+        self.assertEqual(self.pm.btn_fullscreen.text(), "全画面をやめる")
+        self.pm.toggle_fullscreen()
+        self._app.processEvents()
+        self.assertFalse(self.pm.isFullScreen())
+        self.assertEqual(self.pm.btn_fullscreen.text(), "全画面")
+
+    def test_buttons_do_not_stretch(self):
+        from PyQt6.QtWidgets import QSizePolicy
+
+        for btn in (self.pm.btn_open_sub, self.pm.btn_fullscreen,
+                    self.pm.btn_zoom_in):
+            self.assertEqual(
+                btn.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Maximum)
 
     def test_zoom_rerenders_sub_thumbnails_at_higher_quality(self):
         path = str(Path(self._tmp.name) / "subq.pdf")
