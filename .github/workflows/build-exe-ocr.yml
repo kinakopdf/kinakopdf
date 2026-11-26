@@ -25,6 +25,8 @@ jobs:
           pip install -r requirements-ocr.txt
           pip install --no-deps ndlocr-lite==2.0.0
           pip install pyinstaller
+      - name: Smoke-test the NDLOCR-Lite module imports
+        run: python -c "import ocr, model_download, deim, parseq, ndl_parser, reading_order; print('ndlocr-lite imports ok')"
       - name: Run tests first (fail the build if tests fail)
         run: |
           python -m unittest tests.test_core_logic -v
@@ -46,7 +48,9 @@ jobs:
           model_out.mkdir(exist_ok=True)
           for filename, expected_hash in MODELS.values():
               resolved = get_model_path(filename, expected_hash, model_out)
-              shutil.copy(resolved, model_out / filename)
+              dest = model_out / filename
+              if pathlib.Path(resolved).resolve() != dest.resolve():
+                  shutil.copy(resolved, dest)
               print("model:", filename)
           config_out = pathlib.Path("ndl_config")
           config_out.mkdir(exist_ok=True)
@@ -60,6 +64,12 @@ jobs:
         run: |
           dir dist
           if (-not (Test-Path dist\KinakoPDF-ocr.exe)) { throw "KinakoPDF-ocr.exe was not built" }
+      - name: Run the bundled OCR self-test inside the exe
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath dist\KinakoPDF-ocr.exe -ArgumentList "--ocr-selftest" -Wait -PassThru
+          if (Test-Path ocr_selftest_result.txt) { Get-Content ocr_selftest_result.txt }
+          if ($p.ExitCode -ne 0) { throw "OCR self-test failed with exit code $($p.ExitCode)" }
       - name: Upload exe as a build artifact (kept 30 days)
         uses: actions/upload-artifact@v4
         with:

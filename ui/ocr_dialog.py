@@ -169,9 +169,16 @@ class _BatchApplyWorker(QRunnable):
 
                 ocr_results_list: List[Optional[List[Dict]]] = [None] * len(cleaned_images)
                 if self.need_ocr and cleaned_images:
+                    first_note = ""
+                    try:
+                        from core.ocr_engine import engine_ready
+                        if not engine_ready():
+                            first_note = "（初回はOCRの準備に少し時間がかかります）"
+                    except Exception:
+                        pass
                     self.signals.progress.emit(
                         batch_start,
-                        f"文字認識を実行中... ({batch_start + 1} / {num_targets})",
+                        f"文字認識を実行中... ({batch_start + 1} / {num_targets}){first_note}",
                     )
 
                     def _on_ocr_page_done(done_i: int, _bs=batch_start):

@@ -25,6 +25,12 @@ def _line(text, x, y, w, h, vertical=False):
     }
 
 
+def _line_raw_vertical(text, x, y, w, h, raw_vertical):
+    line = _line(text, x, y, w, h)
+    line["isVertical"] = raw_vertical
+    return line
+
+
 class TestLinesToChunks(unittest.TestCase):
     def test_single_line_becomes_one_chunk(self):
         chunks = ndl_ocr._lines_to_chunks(
@@ -59,6 +65,24 @@ class TestLinesToChunks(unittest.TestCase):
         self.assertEqual(texts, ["12,300円", "合計"])
         vertical = [c for c in chunks if c["text"] == "合計"][0]
         self.assertEqual(vertical["bbox"], (300.0, 40.0, 330.0, 130.0))
+        self.assertTrue(vertical.get("vertical"))
+        horizontal = [c for c in chunks if c["text"] == "12,300円"][0]
+        self.assertFalse(horizontal.get("vertical"))
+
+    def test_vertical_flag_accepts_bool_true(self):
+        lines = [_line_raw_vertical("縦書き", 10, 10, 30, 120, True)]
+        chunks = ndl_ocr._lines_to_chunks(lines, fix_numeric=True, numeric_only=False)
+        self.assertEqual(len(chunks), 1)
+        self.assertTrue(chunks[0].get("vertical"))
+
+    def test_narrow_gap_cells_merge_like_word_engine(self):
+        # 既存の単語結合と同じ挙動（間隔が狭い隣セルは1つの chunk になる）を記録する
+        lines = [
+            _line("あいう", 40, 50, 90, 30),
+            _line("えお", 140, 50, 60, 30),
+        ]
+        chunks = ndl_ocr._lines_to_chunks(lines, fix_numeric=True, numeric_only=False)
+        self.assertEqual([c["text"] for c in chunks], ["あいうえお"])
 
 
 @unittest.skipUnless(
@@ -126,6 +150,20 @@ class TestBatchWithFakePipeline(unittest.TestCase):
         from PyQt6.QtGui import QImage
 
         self.assertEqual(ndl_ocr.run_ndl_ocr_on_qimage(QImage()), [])
+
+
+@unittest.skipUnless(find_spec("numpy"), "numpy がない環境ではスキップ")
+class TestQImageToArray(unittest.TestCase):
+    def test_shape_and_pixel_values(self):
+        from PyQt6.QtGui import QColor, QImage
+
+        img = QImage(4, 2, QImage.Format.Format_RGB32)
+        img.fill(QColor(10, 20, 30))
+        img.setPixelColor(3, 1, QColor(200, 100, 50))
+        arr = ndl_ocr._qimage_to_rgb_array(img)
+        self.assertEqual(arr.shape, (2, 4, 3))
+        self.assertEqual(list(arr[0, 0]), [10, 20, 30])
+        self.assertEqual(list(arr[1, 3]), [200, 100, 50])
 
 
 if __name__ == "__main__":

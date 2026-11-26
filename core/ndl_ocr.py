@@ -10,15 +10,14 @@ Windows標準OCR（core/ocr_cleaner.py）と同じ chunk 形式
 初回だけモデル取得で時間がかかることがある。推論はすべてこのPCの中で行い、
 読み取り対象の画像が外部に送られることはない。
 """
-import io
 import os
+import sys
 import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import QBuffer, QIODevice
 from PyQt6.QtGui import QImage
 
 from core import logger
@@ -32,10 +31,40 @@ from core.ocr_cleaner import (
 _ENGINE_LOCK = threading.Lock()
 _CALL_LOCK = threading.Lock()
 _ENGINE: Optional[Tuple[Any, Any, Any, Any]] = None
+_GLOBAL_CANCEL = threading.Event()
+
+
+def engine_ready() -> bool:
+    """エンジン（モデル読み込み済み）かどうか。"""
+    return _ENGINE is not None
+
+
+def request_shutdown_and_wait(timeout: float = 10.0) -> None:
+    """ウインドウを閉じるとき用：実行中の推論を止め、終わるのを少し待つ。
+
+    複数ウインドウのうち1つを閉じただけの場合に備え、待ち終わったら
+    キャンセル合図は解除する（残ったウインドウのOCRが止まったままに
+    ならないように）。
+    """
+    _GLOBAL_CANCEL.set()
+    try:
+        acquired = _CALL_LOCK.acquire(timeout=timeout)
+        if acquired:
+            _CALL_LOCK.release()
+    finally:
+        _GLOBAL_CANCEL.clear()
 
 
 def _ndl_base_dir() -> Path:
-    """NDLOCR-Lite のモジュールが置かれているフォルダ（同梱 config/model の基準）。"""
+    """NDLOCR-Lite の同梱 config/model の基準フォルダ。
+
+    exe化（PyInstaller onefile）されている場合は _MEIPASS を基準にする
+    （モジュールの __file__ は圧縮アーカイブ内の仮のパスになるため）。
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
     import ocr as ndl_pipeline
 
     return Path(ndl_pipeline.__file__).resolve().parent
@@ -91,10 +120,15 @@ def _ensure_engine() -> Tuple[Any, Any, Any, Any]:
             simple_mode=False,
         )
         logger.info("Loading NDLOCR-Lite models...")
-        detector = ndl.get_detector(args)
-        recognizer100 = ndl.get_recognizer(args=args)
-        recognizer30 = ndl.get_recognizer(args=args, weights_path=args.rec_weights30)
-        recognizer50 = ndl.get_recognizer(args=args, weights_path=args.rec_weights50)
+        try:
+            detector = ndl.get_detector(args)
+            recognizer100 = ndl.get_recognizer(args=args)
+            recognizer30 = ndl.get_recognizer(args=args, weights_path=args.rec_weights30)
+            recognizer50 = ndl.get_recognizer(args=args, weights_path=args.rec_weights50)
+        except Exception as exc:
+            raise RuntimeError(
+                "NDLOCR-Lite（国会図書館のOCR）の読み込みに失敗しました。"
+            ) from exc
         _ENGINE = (detector, recognizer30, recognizer50, recognizer100)
         logger.info("NDLOCR-Lite models loaded.")
         return _ENGINE
@@ -103,16 +137,14 @@ def _ensure_engine() -> Tuple[Any, Any, Any, Any]:
 def _qimage_to_rgb_array(qimg: QImage):
     """QImage を NDLOCR-Lite が受け取る RGB の numpy 配列に変換する。"""
     import numpy as np
-    from PIL import Image
 
-    buf = QBuffer()
-    buf.open(QIODevice.OpenModeFlag.WriteOnly)
-    if not qimg.save(buf, "PNG"):
-        raise RuntimeError("OCR用画像の変換に失敗しました。")
-    data = bytes(buf.data())
-    buf.close()
-    with Image.open(io.BytesIO(data)) as pil_img:
-        return np.array(pil_img.convert("RGB"))
+    img = qimg.convertToFormat(QImage.Format.Format_RGB888)
+    w, h = img.width(), img.height()
+    bytes_per_line = img.bytesPerLine()
+    ptr = img.bits()
+    ptr.setsize(img.sizeInBytes())
+    flat = np.frombuffer(bytes(ptr), dtype=np.uint8).reshape((h, bytes_per_line))
+    return np.ascontiguousarray(flat[:, : w * 3].reshape((h, w, 3)))
 
 
 def _lines_to_chunks(
@@ -139,13 +171,16 @@ def _lines_to_chunks(
         if not xs or not ys:
             continue
         x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
-        if str(line.get("isVertical")) == "true":
+        vertical_value = line.get("isVertical")
+        if vertical_value is True or str(vertical_value).strip().lower() == "true":
             if numeric_only:
                 text = normalize_strict_numeric_text(text, allow_standalone_dot=True)
             elif fix_numeric:
                 text = _normalize_numeric_ocr_misreads(text)
             if text:
-                vertical_chunks.append({"text": text, "bbox": (x0, y0, x1, y1)})
+                vertical_chunks.append(
+                    {"text": text, "bbox": (x0, y0, x1, y1), "vertical": True}
+                )
         else:
             words.append(
                 {"t": text, "x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
@@ -174,7 +209,9 @@ def run_ndl_ocr_batch_on_qimages(
     呼び出し形式は run_windows_ocr_batch_on_qimages とそろえてある。
     キャンセルはページ単位で受け付ける（1ページの推論が終わるまでは待つ）。
     """
-    if not qimages or (cancel_event is not None and cancel_event.is_set()):
+    if not qimages or _GLOBAL_CANCEL.is_set() or (
+        cancel_event is not None and cancel_event.is_set()
+    ):
         return []
 
     for idx, qimg in enumerate(qimages):
@@ -189,7 +226,9 @@ def run_ndl_ocr_batch_on_qimages(
     results: List[List[Dict[str, Any]]] = []
     try:
         for idx, qimg in enumerate(qimages):
-            if cancel_event is not None and cancel_event.is_set():
+            if _GLOBAL_CANCEL.is_set() or (
+                cancel_event is not None and cancel_event.is_set()
+            ):
                 return []
             img = _qimage_to_rgb_array(qimg)
             with _CALL_LOCK:

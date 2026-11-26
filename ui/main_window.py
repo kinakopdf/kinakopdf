@@ -2939,6 +2939,12 @@ class MainWindow(QMainWindow):
         try:
             from core.ocr_cleaner import cleanup_stale_ocr_temp_dirs, terminate_all_active_ocr_processes
             terminate_all_active_ocr_processes()
+            try:
+                # NDLOCR-Lite は同じプロセスで動くため、終了前に止めて少し待つ
+                from core.ocr_engine import request_shutdown_and_wait
+                request_shutdown_and_wait(timeout=10.0)
+            except Exception:
+                pass
             QThreadPool.globalInstance().waitForDone(500)
             cleanup_stale_ocr_temp_dirs(max_age_sec=60.0)
         except Exception:

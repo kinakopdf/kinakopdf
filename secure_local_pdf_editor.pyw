@@ -107,8 +107,60 @@ def _global_exception_hook(exctype, value, tb):
         )
 
 
+def _run_ocr_selftest() -> int:
+    """CI用：exeに同梱したOCRエンジンが実際に動くかを確認する（画面は出さない）。
+
+    結果は ocr_selftest_result.txt に書き、終了コードでも返す。
+    """
+    result_path = os.path.join(os.getcwd(), "ocr_selftest_result.txt")
+    try:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        app = QApplication(sys.argv)  # noqa: F841
+        from PyQt6.QtGui import QColor, QFont, QImage, QPainter
+
+        from core.geometry import get_preview_font_family
+
+        img = QImage(800, 400, QImage.Format.Format_RGB32)
+        img.fill(QColor("white"))
+        painter = QPainter(img)
+        font = QFont(get_preview_font_family())
+        font.setPixelSize(72)
+        painter.setFont(font)
+        painter.setPen(QColor("black"))
+        painter.drawText(60, 140, "領収書")
+        painter.drawText(60, 280, "合計 12,300円")
+        painter.end()
+
+        from core.ocr_engine import run_ocr_on_qimage
+
+        chunks = run_ocr_on_qimage(img)
+        texts = [str(c.get("text", "")) for c in chunks]
+        ok = "12,300" in "".join(texts)
+        with open(result_path, "w", encoding="utf-8") as f:
+            f.write(("OK" if ok else "FAIL") + "\n" + "\n".join(texts))
+        return 0 if ok else 1
+    except Exception:
+        try:
+            with open(result_path, "w", encoding="utf-8") as f:
+                f.write("ERROR\n" + traceback.format_exc())
+        except Exception:
+            pass
+        return 1
+
+
 def main():
+    # --windowed の exe では stdout/stderr が None になり、ライブラリの
+    # 進捗表示（tqdm等）や print で落ちることがあるため、捨て先を用意する
+    try:
+        if sys.stdout is None:
+            sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+        if sys.stderr is None:
+            sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     sys.excepthook = _global_exception_hook
+    if "--ocr-selftest" in sys.argv:
+        sys.exit(_run_ocr_selftest())
     try:
         from core.ocr_cleaner import cleanup_stale_ocr_temp_dirs
         cleanup_stale_ocr_temp_dirs(max_age_sec=300.0)

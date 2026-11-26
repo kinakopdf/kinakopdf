@@ -873,6 +873,29 @@ def apply_cleaned_image_and_ocr_to_page(
                     except Exception:
                         fitz_font = None
 
+                def _insert_chunk_text(one_text, view_pt, fs):
+                    raw_pt = view_point_to_raw_pdf_from_geom(
+                        saved_crop, view_rect, saved_rot, view_pt
+                    )
+                    if JAPANESE_FONT:
+                        try:
+                            page.insert_text(
+                                raw_pt, one_text, fontsize=fs,
+                                color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
+                                fontfile=JAPANESE_FONT, fontname=font_alias, render_mode=3,
+                            )
+                            return
+                        except Exception:
+                            pass
+                    try:
+                        page.insert_text(
+                            raw_pt, one_text, fontsize=fs,
+                            color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
+                            fontname="japan", render_mode=3,
+                        )
+                    except Exception:
+                        logger.debug("Failed to insert OCR text chunk", exc_info=True)
+
                 for chunk in ocr_chunks:
                     text_str = str(chunk.get("text", "")).strip()
                     if not text_str:
@@ -885,6 +908,19 @@ def apply_cleaned_image_and_ocr_to_page(
 
                     box_w = max(2.0, vx1 - vx0)
                     box_h = max(4.0, vy1 - vy0)
+
+                    if chunk.get("vertical"):
+                        # 縦書きは1文字ずつ縦に並べて埋め込む（横書きとして
+                        # 1行で入れると、位置も大きさも合わなくなるため）
+                        char_count = max(1, len(text_str))
+                        cell_h = box_h / char_count
+                        fs_v = max(4.0, min(72.0, box_w * 0.88, cell_h * 0.95))
+                        char_x = vx0 + max(0.0, (box_w - fs_v) / 2.0)
+                        for i, ch in enumerate(text_str):
+                            baseline_y = vy0 + cell_h * i + cell_h * 0.5 + fs_v * 0.36
+                            _insert_chunk_text(ch, fitz.Point(char_x, baseline_y), fs_v)
+                        continue
+
                     est_fs = max(4.5, min(72.0, box_h * 0.88))
                     if fitz_font is not None:
                         try:
@@ -895,29 +931,7 @@ def apply_cleaned_image_and_ocr_to_page(
                             pass
 
                     view_baseline_pt = fitz.Point(vx0, vy0 + box_h * 0.84)
-                    raw_baseline_pt = view_point_to_raw_pdf_from_geom(
-                        saved_crop, view_rect, saved_rot, view_baseline_pt
-                    )
-                    inserted = False
-                    if JAPANESE_FONT:
-                        try:
-                            page.insert_text(
-                                raw_baseline_pt, text_str, fontsize=est_fs,
-                                color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
-                                fontfile=JAPANESE_FONT, fontname=font_alias, render_mode=3,
-                            )
-                            inserted = True
-                        except Exception:
-                            inserted = False
-                    if not inserted:
-                        try:
-                            page.insert_text(
-                                raw_baseline_pt, text_str, fontsize=est_fs,
-                                color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
-                                fontname="japan", render_mode=3,
-                            )
-                        except Exception:
-                            logger.debug("Failed to insert OCR text chunk", exc_info=True)
+                    _insert_chunk_text(text_str, view_baseline_pt, est_fs)
         finally:
             if page.rotation != saved_rot:
                 page.set_rotation(saved_rot)
