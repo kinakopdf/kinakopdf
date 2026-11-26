@@ -51,7 +51,7 @@ INK_CLOSE_RADIUS_FRAC = 0.016
 INK_GROW_RADIUS_FRAC = 0.005
 # インク系統で四隅を外側へ広げる割合（平均辺長に対する比率）。
 # レシートの文字まわりの余白ぶんを見込む。
-INK_EXPAND_RATIO = 0.055
+INK_EXPAND_RATIO = 0.07
 # 紙系統で四隅を外側へ広げる割合（端の印刷が欠けないように）。
 PAPER_EXPAND_RATIO = 0.015
 
@@ -61,19 +61,22 @@ PAPER_EXPAND_RATIO = 0.015
 # ============================================================
 
 class _Component:
-    """連結成分の統計。ピクセル列は保持せず、極点と外接矩形だけを持つ。"""
+    """連結成分の統計。極点と外接矩形を持ち、必要なら点列も保持する。"""
 
     __slots__ = ("count", "min_x", "min_y", "max_x", "max_y",
-                 "tl", "tr", "br", "bl")
+                 "tl", "tr", "br", "bl", "points")
 
-    def __init__(self, x, y):
+    def __init__(self, x, y, collect_points=False):
         self.count = 0
         self.min_x = self.max_x = x
         self.min_y = self.max_y = y
         self.tl = self.tr = self.br = self.bl = (x, y)
+        self.points = [] if collect_points else None
 
     def add(self, x, y):
         self.count += 1
+        if self.points is not None:
+            self.points.append((x, y))
         if x < self.min_x:
             self.min_x = x
         if x > self.max_x:
@@ -119,7 +122,7 @@ def _mask_from(data, w, h, stride, thr, bright):
     return mask
 
 
-def _label_mask(mask, w, h, min_count):
+def _label_mask(mask, w, h, min_count, collect_points=False):
     """マスクの連結成分をすべて返す（min_count 未満は捨てる）。"""
     visited = bytearray(w * h)
     comps = []
@@ -130,7 +133,7 @@ def _label_mask(mask, w, h, min_count):
                 visited[idx] = 1
                 continue
             visited[idx] = 1
-            comp = _Component(sx, sy)
+            comp = _Component(sx, sy, collect_points=collect_points)
             queue = deque([(sx, sy)])
             while queue:
                 x, y = queue.popleft()
@@ -238,6 +241,64 @@ def _quads_from_paper(data, w, h, stride, thr):
 # 系統2: インクの塊から検出（明るい背景向け）
 # ============================================================
 
+def _convex_hull(points):
+    """Monotone chain で凸包を返す（反時計回りの点列）。"""
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def _min_area_rect_quad(points):
+    """点群に外接する最小面積の長方形の四隅を返す。
+
+    凸包の各辺に沿って回転キャリパーで候補を比べる。四隅は
+    左上・右上・右下・左下の順。求まらなければ None。
+    極点から推定するより、傾いた書類でも形が正確に出る。
+    """
+    hull = _convex_hull(points)
+    if len(hull) < 3:
+        return None
+    best = None
+    n = len(hull)
+    for i in range(n):
+        x1, y1 = hull[i]
+        x2, y2 = hull[(i + 1) % n]
+        ang = math.atan2(y2 - y1, x2 - x1)
+        ca, sa = math.cos(-ang), math.sin(-ang)
+        rot = [(x * ca - y * sa, x * sa + y * ca) for (x, y) in hull]
+        xs = [p[0] for p in rot]
+        ys = [p[1] for p in rot]
+        area = (max(xs) - min(xs)) * (max(ys) - min(ys))
+        if best is None or area < best[0]:
+            best = (area, ang, min(xs), min(ys), max(xs), max(ys))
+    _, ang, min_x, min_y, max_x, max_y = best
+    ca, sa = math.cos(ang), math.sin(ang)
+    corners = []
+    for (x, y) in ((min_x, min_y), (max_x, min_y),
+                   (max_x, max_y), (min_x, max_y)):
+        corners.append((x * ca - y * sa, x * sa + y * ca))
+    tl = min(corners, key=lambda p: p[0] + p[1])
+    br = max(corners, key=lambda p: p[0] + p[1])
+    tr = max(corners, key=lambda p: p[0] - p[1])
+    bl = min(corners, key=lambda p: p[0] - p[1])
+    return [tl, tr, br, bl]
+
+
 def _quads_from_ink(data, w, h, stride, thr):
     page_area = float(w * h)
     mask = _mask_from(data, w, h, stride, thr, bright=False)
@@ -248,7 +309,8 @@ def _quads_from_ink(data, w, h, stride, thr):
     r_grow = max(2, int(round(INK_GROW_RADIUS_FRAC * max(w, h))))
     blob = _erode(_dilate(mask, w, h, r_close), w, h, r_close)
     blob = _dilate(blob, w, h, r_grow)
-    comps = _label_mask(blob, w, h, int(page_area * MIN_AREA_FRAC))
+    comps = _label_mask(
+        blob, w, h, int(page_area * MIN_AREA_FRAC), collect_points=True)
     quads = []
     for comp in comps:
         bw = comp.max_x - comp.min_x + 1
@@ -257,7 +319,10 @@ def _quads_from_ink(data, w, h, stride, thr):
             continue
         if bw < 0.05 * w or bh < 0.05 * h:
             continue
-        quads.append(comp.quad())
+        quad = None
+        if comp.points:
+            quad = _min_area_rect_quad(comp.points)
+        quads.append(quad if quad is not None else comp.quad())
     return quads
 
 
