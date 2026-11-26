@@ -180,13 +180,39 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         self.assertFalse(self.pm.isFullScreen())
         self.assertEqual(self.pm.btn_fullscreen.text(), "全画面")
 
-    def test_buttons_do_not_stretch(self):
-        from PyQt6.QtWidgets import QSizePolicy
+    def test_sub_panel_survives_collapsed_startup(self):
+        # 前回の不具合の回帰テスト：畳んだ状態で起動しても、
+        # サブPDFの見出し行（ひらくボタン）が0pxに潰れて消えないこと
+        from PyQt6.QtCore import QSettings
+        from ui.main_window import MainWindow
 
-        for btn in (self.pm.btn_open_sub, self.pm.btn_fullscreen,
-                    self.pm.btn_zoom_in):
-            self.assertEqual(
-                btn.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Maximum)
+        settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
+        settings.setValue("page_manager/sub_collapsed", True)
+        settings.sync()
+        win2 = MainWindow()
+        try:
+            win2.show()
+            self._app.processEvents()
+            pm2 = win2.page_manager
+            self.assertTrue(pm2._sub_collapsed)
+            self.assertGreaterEqual(pm2._splitter.sizes()[1], 40)
+            self.assertGreater(pm2.btn_sub_collapse.height(), 0)
+        finally:
+            try:
+                win2.page_manager._thumb_timer.stop()
+            except Exception:
+                pass
+            win2.close()
+            settings.setValue("page_manager/sub_collapsed", False)
+            settings.sync()
+
+    def test_panel_can_shrink_when_floating(self):
+        # 前回の不具合の回帰テスト：広げたウインドウを小さく戻せること
+        self.pm.setFloating(True)
+        self._app.processEvents()
+        self.pm.resize(400, 400)
+        self._app.processEvents()
+        self.assertLessEqual(self.pm.size().width(), 420)
 
     def test_zoom_rerenders_sub_thumbnails_at_higher_quality(self):
         path = str(Path(self._tmp.name) / "subq.pdf")

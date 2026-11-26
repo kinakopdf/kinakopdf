@@ -543,6 +543,8 @@ class PageManager(QDockWidget):
             "ダブルクリックすると、大きなウインドウとして切り離せます。"
             "ウインドウの最大化ボタンで全画面にもできます。"
             "もう一度ダブルクリックすると元の場所に戻ります")
+        self.lbl_expand_hint.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         tools_row.addWidget(self.lbl_expand_hint)
         self.btn_fullscreen = QPushButton("全画面")
         self.btn_fullscreen.setToolTip(
@@ -566,6 +568,8 @@ class PageManager(QDockWidget):
         top_layout.addLayout(tools_row)
 
         lbl_main = QLabel("📄 編集中のPDF（ドラッグまたはボタンで並び替え）")
+        lbl_main.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         lbl_main.setStyleSheet("font-weight: bold;")
         top_layout.addWidget(lbl_main)
 
@@ -588,6 +592,7 @@ class PageManager(QDockWidget):
         self.btn_move_down.clicked.connect(lambda: self.move_selected_pages(1))
         move_buttons.addWidget(self.btn_move_up)
         move_buttons.addWidget(self.btn_move_down)
+        move_buttons.addStretch(1)
         top_layout.addLayout(move_buttons)
 
         reverse_buttons = QHBoxLayout()
@@ -596,6 +601,7 @@ class PageManager(QDockWidget):
             "全ページの並びを逆順にします（元に戻す操作で戻せます）")
         self.btn_reverse.clicked.connect(self.reverse_all_pages)
         reverse_buttons.addWidget(self.btn_reverse)
+        reverse_buttons.addStretch(1)
         top_layout.addLayout(reverse_buttons)
 
         rot_buttons = QHBoxLayout()
@@ -605,6 +611,7 @@ class PageManager(QDockWidget):
         self.btn_rot_right.clicked.connect(lambda: self.rotate_selected_main_pages(90))
         rot_buttons.addWidget(self.btn_rot_left)
         rot_buttons.addWidget(self.btn_rot_right)
+        rot_buttons.addStretch(1)
         top_layout.addLayout(rot_buttons)
 
         buttons = QHBoxLayout()
@@ -616,6 +623,7 @@ class PageManager(QDockWidget):
 
         buttons.addWidget(self.btn_insert)
         buttons.addWidget(self.btn_delete)
+        buttons.addStretch(1)
         top_layout.addLayout(buttons)
 
         extract_buttons = QHBoxLayout()
@@ -625,14 +633,18 @@ class PageManager(QDockWidget):
         )
         self.btn_extract.clicked.connect(self.extract_selected_pages)
         extract_buttons.addWidget(self.btn_extract)
+        extract_buttons.addStretch(1)
         top_layout.addLayout(extract_buttons)
 
         bottom_widget = QWidget()
+        bottom_widget.setMinimumHeight(46)
         bottom_layout = QVBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(4, 8, 4, 4)
 
         sub_title_row = QHBoxLayout()
         self.lbl_sub = QLabel("📥 サブPDF（ドラッグして上へ挿入）")
+        self.lbl_sub.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.lbl_sub.setStyleSheet("font-weight: bold;")
         sub_title_row.addWidget(self.lbl_sub)
         self.btn_open_sub_new_window = QPushButton("🗔 新規ウインドウで開く")
@@ -666,6 +678,7 @@ class PageManager(QDockWidget):
         self.btn_sub_rot_right.clicked.connect(lambda: self.rotate_sub_pages(90))
         sub_rot_buttons.addWidget(self.btn_sub_rot_left)
         sub_rot_buttons.addWidget(self.btn_sub_rot_right)
+        sub_rot_buttons.addStretch(1)
         sub_body_layout.addLayout(sub_rot_buttons)
 
         sub_buttons = QHBoxLayout()
@@ -677,6 +690,7 @@ class PageManager(QDockWidget):
 
         sub_buttons.addWidget(self.btn_open_sub)
         sub_buttons.addWidget(self.btn_insert_selected)
+        sub_buttons.addStretch(1)
         sub_body_layout.addLayout(sub_buttons)
         bottom_layout.addWidget(self.sub_body)
 
@@ -706,10 +720,6 @@ class PageManager(QDockWidget):
         self._render_bucket = self._bucket_for(self._thumb_scale)
         self.apply_thumb_scale()
         self.topLevelChanged.connect(self._on_top_level_changed)
-        # ボタンは自然な幅のままにして、広いウインドウでも間延びさせない
-        for _btn in self.findChildren(QPushButton):
-            _btn.setSizePolicy(
-                QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         _sub_saved = settings.value("page_manager/sub_collapsed", False)
         self.set_sub_collapsed(
             _sub_saved in (True, 1, "true", "True", "1"), save=False)
@@ -842,7 +852,7 @@ class PageManager(QDockWidget):
             if self._sub_collapsed:
                 if len(sizes) == 2 and sizes[1] > 60:
                     self._splitter_sizes_open = sizes
-                self._splitter.setSizes([total, 0])
+                self._splitter.setSizes([max(0, total - 46), 46])
             elif self._splitter_sizes_open:
                 self._splitter.setSizes(self._splitter_sizes_open)
             else:
