@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<title>ふるさと納税 限度額シミュレーター（詳細版）｜令和8年分</title>
+<style>
+:root{
+--bg:#fdf8f0; --card:#ffffff; --ink:#3a3230; --muted:#8a7f78;
+--accent:#d96f32; --accent2:#b8501f; --line:#ead9c8; --soft:#fdf1e3;
+--ok:#2e7d4f; --warn:#b3261e;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font-family:"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP","Yu Gothic",sans-serif;
+line-height:1.75;font-size:16px}
+.wrap{max-width:880px;margin:0 auto;padding:20px 14px 60px}
+header.top{text-align:center;padding:18px 6px 6px}
+header.top h1{font-size:1.55rem;margin:0 0 6px;color:var(--accent2)}
+header.top p{margin:0;color:var(--muted);font-size:.92rem}
+.banner{background:#fdeceb;border:1.5px solid #e5a09b;border-radius:12px;
+padding:12px 16px;margin:16px 0;font-size:.9rem}
+.banner strong{color:var(--warn)}
+.card{background:var(--card);border:1.5px solid var(--line);border-radius:16px;
+padding:18px 18px 10px;margin:16px 0;box-shadow:0 2px 8px rgba(150,100,50,.06)}
+.card h2{font-size:1.12rem;margin:0 0 4px;color:var(--accent2);
+border-bottom:2px solid var(--soft);padding-bottom:6px}
+.card h2.step{display:inline-block;background:var(--accent);color:#fff;border-radius:999px;
+font-size:.78rem;padding:1px 10px;margin-right:8px;vertical-align:2px}
+.card.desc{color:var(--muted);font-size:.86rem;margin:2px 0 10px}
+.row{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:flex-end;
+padding:8px 0;border-bottom:1px dashed #f0e2d2}
+.row:last-child{border-bottom:none}
+.row label{flex:1 1 300px;font-size:.95rem}
+.row label small{display:block;color:var(--muted);font-size:.78rem;line-height:1.5}
+.inp{display:flex;align-items:center;gap:6px}
+.inp input[type=number]{width:170px;max-width:44vw;padding:9px 10px;font-size:1rem;
+border:1.5px solid var(--line);border-radius:10px;background:#fffdf9;text-align:right}
+.inp input[type=number]:focus{outline:2px solid var(--accent);border-color:transparent}
+.inp.unit{color:var(--muted);font-size:.85rem}
+.inp.man{color:var(--muted);font-size:.78rem;min-width:74px}
+select{padding:9px;border:1.5px solid var(--line);border-radius:10px;background:#fffdf9;font-size:.95rem}
+.counts{display:flex;gap:10px;flex-wrap:wrap}
+.counts.c{display:flex;flex-direction:column;gap:2px}
+.counts.c span{font-size:.8rem;color:var(--muted)}
+.counts input{width:76px;padding:8px;font-size:1rem;border:1.5px solid var(--line);
+border-radius:10px;text-align:right;background:#fffdf9}
+.radio-line{display:flex;gap:18px;flex-wrap:wrap;padding:6px 0}
+.radio-line label{display:flex;gap:6px;align-items:center;font-size:.95rem;cursor:pointer}
+.chk{display:flex;gap:8px;align-items:flex-start;padding:6px 0;font-size:.93rem;cursor:pointer}
+.chk input{margin-top:6px}
+.btn{display:block;width:100%;padding:16px;font-size:1.12rem;font-weight:700;color:#fff;
+background:var(--accent);border:none;border-radius:14px;cursor:pointer;margin:20px 0 6px}
+.btn:hover{background:var(--accent2)}
+.btn:active{transform:scale(.98)}
+.samples{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0}
+.samples button{padding:7px 12px;font-size:.82rem;border:1.5px solid var(--line);
+background:#fffdf9;border-radius:999px;cursor:pointer;color:var(--accent2)}
+.samples button:hover{background:var(--soft)}
+#result{display:none}
+.limit-box{background:var(--soft);border:2px solid var(--accent);border-radius:16px;
+text-align:center;padding:18px 12px;margin:6px 0 12px}
+.limit-box.cap{font-size:.9rem;color:var(--accent2)}
+.limit-box.amt{font-size:2.3rem;font-weight:800;color:var(--accent2);line-height:1.3}
+.limit-box.sub{font-size:.84rem;color:var(--muted)}
+table{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:.9rem}
+th,td{border-bottom:1px solid #f0e2d2;padding:6px 8px;text-align:right}
+th:first-child,td:first-child{text-align:left}
+thead th{background:var(--soft);color:var(--accent2);font-size:.84rem}
+td.note,th.note{text-align:left;color:var(--muted);font-size:.8rem}
+.total td{font-weight:700;background:#fffaf3}
+details{border:1.5px solid var(--line);border-radius:12px;margin:10px 0;background:#fff}
+details summary{cursor:pointer;padding:10px 14px;font-weight:700;color:var(--accent2);font-size:.95rem}
+details.in{padding:2px 14px 10px}
+.formula{background:#fffaf3;border:1px dashed var(--line);border-radius:10px;
+padding:10px 14px;font-size:.88rem;margin:8px 0;white-space:pre-wrap;word-break:break-word}
+.ok{color:var(--ok)}.warn-t{color:var(--warn)}
+.small{font-size:.82rem;color:var(--muted)}
+footer{color:var(--muted);font-size:.8rem;margin-top:26px}
+footer p{text-indent:1em;margin:6px 0}
+@media (max-width:560px){.limit-box.amt{font-size:1.8rem}.inp input[type=number]{width:140px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+<h1>🍊 ふるさと納税 限度額シミュレーター（詳細版）</h1>
+<p>令和8年分（2026年中の寄附）の計算です。所得や控除を細かく入れて、自己負担2,000円で済む寄附上限を計算します。</p>
+</header>
+
+<div class="banner">
+<strong></strong>これは試算のためのツールです。計算結果の正確性について責任は負えません。実際の控除額は、お住まいの市区町村から届く住民税の決定通知書でご確認ください。入力した内容はこのブラウザの中にだけあり、外部へ送信されることはありません。
+</div>
+
+<div class="card">
+<h2><span class="step">手順1</span>所得を入力してください</h2>
+<p class="desc">あてはまるものだけ入れてください。空欄は0として計算します。「所得金額」は、収入から経費などを引いたあとの金額です（源泉徴収票なら「給与所得控除後の金額」）。</p>
+
+<div class="row">
+<label>給与収入<small>源泉徴収票の「支払金額」。給与所得は自動で計算します。</small></label>
+<div class="inp"><input type="number" id="salaryRev" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>事業所得<small>自営業・フリーランスなど。収入ではなく所得金額を入れてください。</small></label>
+<div class="inp"><input type="number" id="businessInc" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>不動産所得<small>家賃収入など。収入ではなく所得金額を入れてください（赤字の場合はマイナス入力）。</small></label>
+<div class="inp"><input type="number" id="realestateInc" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>配当所得<small>株式の配当など、総合課税で申告する場合の所得金額。</small></label>
+<div class="inp"><input type="number" id="dividendInc" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>公的年金の収入<small>年金だけの方はこちら。年金に係る雑所得は自動で計算します。</small></label>
+<div class="inp"><input type="number" id="pensionRev" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>年金を受けている方の年齢区分</label>
+<div class="radio-line">
+<label><input type="radio" name="pensionAge" value="over" checked> 65歳以上</label>
+<label><input type="radio" name="pensionAge" value="under"> 65歳未満</label>
+</div>
+</div>
+<div class="row">
+<label>一時所得の受取額<small>保険の満期金など。特別控除50万円と2分の1課税を自動で計算します。</small></label>
+<div class="inp"><input type="number" id="ichijiAmount" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>その他の雑所得<small>上記以外の雑所得の所得金額（原稿料、暗号資産など）。</small></label>
+<div class="inp"><input type="number" id="otherMiscInc" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<p class="desc">※ 退職所得・山林所得・分離課税の譲渡所得（土地や株式の譲渡など）がある方は、このシミュレーターでは正確に計算できません。</p>
+</div>
+
+<div class="card">
+<h2><span class="step">手順2</span>家族と所得控除を入力してください</h2>
+<p class="desc">配偶者や扶養家族がいると控除が増え、上限額は下がります。正確な上限を知るために大切な部分です。</p>
+
+<div class="row">
+<label>配偶者はいますか</label>
+<div class="radio-line">
+<label><input type="radio" name="hasSpouse" value="no" checked> いない</label>
+<label><input type="radio" name="hasSpouse" value="yes"> いる</label>
+</div>
+</div>
+<div class="row" id="spouseIncRow" style="display:none">
+<label>配偶者の所得金額<small>給与だけなら「給与収入 − 給与所得控除」。目安：給与収入162万円なら所得は約88万円です。</small></label>
+<div class="inp"><input type="number" id="spouseInc" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<label class="chk" id="spouseElderlyRow" style="display:none"><input type="checkbox" id="spouseElderly"> 配偶者は70歳以上（老人控除対象配偶者）</label>
+
+<div class="row">
+<label>扶養家族の人数<small>配偶者は除きます。対象は合計所得が62万円以下の親族です。年齢区分ごとに人数を入れてください。</small></label>
+<div class="counts">
+<div class="c"><span>一般（16〜18歳・23〜69歳）</span><input type="number" id="fuyoIppan" min="0" value="0"></div>
+<div class="c"><span>特定（19〜22歳）</span><input type="number" id="fuyoTokutei" min="0" value="0"></div>
+<div class="c"><span>老人（70歳以上）</span><input type="number" id="fuyoRojin" min="0" value="0"></div>
+<div class="c"><span>同居老親等（70歳以上・同居）</span><input type="number" id="fuyoDokyo" min="0" value="0"></div>
+</div>
+</div>
+<div class="row">
+<label>特定親族特別控除の対象者<small>19〜22歳で、所得が62万円を超えて123万円以下の親族がいる場合、その方の所得金額を入れてください（2人まで）。扶養家族の「特定」とは重ねて数えません。</small></label>
+<div class="inp"><input type="number" id="tokutei1" min="0" placeholder="1人目"><span class="unit">円</span></div>
+<div class="inp"><input type="number" id="tokutei2" min="0" placeholder="2人目"><span class="unit">円</span></div>
+</div>
+
+<div class="row">
+<label>社会保険料控除<small>健康保険・年金・介護保険・雇用保険など、1年間に払った合計。源泉徴収票の「社会保険料等の金額」。自営業の方は国民健康保険料と国民年金の合計。</small></label>
+<div class="inp"><input type="number" id="socialInsurance" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>小規模企業共済等掛金控除<small>iDeCo（個人型確定拠出年金）の掛金など、1年間の合計。</small></label>
+<div class="inp"><input type="number" id="ideco" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>生命保険料（支払額）<small>控除額は自動で計算します。新・旧の区分ごとに1年間の支払額を入れてください。</small></label>
+<div class="counts">
+<div class="c"><span>新 一般生命</span><input type="number" id="lifeNewGen" min="0"></div>
+<div class="c"><span>旧 一般生命</span><input type="number" id="lifeOldGen" min="0"></div>
+<div class="c"><span>介護医療</span><input type="number" id="lifeMed" min="0"></div>
+<div class="c"><span>新 個人年金</span><input type="number" id="lifeNewPen" min="0"></div>
+<div class="c"><span>旧 個人年金</span><input type="number" id="lifeOldPen" min="0"></div>
+</div>
+</div>
+<div class="row">
+<label>地震保険料（支払額）<small>控除額は自動で計算します。</small></label>
+<div class="counts">
+<div class="c"><span>地震保険料</span><input type="number" id="quake" min="0"></div>
+<div class="c"><span>旧長期損害保険料</span><input type="number" id="quakeOldLong" min="0"></div>
+</div>
+</div>
+<div class="row">
+<label>所得金額調整控除<small>給与収入が850万円を超えて、子育て・介護などの要件にあてはまる方など。金額が分かる場合だけ入れてください。</small></label>
+<div class="inp"><input type="number" id="choseiInput" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>その他の所得控除<small>障害者控除・寡婦控除・ひとり親控除・勤労学生控除・雑損控除などがある場合、その合計額。所得税と住民税で金額が違う場合は分けて入れてください（住民税側が空欄なら所得税側と同じとして計算します）。</small></label>
+<div class="inp"><input type="number" id="otherDedIT" min="0" placeholder="所得税分"><span class="unit">円</span></div>
+<div class="inp"><input type="number" id="otherDedRT" min="0" placeholder="住民税分"><span class="unit">円</span></div>
+</div>
+</div>
+
+<div class="card">
+<h2><span class="step">手順3</span>医療費控除を入力してください</h2>
+<p class="desc">医療費控除があると税金が下がり、その分ふるさと納税の上限も下がります。ない方は空欄のままで大丈夫です。</p>
+<div class="row">
+<label>1年間に払った医療費の合計<small>病院・薬局・治療のための交通費など。</small></label>
+<div class="inp"><input type="number" id="medicalPaid" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>保険金などで補てんされた金額<small>生命保険の給付金、高額療養費、出産育児一時金など。</small></label>
+<div class="inp"><input type="number" id="medicalRefund" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<p class="desc">※ セルフメディケーション税制とは同時に使えません。このシミュレーターは通常の医療費控除で計算します。</p>
+</div>
+
+<div class="card">
+<h2><span class="step">手順4</span>住宅ローン控除を入力してください</h2>
+<p class="desc">住宅ローン控除を受けていると、所得税や住民税がすでに差し引かれている分、ふるさと納税の上限が下がります。ない方は空欄のままで大丈夫です。住宅ローン控除で所得税がほぼ0になる方は、ワンストップ特例のほうが上限が高くなる場合があります。手順5で切り替えて比べてみてください。</p>
+<div class="row">
+<label>住宅ローンの年末残高</label>
+<div class="inp"><input type="number" id="housingBalance" min="0" inputmode="numeric"><span class="unit">円</span><span class="man"></span></div>
+</div>
+<div class="row">
+<label>借入限度額の区分<small>入居した年と住宅の種類で決まります。分からない場合は「3,000万円」を選んでください。</small></label>
+<select id="housingCap">
+<option value="50000000">5,000万円（認定長期優良住宅など）</option>
+<option value="45000000">4,500万円（ZEH水準省エネ住宅など）</option>
+<option value="40000000">4,000万円（省エネ基準適合住宅など）</option>
+<option value="30000000" selected>3,000万円（その他の新築・中古など）</option>
+<option value="20000000">2,000万円（既存住宅など）</option>
+</select>
+</div>
+<div class="row">
+<label>入居の時期<small>住民税から差し引ける上限の計算に使います。</small></label>
+<div class="radio-line">
+<label><input type="radio" name="housingEra" value="other" checked> 2022年以降の入居（または2014年3月以前）</label>
+<label><input type="radio" name="housingEra" value="tokutei"> 2014年4月〜2021年12月の入居（消費税8%・10%で取得）</label>
+</div>
+</div>
+<label class="chk"><input type="checkbox" id="housingDirectChk"> 控除可能額が分かっているので、金額を直接入力する
+<span class="inp" id="housingDirectWrap" style="display:none"><input type="number" id="housingPotentialDirect" min="0"><span class="unit">円</span></span>
+</label>
+</div>
+
+<div class="card">
+<h2><span class="step">手順5</span>手続きの方法を選んでください</h2>
+<div class="radio-line">
+<label><input type="radio" name="method" value="kakutei" checked> 確定申告をする</label>
+<label><input type="radio" name="method" value="onestop"> ワンストップ特例を使う</label>
+</div>
+<p class="desc">ワンストップ特例は、確定申告をしない給与所得者などで、寄附先が5団体以内の方が使えます。控除のされ方は違いますが、通常は上限額の目安はほぼ同じになります（住宅ローン控除がある場合は、手順4の注意も見てください）。</p>
+</div>
+
+<button class="btn" id="calcBtn">限度額を計算する</button>
+<div class="samples">
+<span class="small">入力例：</span>
+<button type="button" data-sample="a">給与700万円・独身</button>
+<button type="button" data-sample="b">給与500万円・夫婦＋子1人</button>
+<button type="button" data-sample="c">給与700万円・住宅ローン控除あり</button>
+<button type="button" data-sample="d">事業所得400万円・自営業</button>
+</div>
+
+<div id="result"></div>
+
+<footer>
+<p>このシミュレーターは令和8年分（2026年中の寄附）に対応しています。2027年中の寄附からは、住民税の特例控除に合計193万円の定額上限が加わる改正が予定されています。</p>
+<p>計算の前提：住民税の所得割は一律10%（都道府県分＋市区町村分）で計算しています。政令指定都市にお住まいでも合計は10%で同じです。均等割は上限額に影響しないため計算に入れていません。</p>
+<p>対象外：退職所得、山林所得、分離課税の譲渡所得、利子所得（源泉分離）がある場合や、配当の申告方法によっては、結果が実際と異なります。</p>
+</footer>
+
+</div>
+
+<script>
+"use strict";
+/* =========================================================================
+   ふるさと納税 限度額シミュレーター（詳細版）計算エンジン
+   令和8年分（2026年中の寄附）／住民税は令和9年度分
+   方針：寄附額Dに対する実際の税額を「寄附なし」と「寄附あり」で再計算し、
+   減税額が（D－2,000円）に届く最大のDを探索する（住宅ローン控除などの
+   税額控除との干渉を、近似式ではなく実計算で扱うため）。
+   ========================================================================= */
+const N = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+const floor1000 = v => Math.floor(v / 1000) * 1000;
+const floor100 = v => Math.floor(v / 100) * 100;
+const fmt = v => Math.round(v).toLocaleString("ja-JP");
+
+/* ---- 給与所得（令和8年分・検証済みの年末調整ロジックと同一） ---- */
+function calcSalaryIncomeR8(rev) {
+  const r = N(rev);
+  if (r <= 740999) return 0;
+  if (r < 2191000) return r - 740000;
+  if (r < 2193000) return 1451000;
+  if (r < 2196000) return 1453000;
+  if (r < 2200000) return 1456000;
+  if (r <= 3599999) { const b = Math.floor(r / 4000) * 1000; return Math.max(0, (b * 28 - 800000) / 10); }
+  if (r <= 6599999) { const b = Math.floor(r / 4000) * 1000; return Math.max(0, (b * 32 - 4400000) / 10); }
+  if (r <= 8499999) return Math.max(0, Math.floor(r * 9 / 10) - 1100000);
+  return Math.max(0, r - 1950000);
+}
+/* ---- 基礎控除（所得税・令和8年分、検証済みロジックと同一） ---- */
+function calcKisoR8(totalIncome) {
+  const inc = N(totalIncome);
+  if (inc <= 4890000) return 1040000;
+  if (inc <= 6550000) return 670000;
+  if (inc <= 10000000) return 620000;
+  if (inc <= 23500000) return 620000;
+  if (inc <= 24000000) return 480000;
+  if (inc <= 24500000) return 320000;
+  if (inc <= 25000000) return 160000;
+  return 0;
+}
+/* ---- 配偶者控除・配偶者特別控除（所得税・令和8年分、検証済みロジックと同一） ---- */
+function calcSpouseR8(selfIncome, spIncome, hasSpouse, isElderly) {
+  if (!hasSpouse) return { total: 0, label: "配偶者なし" };
+  const sInc = N(selfIncome), pInc = N(spIncome);
+  if (sInc > 10000000) return { total: 0, label: "対象外（本人の合計所得が1,000万円超）" };
+  const col = sInc <= 9000000 ? 0 : sInc <= 9500000 ? 1 : 2;
+  if (pInc <= 620000) {
+    const t = isElderly ? [480000, 320000, 160000] : [380000, 260000, 130000];
+    return { total: t[col], label: isElderly ? "配偶者控除（老人）" : "配偶者控除" };
+  }
+  if (pInc <= 1330000) {
+    const brackets = [
+      [950000, [380000, 260000, 130000]], [1000000, [360000, 240000, 120000]],
+      [1050000, [310000, 210000, 110000]], [1100000, [260000, 180000, 90000]],
+      [1150000, [210000, 140000, 70000]], [1200000, [160000, 110000, 60000]],
+      [1250000, [110000, 80000, 40000]], [1300000, [60000, 40000, 20000]],
+      [1330000, [30000, 20000, 10000]]
+    ];
+    for (const [max, vals] of brackets) if (pInc <= max) return { total: vals[col], label: "配偶者特別控除" };
+  }
+  return { total: 0, label: "対象外（配偶者の合計所得が133万円超）" };
+}
+/* ---- 配偶者控除・配偶者特別控除（住民税） ---- */
+function calcSpouseRT(selfIncome, spIncome, hasSpouse, isElderly) {
+  if (!hasSpouse) return { total: 0, label: "配偶者なし" };
+  const sInc = N(selfIncome), pInc = N(spIncome);
+  if (sInc > 10000000) return { total: 0, label: "対象外（本人の合計所得が1,000万円超）" };
+  const col = sInc <= 9000000 ? 0 : sInc <= 9500000 ? 1 : 2;
+  if (pInc <= 620000) {
+    const t = isElderly ? [380000, 260000, 130000] : [330000, 220000, 110000];
+    return { total: t[col], label: isElderly ? "配偶者控除（老人）" : "配偶者控除" };
+  }
+  if (pInc <= 1330000) {
+    const brackets = [
+      [1000000, [330000, 220000, 110000]], [1050000, [310000, 210000, 110000]],
+      [1100000, [260000, 180000, 90000]], [1150000, [210000, 140000, 70000]],
+      [1200000, [160000, 110000, 60000]], [1250000, [110000, 80000, 40000]],
+      [1300000, [60000, 40000, 20000]], [1330000, [30000, 20000, 10000]]
+    ];
+    for (const [max, vals] of brackets) if (pInc <= max) return { total: vals[col], label: "配偶者特別控除" };
+  }
+  return { total: 0, label: "対象外（配偶者の合計所得が133万円超）" };
+}
+/* ---- 生命保険料控除（所得税・標準計算） ---- */
+function lifeNewIT(a) { a = N(a); return a <= 0 ? 0 : a <= 20000 ? a : a <= 40000 ? Math.ceil(a * 0.5 + 10000) : a <= 80000 ? Math.ceil(a * 0.25 + 20000) : 40000; }
+function lifeOldIT(a) { a = N(a); return a <= 0 ? 0 : a <= 25000 ? a : a <= 50000 ? Math.ceil(a * 0.5 + 12500) : a <= 100000 ? Math.ceil(a * 0.25 + 25000) : 50000; }
+function lifeCategoryIT(newAmt, oldAmt) {
+  const n = lifeNewIT(newAmt), o = lifeOldIT(oldAmt);
+  if (newAmt > 0 && oldAmt > 0) return Math.max(o, Math.min(40000, n + o));
+  return newAmt > 0 ? n : o;
+}
+/* ---- 生命保険料控除（住民税） ---- */
+function lifeNewRT(a) { a = N(a); return a <= 0 ? 0 : a <= 12000 ? a : a <= 32000 ? Math.ceil(a * 0.5 + 6000) : a <= 56000 ? Math.ceil(a * 0.25 + 14000) : 28000; }
+function lifeOldRT(a) { a = N(a); return a <= 0 ? 0 : a <= 15000 ? a : a <= 40000 ? Math.ceil(a * 0.5 + 7500) : a <= 70000 ? Math.ceil(a * 0.25 + 17500) : 35000; }
+function lifeCategoryRT(newAmt, oldAmt) {
+  const n = lifeNewRT(newAmt), o = lifeOldRT(oldAmt);
+  if (newAmt > 0 && oldAmt > 0) return Math.max(o, Math.min(28000, n + o));
+  return newAmt > 0 ? n : o;
+}
+/* ---- 地震保険料控除 ---- */
+function quakeIT(quake, oldLong) {
+  const q = Math.min(50000, N(quake));
+  const o = N(oldLong); const od = o <= 0 ? 0 : o <= 10000 ? o : o <= 20000 ? Math.ceil(o * 0.5 + 5000) : 15000;
+  return Math.min(50000, q + od);
+}
+function quakeRT(quake, oldLong) {
+  const q = Math.min(25000, N(quake) * 0.5);
+  /* 旧長期損害保険料（住民税）：5,000円以下は全額、15,000円以下は×1/2＋2,500円、上限10,000円 */
+  const o = N(oldLong); const od = o <= 0 ? 0 : o <= 5000 ? o : o <= 15000 ? Math.ceil(o * 0.5 + 2500) : 10000;
+  return Math.min(25000, q + od);
+}
+/* ---- 特定親族特別控除（19〜22歳・所得62万円超123万円以下） ---- */
+function tokuteiIT(inc) {
+  inc = N(inc);
+  if (inc <= 620000 || inc > 1230000) return 0;
+  const t = [[850000, 630000], [900000, 610000], [950000, 510000], [1000000, 410000], [1050000, 310000], [1100000, 210000], [1150000, 110000], [1200000, 60000], [1230000, 30000]];
+  for (const [max, amt] of t) if (inc <= max) return amt;
+  return 0;
+}
+function tokuteiRT(inc) {
+  inc = N(inc);
+  if (inc <= 620000 || inc > 1230000) return 0;
+  const t = [[950000, 450000], [1000000, 410000], [1050000, 310000], [1100000, 210000], [1150000, 110000], [1200000, 60000], [1230000, 30000]];
+  for (const [max, amt] of t) if (inc <= max) return amt;
+  return 0;
+}
+/* ---- 公的年金等に係る雑所得 ---- */
+function pensionIncome(rev, over65, otherTotalIncome) {
+  const r = N(rev); if (r <= 0) return 0;
+  let ded;
+  if (over65) {
+    ded = r <= 3300000 ? 1100000 : r <= 4100000 ? r * 0.25 + 275000 : r <= 7700000 ? r * 0.15 + 685000 : r <= 10000000 ? r * 0.05 + 1455000 : 1955000;
+  } else {
+    ded = r <= 1300000 ? 600000 : r <= 4100000 ? r * 0.25 + 275000 : r <= 7700000 ? r * 0.15 + 685000 : r <= 10000000 ? r * 0.05 + 1455000 : 1955000;
+  }
+  if (otherTotalIncome > 20000000) ded -= 200000; else if (otherTotalIncome > 10000000) ded -= 100000;
+  return Math.max(0, Math.floor(r - ded));
+}
+/* ---- 所得税の税率表 ---- */
+const IT_BRACKETS = [
+  [1950000, 0.05, 0], [3300000, 0.10, 97500], [6950000, 0.20, 427500],
+  [9000000, 0.23, 636000], [18000000, 0.33, 1536000], [40000000, 0.40, 2796000],
+  [Infinity, 0.45, 4796000]
+];
+function incomeTaxOn(taxable) {
+  if (taxable <= 0) return 0;
+  for (const [max, rate, ded] of IT_BRACKETS) if (taxable <= max) return Math.floor(taxable * rate - ded);
+  return 0;
+}
+function marginalRateOf(amount) {
+  for (const [max, rate] of IT_BRACKETS) if (amount <= max) return rate;
+  return 0.45;
+}
+
+/* ================= 入力から派生値をまとめる ================= */
+function buildDerived(inp) {
+  const salaryInc = calcSalaryIncomeR8(inp.salaryRev);
+  const pensionIncPre = pensionIncome(inp.pensionRev, inp.pensionOver65, 0);
+  const otherNoPension = salaryInc + N(inp.businessInc) + N(inp.realestateInc) + N(inp.dividendInc)
+    + Math.max(0, N(inp.ichijiAmount) - 500000) / 2 + N(inp.otherMiscInc);
+  const pensionInc = pensionIncome(inp.pensionRev, inp.pensionOver65, otherNoPension);
+  const ichijiInc = Math.max(0, N(inp.ichijiAmount) - 500000) / 2;
+  const totalIncome = salaryInc + N(inp.businessInc) + N(inp.realestateInc) + N(inp.dividendInc)
+    + pensionInc + ichijiInc + N(inp.otherMiscInc);
+
+  /* 医療費控除 */
+  const medBase = Math.max(0, N(inp.medicalPaid) - N(inp.medicalRefund));
+  const medical = Math.min(2000000, Math.max(0, medBase - Math.min(100000, Math.floor(totalIncome * 0.05))));
+
+  /* 配偶者・扶養など */
+  const spouseIT = calcSpouseR8(totalIncome, inp.spouseInc, inp.hasSpouse, inp.spouseElderly);
+  const spouseRT = calcSpouseRT(totalIncome, inp.spouseInc, inp.hasSpouse, inp.spouseElderly);
+  const tokuteiList = (inp.tokuteiIncomes || []).filter(v => N(v) > 0);
+  const tokIT = tokuteiList.reduce((s, v) => s + tokuteiIT(v), 0);
+  const tokRT = tokuteiList.reduce((s, v) => s + tokuteiRT(v), 0);
+  const fuyoIT = N(inp.fuyoIppan) * 380000 + N(inp.fuyoTokutei) * 630000 + N(inp.fuyoRojin) * 480000 + N(inp.fuyoDokyo) * 580000;
+  const fuyoRT = N(inp.fuyoIppan) * 330000 + N(inp.fuyoTokutei) * 450000 + N(inp.fuyoRojin) * 380000 + N(inp.fuyoDokyo) * 450000;
+
+  /* 保険料控除 */
+  const lifeIT = Math.min(120000,
+    lifeCategoryIT(inp.lifeNewGen, inp.lifeOldGen) + lifeNewIT(inp.lifeMed) + lifeCategoryIT(inp.lifeNewPen, inp.lifeOldPen));
+  const lifeRT = Math.min(70000,
+    lifeCategoryRT(inp.lifeNewGen, inp.lifeOldGen) + Math.min(28000, lifeNewRT(inp.lifeMed)) + lifeCategoryRT(inp.lifeNewPen, inp.lifeOldPen));
+  const qIT = quakeIT(inp.quake, inp.quakeOldLong);
+  const qRT = quakeRT(inp.quake, inp.quakeOldLong);
+
+  const kisoIT = calcKisoR8(totalIncome);
+  const kisoRT = totalIncome <= 24000000 ? 430000 : totalIncome <= 24500000 ? 290000 : totalIncome <= 25000000 ? 150000 : 0;
+
+  const otherDedIT = N(inp.otherDedIT);
+  const otherDedRT = inp.otherDedRT === "" || inp.otherDedRT === null || inp.otherDedRT === undefined ? otherDedIT : N(inp.otherDedRT);
+
+  const common = N(inp.socialInsurance) + N(inp.ideco) + medical + N(inp.choseiInput);
+  const dedIT = common + lifeIT + qIT + spouseIT.total + tokIT + fuyoIT + kisoIT + otherDedIT;
+  const dedRT = common + lifeRT + qRT + spouseRT.total + tokRT + fuyoRT + kisoRT + otherDedRT;
+
+  /* 人的控除の差額（調整控除・特例割合の判定に使う）
+     基礎控除の差額は、実際の控除額の差ではなく法定の一律5万円（地方税法の定め）。
+     配偶者・扶養などは法定の差額表どおり（＝所得税と住民税の控除額の差と一致）。 */
+  const kisoDiff = (kisoIT > 0 || kisoRT > 0) ? 50000 : 0;
+  const personalDiff = kisoDiff + (spouseIT.total - spouseRT.total) + (tokIT - tokRT)
+    + N(inp.fuyoIppan) * 50000 + N(inp.fuyoTokutei) * 180000 + N(inp.fuyoRojin) * 100000 + N(inp.fuyoDokyo) * 130000
+    + (otherDedIT - otherDedRT);
+  /* 特例控除の割合を決める「人的控除差調整額」＝ 調整控除と同じ差額の合計
+     ＋ 所得税の基礎控除が48万円を超える部分（令和8年度住民税から適用の定義） */
+  const hanteiDiff = personalDiff + Math.max(0, kisoIT - 480000);
+
+  /* 住宅ローン控除の可能額 */
+  let housingPotential = 0;
+  if (inp.housingDirect) housingPotential = N(inp.housingPotentialDirect);
+  else if (N(inp.housingBalance) > 0) housingPotential = Math.floor(Math.min(N(inp.housingBalance), N(inp.housingCap)) * 0.007);
+  const housingRTcapRate = inp.housingEra === "tokutei" ? { rate: 0.07, cap: 136500 } : { rate: 0.05, cap: 97500 };
+
+  return {
+    salaryInc, pensionInc, ichijiInc, totalIncome, medical,
+    spouseIT, spouseRT, tokIT, tokRT, fuyoIT, fuyoRT, lifeIT, lifeRT, qIT, qRT,
+    kisoIT, kisoRT, otherDedIT, otherDedRT, dedIT, dedRT, personalDiff,
+    housingPotential, housingRTcapRate, hanteiDiff
+  };
+}
+
+/* ================= 税額の再計算（寄附額Dを引数に取る） ================= */
+function computeTaxes(inp, der, D) {
+  const onestop = inp.method === "onestop";
+  /* --- 所得税 --- */
+  const donIT = onestop ? 0 : Math.max(0, Math.min(D, Math.floor(der.totalIncome * 0.4)) - (D > 0 ? 2000 : 0));
+  const taxableIT = floor1000(Math.max(0, der.totalIncome - der.dedIT - (D > 0 && !onestop ? donIT : 0)));
+  const taxBefore = incomeTaxOn(taxableIT);
+  const creditsIT = der.housingPotential + N(inp.otherTaxCreditIT);
+  const taxAfterCredit = Math.max(0, taxBefore - creditsIT);
+  const housingUnused = Math.max(0, der.housingPotential - taxBefore);
+  const itFinal = floor100(taxAfterCredit * 1.021);
+
+  /* --- 住民税 --- */
+  const taxableRT = floor1000(Math.max(0, der.totalIncome - der.dedRT));
+  const shotokuRaw = Math.floor(taxableRT * 0.10);
+  let chosei = 0;
+  if (der.personalDiff > 0 && der.totalIncome <= 25000000) {
+    if (taxableRT <= 2000000) chosei = Math.floor(Math.min(der.personalDiff, taxableRT) * 0.05);
+    else chosei = Math.floor(Math.max(der.personalDiff - (taxableRT - 2000000), 50000) * 0.05);
+  }
+  const shotokuAfterChosei = Math.max(0, shotokuRaw - chosei);
+  const housingRT = Math.min(housingUnused,
+    Math.min(Math.floor(taxableIT * der.housingRTcapRate.rate), der.housingRTcapRate.cap));
+  const shotokuAfterCredits = Math.max(0, shotokuAfterChosei - housingRT);
+
+  /* 寄附金控除（住民税） */
+  const targetDon = Math.min(D, Math.floor(der.totalIncome * 0.3));
+  const donBase = Math.max(0, targetDon - (D > 0 ? 2000 : 0));
+  const basic = Math.floor(donBase * 0.10);
+  const hantei = taxableRT - der.hanteiDiff;
+  const mRate = hantei <= 0 ? 0 : marginalRateOf(hantei);
+  const tokureiRate = hantei <= 0 ? 0.90 : 0.9 - mRate * 1.021;
+  const tokureiCap = Math.floor(shotokuAfterChosei * 0.2);
+  const tokureiRaw = Math.floor(donBase * tokureiRate);
+  const tokurei = Math.min(tokureiRaw, tokureiCap);
+  /* 申告特例控除 ＝ 特例控除額 ×（限界税率×1.021）÷ 特例控除の割合（総務省・自治体の計算式） */
+  const shinkokuTokurei = onestop && tokureiRate > 0 ? Math.floor(tokurei * (mRate * 1.021) / tokureiRate) : 0;
+  const rtTotal = Math.max(0, shotokuAfterCredits - basic - tokurei - shinkokuTokurei);
+
+  return {
+    taxableIT, taxBefore, taxAfterCredit, housingUnused, itFinal,
+    taxableRT, shotokuRaw, chosei, shotokuAfterChosei, housingRT, shotokuAfterCredits,
+    basic, tokurei, tokureiRaw, tokureiCap, tokureiRate, mRate, hantei, shinkokuTokurei,
+    rtTotal: floor100(rtTotal)
+  };
+}
+function benefitOf(inp, der, base, D) {
+  if (D <= 2000) return 0;
+  const t = computeTaxes(inp, der, D);
+  return (base.itFinal - t.itFinal) + (base.rtTotal - t.rtTotal);
+}
+function findLimit(inp, der) {
+  const base = computeTaxes(inp, der, 0);
+  if (base.rtTotal <= 0 && base.itFinal <= 0) return { limit: 0, base };
+  /* 税額の100円未満切捨てなどで、小さい寄附額では減税額が数百円ずれる。
+     判定に300円の許容を持たせ、最後に厳密な判定で近傍を詰める。 */
+  const ok = D => benefitOf(inp, der, base, D) >= D - 2000 - 300;
+  const okStrict = D => benefitOf(inp, der, base, D) >= D - 2000;
+  let lo = 2000, hi = 100000;
+  if (ok(hi)) {
+    while (ok(hi) && hi < 300000000) { lo = hi; hi *= 2; }
+  }
+  while (hi - lo > 1) { const mid = Math.floor((lo + hi) / 2); if (ok(mid)) lo = mid; else hi = mid; }
+  /* 二分探索の近傍を100円刻みで走査し、厳密な判定で届く最大を探す */
+  let best = 0;
+  for (let d = Math.max(2000, lo - 300000); d <= lo + 300000; d += 100) if (okStrict(d)) best = Math.max(best, d);
+  if (best === 0) best = lo;
+  return { limit: best, base };
+}
+</script>
+
+<script>
+"use strict";
+/* ================= UI ================= */
+const $ = id => document.getElementById(id);
+const val = id => N($(id).value);
+const man = v => v === 0 ? "" : "約" + (Math.round(v / 1000) / 10).toLocaleString("ja-JP") + "万円";
+
+document.querySelectorAll(".inp input[type=number]").forEach(el => {
+  el.addEventListener("input", () => {
+    const m = el.parentElement.querySelector(".man");
+    if (m) m.textContent = man(N(el.value));
+  });
+});
+function syncSpouse() {
+  const yes = document.querySelector('input[name="hasSpouse"]:checked').value === "yes";
+  $("spouseIncRow").style.display = yes ? "" : "none";
+  $("spouseElderlyRow").style.display = yes ? "" : "none";
+}
+document.querySelectorAll('input[name="hasSpouse"]').forEach(r => r.addEventListener("change", syncSpouse));
+$("housingDirectChk").addEventListener("change", () => {
+  $("housingDirectWrap").style.display = $("housingDirectChk").checked ? "" : "none";
+});
+
+function readInputs() {
+  return {
+    salaryRev: val("salaryRev"), businessInc: val("businessInc"), realestateInc: val("realestateInc"),
+    dividendInc: val("dividendInc"), pensionRev: val("pensionRev"),
+    pensionOver65: document.querySelector('input[name="pensionAge"]:checked').value === "over",
+    ichijiAmount: val("ichijiAmount"), otherMiscInc: val("otherMiscInc"),
+    hasSpouse: document.querySelector('input[name="hasSpouse"]:checked').value === "yes",
+    spouseInc: val("spouseInc"), spouseElderly: $("spouseElderly").checked,
+    fuyoIppan: val("fuyoIppan"), fuyoTokutei: val("fuyoTokutei"), fuyoRojin: val("fuyoRojin"), fuyoDokyo: val("fuyoDokyo"),
+    tokuteiIncomes: [val("tokutei1"), val("tokutei2")],
+    socialInsurance: val("socialInsurance"), ideco: val("ideco"),
+    lifeNewGen: val("lifeNewGen"), lifeOldGen: val("lifeOldGen"), lifeMed: val("lifeMed"),
+    lifeNewPen: val("lifeNewPen"), lifeOldPen: val("lifeOldPen"),
+    quake: val("quake"), quakeOldLong: val("quakeOldLong"),
+    choseiInput: val("choseiInput"),
+    otherDedIT: $("otherDedIT").value === "" ? 0 : N($("otherDedIT").value),
+    otherDedRT: $("otherDedRT").value === "" ? "" : N($("otherDedRT").value),
+    medicalPaid: val("medicalPaid"), medicalRefund: val("medicalRefund"),
+    housingBalance: val("housingBalance"), housingCap: N($("housingCap").value),
+    housingEra: document.querySelector('input[name="housingEra"]:checked').value,
+    housingDirect: $("housingDirectChk").checked, housingPotentialDirect: val("housingPotentialDirect"),
+    otherTaxCreditIT: 0,
+    method: document.querySelector('input[name="method"]:checked').value
+  };
+}
+
+const SAMPLES = {
+  a: { salaryRev: 7000000, socialInsurance: 1050000 },
+  b: { salaryRev: 5000000, socialInsurance: 750000, hasSpouse: true, spouseInc: 0, fuyoIppan: 1 },
+  c: { salaryRev: 7000000, socialInsurance: 1050000, housingBalance: 30000000, housingCap: 30000000 },
+  d: { businessInc: 4000000, socialInsurance: 700000 }
+};
+function clearAll() {
+  document.querySelectorAll("input[type=number]").forEach(el => { el.value = ""; el.dispatchEvent(new Event("input")); });
+  ["fuyoIppan", "fuyoTokutei", "fuyoRojin", "fuyoDokyo"].forEach(id => { $(id).value = 0; });
+  document.querySelector('input[name="hasSpouse"][value="no"]').checked = true;
+  $("spouseElderly").checked = false;
+  $("housingDirectChk").checked = false; $("housingDirectWrap").style.display = "none";
+  document.querySelector('input[name="method"][value="kakutei"]').checked = true;
+  syncSpouse();
+}
+function setNum(id, v) { if (v !== undefined) { $(id).value = v; $(id).dispatchEvent(new Event("input")); } }
+document.querySelectorAll("[data-sample]").forEach(btn => btn.addEventListener("click", () => {
+  clearAll();
+  const s = SAMPLES[btn.dataset.sample];
+  setNum("salaryRev", s.salaryRev); setNum("businessInc", s.businessInc);
+  setNum("socialInsurance", s.socialInsurance);
+  if (s.hasSpouse) { document.querySelector('input[name="hasSpouse"][value="yes"]').checked = true; syncSpouse(); setNum("spouseInc", s.spouseInc); }
+  if (s.fuyoIppan) $("fuyoIppan").value = s.fuyoIppan;
+  if (s.housingBalance) setNum("housingBalance", s.housingBalance);
+  if (s.housingCap) $("housingCap").value = String(s.housingCap);
+  $("calcBtn").click();
+  window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+}));
+
+function row(label, v, note) {
+  return "<tr><td>" + label + "</td><td>" + (v === null ? "―" : fmt(v) + " 円") + "</td>" +
+    (note !== undefined ? "<td class='note'>" + note + "</td>" : "") + "</tr>";
+}
+
+$("calcBtn").addEventListener("click", () => {
+  const inp = readInputs();
+  const der = buildDerived(inp);
+  const res = $("result");
+  if (der.totalIncome <= 0) {
+    res.style.display = "block";
+    res.innerHTML = "<div class='card'><h2>計算結果</h2><p>所得が入力されていません。手順1で所得を入力してから計算してください。</p></div>";
+    return;
+  }
+  const { limit, base } = findLimit(inp, der);
+  const atLimit = computeTaxes(inp, der, Math.max(limit, 0));
+  const itPart = base.itFinal - atLimit.itFinal;
+  const rtPart = base.rtTotal - atLimit.rtTotal;
+  const headline = Math.floor(limit / 1000) * 1000;
+
+  /* 影響の比較（住宅ローン控除なし／医療費控除なし） */
+  let housingImpact = null, medicalImpact = null;
+  if (der.housingPotential > 0) {
+    const inp2 = Object.assign({}, inp, { housingBalance: 0, housingPotentialDirect: 0 });
+    const der2 = buildDerived(inp2);
+    housingImpact = findLimit(inp2, der2).limit - limit;
+  }
+  if (der.medical > 0) {
+    const inp3 = Object.assign({}, inp, { medicalPaid: 0, medicalRefund: 0 });
+    const der3 = buildDerived(inp3);
+    medicalImpact = findLimit(inp3, der3).limit - limit;
+  }
+
+  let html = "";
+  html += "<div class='card'><h2>計算結果</h2>";
+  if (limit <= 2000) {
+    html += "<div class='limit-box'><div class='cap'>自己負担2,000円で済む寄附の上限</div>" +
+      "<div class='amt'>0 円</div>" +
+      "<div class='sub'>住民税の所得割がかからない（またはごく小さい）ため、ふるさと納税をしても税金はほとんど戻りません。寄附をすると、ほぼ全額が自己負担になります。</div></div>";
+  } else {
+    html += "<div class='limit-box'><div class='cap'>自己負担2,000円で済む寄附の上限（1,000円単位）</div>" +
+      "<div class='amt'>" + fmt(headline) + " 円</div>" +
+      "<div class='sub'>計算上の上限は " + fmt(limit) + " 円です。この金額までなら、寄附額から2,000円を引いた全額が、所得税の還付と翌年度の住民税の減額で戻ります。</div></div>";
+    html += "<table><thead><tr><th>上限額での控除の内訳</th><th>金額</th></tr></thead><tbody>" +
+      row("所得税から戻る分", itPart) +
+      row("住民税から引かれる分（基本分＋特例分" + (inp.method === "onestop" ? "＋申告特例分" : "") + "）", rtPart) +
+      "<tr class='total'><td>戻る合計</td><td>" + fmt(itPart + rtPart) + " 円</td></tr>" +
+      row("自己負担", Math.max(0, limit - (itPart + rtPart))) +
+      "</tbody></table>";
+  }
+  if (housingImpact !== null && housingImpact > 0) {
+    html += "<p>🏠 <strong>住宅ローン控除の影響</strong>：住宅ローン控除を受けているため、上限額は控除がない場合より約 <strong>" + fmt(Math.floor(housingImpact / 1000) * 1000) + " 円</strong> 低くなっています。</p>";
+  }
+  if (medicalImpact !== null && medicalImpact > 0) {
+    html += "<p>🏥 <strong>医療費控除の影響</strong>：医療費控除（" + fmt(der.medical) + " 円）があるため、上限額は控除がない場合より約 <strong>" + fmt(Math.floor(medicalImpact / 1000) * 1000) + " 円</strong> 低くなっています。</p>";
+  }
+
+  /* ===== 計算の根拠 ===== */
+  html += "<h2 style='margin-top:18px'>計算の根拠</h2>";
+
+  html += "<details open><summary>① 所得の計算</summary><div class='in'><table><tbody>";
+  if (inp.salaryRev > 0) html += row("給与所得", der.salaryInc, "給与収入 " + fmt(inp.salaryRev) + " 円から給与所得控除を引いた金額（令和8年分）");
+  if (inp.businessInc) html += row("事業所得", inp.businessInc, "");
+  if (inp.realestateInc) html += row("不動産所得", inp.realestateInc, "");
+  if (inp.dividendInc) html += row("配当所得", inp.dividendInc, "総合課税として計算");
+  if (inp.pensionRev > 0) html += row("雑所得（公的年金）", der.pensionInc, "年金収入 " + fmt(inp.pensionRev) + " 円から公的年金等控除を引いた金額");
+  if (inp.ichijiAmount > 0) html += row("一時所得", der.ichijiInc, "（受取額 " + fmt(inp.ichijiAmount) + " 円 － 特別控除50万円）× 2分の1");
+  if (inp.otherMiscInc) html += row("その他の雑所得", inp.otherMiscInc, "");
+  html += "<tr class='total'><td>合計所得金額</td><td>" + fmt(der.totalIncome) + " 円</td></tr>";
+  html += "</tbody></table></div></details>";
+
+  html += "<details><summary>② 所得控除の内訳（所得税と住民税で金額が違います）</summary><div class='in'>" +
+    "<table><thead><tr><th>控除の種類</th><th>所得税</th><th>住民税</th></tr></thead><tbody>";
+  const drow = (label, a, b) => "<tr><td>" + label + "</td><td>" + fmt(a) + " 円</td><td>" + fmt(b) + " 円</td></tr>";
+  html += drow("社会保険料控除", N(inp.socialInsurance), N(inp.socialInsurance));
+  html += drow("小規模企業共済等掛金控除（iDeCoなど）", N(inp.ideco), N(inp.ideco));
+  html += drow("生命保険料控除", der.lifeIT, der.lifeRT);
+  html += drow("地震保険料控除", der.qIT, der.qRT);
+  html += drow("医療費控除", der.medical, der.medical);
+  html += drow(der.spouseIT.label === der.spouseRT.label ? der.spouseIT.label : "配偶者控除・配偶者特別控除", der.spouseIT.total, der.spouseRT.total);
+  html += drow("特定親族特別控除", der.tokIT, der.tokRT);
+  html += drow("扶養控除", der.fuyoIT, der.fuyoRT);
+  html += drow("基礎控除", der.kisoIT, der.kisoRT);
+  if (inp.choseiInput) html += drow("所得金額調整控除", N(inp.choseiInput), N(inp.choseiInput));
+  if (der.otherDedIT || der.otherDedRT) html += drow("その他の所得控除", der.otherDedIT, der.otherDedRT);
+  html += "<tr class='total'><td>所得控除の合計</td><td>" + fmt(der.dedIT) + " 円</td><td>" + fmt(der.dedRT) + " 円</td></tr>";
+  html += "</tbody></table>";
+  html += "<p class='small'>医療費控除 ＝ 支払った医療費 " + fmt(N(inp.medicalPaid)) + " 円 － 補てん額 " + fmt(N(inp.medicalRefund)) + " 円 － 足切り額 " + fmt(Math.min(100000, Math.floor(der.totalIncome * 0.05))) + " 円（10万円と総所得金額等の5%のうち小さい方）。</p>";
+  html += "</div></details>";
+
+  html += "<details><summary>③ 課税所得と税額（寄附をしない場合）</summary><div class='in'><table><tbody>";
+  html += row("所得税の課税所得", base.taxableIT, "合計所得 － 所得控除（所得税）");
+  html += row("所得税額", base.taxBefore, "税率 " + Math.round(marginalRateOf(base.taxableIT) * 100) + "% の区分を適用");
+  if (der.housingPotential > 0) html += row("住宅ローン控除（所得税で使う分）", Math.min(der.housingPotential, base.taxBefore), "控除可能額 " + fmt(der.housingPotential) + " 円");
+  html += row("所得税額（復興特別所得税込み）", base.itFinal, "");
+  html += row("住民税の課税所得", base.taxableRT, "合計所得 － 所得控除（住民税）");
+  html += row("住民税の所得割（10%）", base.shotokuRaw, "");
+  html += row("調整控除", base.chosei, "所得税と住民税の人的控除の差額をもとに計算");
+  if (base.housingRT > 0) html += row("住宅ローン控除（住民税で使う分）", base.housingRT, "所得税で引ききれなかった分を、所得税の課税所得の" + Math.round(der.housingRTcapRate.rate * 100) + "%（上限 " + fmt(der.housingRTcapRate.cap) + " 円）まで");
+  html += "<tr class='total'><td>住民税の所得割額</td><td>" + fmt(base.rtTotal) + " 円</td></tr>";
+  html += "</tbody></table></div></details>";
+
+  if (limit > 2000) {
+    html += "<details><summary>④ 上限額の決まり方</summary><div class='in'>";
+    html += "<div class='formula'>住民税 特例控除の上限 ＝ 所得割額（調整控除のあと）" + fmt(atLimit.shotokuAfterChosei) + " 円 × 20% ＝ " + fmt(atLimit.tokureiCap) + " 円\n" +
+      "特例控除の割合 ＝ 90% － 所得税率 " + Math.round(atLimit.mRate * 100) + "% × 1.021 ＝ " + (atLimit.tokureiRate * 100).toFixed(3) + "%\n" +
+      "上限額は、「（寄附額 － 2,000円）× 特例控除の割合 ＝ 特例控除の上限」となる寄附額を、" +
+      "所得税・住民税を実際に再計算しながら探した結果です。</div>";
+    html += "<table><tbody>" +
+      row("上限額での寄附額", limit) +
+      row("うち所得税から戻る分", itPart) +
+      row("うち住民税 基本分", atLimit.basic) +
+      row("うち住民税 特例分", atLimit.tokurei) +
+      (inp.method === "onestop" ? row("うち住民税 申告特例分", atLimit.shinkokuTokurei) : "") +
+      "</tbody></table>";
+    html += "<p class='small'>寄附金控除の対象には、所得税で総所得金額等の40%、住民税で30%という上限もありますが、通常は特例控除の上限（所得割の20%）が先に効きます。</p>";
+    html += "</div></details>";
+  }
+
+  html += "<p class='small'>※ この結果は試算です。住民税の所得割がかからない方、均等割のみ課税の方は、ふるさと納税をしても税金は戻りません。最終的な控除額は住民税の決定通知書でご確認ください。</p>";
+  html += "</div>";
+  res.innerHTML = html;
+  res.style.display = "block";
+});
+syncSpouse();
+</script>
+</body>
+</html>
+</body>
+</html>
