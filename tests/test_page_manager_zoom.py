@@ -105,6 +105,39 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         event.accept.assert_called_once()
         self.assertGreater(self.pm.list_widget.iconSize().width(), before.width())
 
+    # --- サブPDF欄の畳み込み ---
+    def test_sub_collapse_hides_body(self):
+        self.pm.set_sub_collapsed(False)
+        self._app.processEvents()
+        self.assertTrue(self.pm.sub_body.isVisible())
+        self.pm.set_sub_collapsed(True)
+        self._app.processEvents()
+        self.assertTrue(self.pm._sub_collapsed)
+        self.assertFalse(self.pm.sub_body.isVisible())
+        self.assertEqual(self.pm.btn_sub_collapse.text(), "▶ 開く")
+        self.pm.set_sub_collapsed(False)
+        self._app.processEvents()
+        self.assertTrue(self.pm.sub_body.isVisible())
+        self.assertEqual(self.pm.btn_sub_collapse.text(), "▼ 畳む")
+
+    def test_expand_auto_collapses_sub_and_restores(self):
+        from PyQt6.QtCore import QSettings
+
+        self.pm.set_sub_collapsed(False)  # 普段は開いた状態にしておく
+        self.pm.toggle_expanded()
+        self._app.processEvents()
+        self.assertTrue(self.pm.isFloating())
+        # 拡大表示中は自動で畳まれる（保存済みの好みは書き換わらない）
+        self.assertTrue(self.pm._sub_collapsed)
+        settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
+        saved = settings.value("page_manager/sub_collapsed", False)
+        self.assertIn(saved, (False, "false", "False", 0))
+        self.pm.toggle_expanded()
+        self._app.processEvents()
+        self.assertFalse(self.pm.isFloating())
+        # 戻すと元の開いた状態に戻る
+        self.assertFalse(self.pm._sub_collapsed)
+
     # --- 拡大表示 ---
     def test_expand_toggle_floats_and_returns(self):
         self.assertFalse(self.pm.isFloating())

@@ -628,6 +628,11 @@ class PageManager(QDockWidget):
             self.open_sub_in_new_window)
         self.btn_open_sub_new_window.setEnabled(False)
         sub_title_row.addWidget(self.btn_open_sub_new_window)
+        self.btn_sub_collapse = QPushButton("▼ 畳む")
+        self.btn_sub_collapse.setToolTip(
+            "サブPDFの欄を畳んで、編集中のPDFの欄を広くします")
+        self.btn_sub_collapse.clicked.connect(self.toggle_sub_collapsed)
+        sub_title_row.addWidget(self.btn_sub_collapse)
         sub_title_row.addStretch(1)
         bottom_layout.addLayout(sub_title_row)
 
@@ -635,7 +640,10 @@ class PageManager(QDockWidget):
             doc_provider=lambda: self.sub_pdf,
         )
         self.sub_list_widget.fileDroppedToSub.connect(self.load_sub_pdf_from_path)
-        bottom_layout.addWidget(self.sub_list_widget)
+        self.sub_body = QWidget()
+        sub_body_layout = QVBoxLayout(self.sub_body)
+        sub_body_layout.setContentsMargins(0, 0, 0, 0)
+        sub_body_layout.addWidget(self.sub_list_widget)
 
         sub_rot_buttons = QHBoxLayout()
         self.btn_sub_rot_left = QPushButton("↺ 選択ページ左回転")
@@ -644,7 +652,7 @@ class PageManager(QDockWidget):
         self.btn_sub_rot_right.clicked.connect(lambda: self.rotate_sub_pages(90))
         sub_rot_buttons.addWidget(self.btn_sub_rot_left)
         sub_rot_buttons.addWidget(self.btn_sub_rot_right)
-        bottom_layout.addLayout(sub_rot_buttons)
+        sub_body_layout.addLayout(sub_rot_buttons)
 
         sub_buttons = QHBoxLayout()
         self.btn_open_sub = QPushButton("📂 サブPDFを開く")
@@ -655,8 +663,13 @@ class PageManager(QDockWidget):
 
         sub_buttons.addWidget(self.btn_open_sub)
         sub_buttons.addWidget(self.btn_insert_selected)
-        bottom_layout.addLayout(sub_buttons)
+        sub_body_layout.addLayout(sub_buttons)
+        bottom_layout.addWidget(self.sub_body)
 
+        self._splitter = splitter
+        self._splitter_sizes_open = None
+        self._sub_collapsed = False
+        self._sub_state_before_expand = None
         splitter.addWidget(top_widget)
         splitter.addWidget(bottom_widget)
         splitter.setSizes([450, 350])
@@ -677,6 +690,9 @@ class PageManager(QDockWidget):
         self._thumb_scale = min(2.8, max(0.6, self._thumb_scale))
         self.apply_thumb_scale()
         self.topLevelChanged.connect(self._on_top_level_changed)
+        _sub_saved = settings.value("page_manager/sub_collapsed", False)
+        self.set_sub_collapsed(
+            _sub_saved in (True, 1, "true", "True", "1"), save=False)
 
     def clear_thumbnail_cache(self):
         self._main_generation_id += 1
@@ -714,6 +730,16 @@ class PageManager(QDockWidget):
 
     def _on_top_level_changed(self, floating):
         self.btn_expand.setText("↩ 元に戻す" if floating else "🔍 拡大表示")
+        if floating:
+            # 拡大表示中はサブPDFの欄を使わないので自動で畳む
+            self._sub_state_before_expand = self._sub_collapsed
+            if not self._sub_collapsed:
+                self.set_sub_collapsed(True, save=False)
+        elif self._sub_state_before_expand is not None:
+            restore = self._sub_state_before_expand
+            self._sub_state_before_expand = None
+            if restore != self._sub_collapsed:
+                self.set_sub_collapsed(restore, save=False)
 
     def zoom_thumbnails(self, steps):
         """サムネイルの表示倍率を変える（Ctrl+ホイールとボタンから呼ばれる）。"""
@@ -736,6 +762,32 @@ class PageManager(QDockWidget):
         self.sub_list_widget.setIconSize(size)
         settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
         settings.setValue("page_manager/thumb_scale", self._thumb_scale)
+
+    def toggle_sub_collapsed(self):
+        self._sub_state_before_expand = None
+        self.set_sub_collapsed(not self._sub_collapsed)
+
+    def set_sub_collapsed(self, collapsed, save=True):
+        """サブPDFの欄（一覧とボタン類）を畳む／開く。状態は保存される。"""
+        self._sub_collapsed = bool(collapsed)
+        self.sub_body.setVisible(not self._sub_collapsed)
+        self.btn_sub_collapse.setText(
+            "▶ 開く" if self._sub_collapsed else "▼ 畳む")
+        sizes = self._splitter.sizes()
+        total = sum(sizes)
+        if total > 0:
+            if self._sub_collapsed:
+                if len(sizes) == 2 and sizes[1] > 60:
+                    self._splitter_sizes_open = sizes
+                self._splitter.setSizes([total, 0])
+            elif self._splitter_sizes_open:
+                self._splitter.setSizes(self._splitter_sizes_open)
+            else:
+                self._splitter.setSizes([450, 350])
+        if save:
+            settings = QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor")
+            settings.setValue(
+                "page_manager/sub_collapsed", self._sub_collapsed)
 
     def move_selected_pages(self, direction):
         viewer = self.main.viewer
