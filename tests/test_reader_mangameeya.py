@@ -174,12 +174,12 @@ class TestReaderStore(unittest.TestCase):
         self.assertEqual(self.store.get_position("/tmp/book.pdf"), 2)
 
     def test_history_newest_first_dedup_and_cap(self):
-        for i in range(12):
+        for i in range(22):
             self.store.set_position(f"/tmp/book{i}.pdf", i)
         history = self.store.get_history()
-        self.assertEqual(len(history), 10)
-        self.assertEqual(history[0]["path"], os.path.abspath("/tmp/book11.pdf"))
-        self.assertEqual(history[0]["page"], 11)
+        self.assertEqual(len(history), 20)
+        self.assertEqual(history[0]["path"], os.path.abspath("/tmp/book21.pdf"))
+        self.assertEqual(history[0]["page"], 21)
         # 同じファイルを更新すると先頭に来て重複しない
         self.store.set_position("/tmp/book5.pdf", 42)
         history = self.store.get_history()

@@ -23,7 +23,7 @@ from core import logger
 _POSITIONS_KEY = "reader_positions"
 _HISTORY_KEY = "reader_history"
 _PREFS_KEY = "reader_prefs"
-MAX_HISTORY_ENTRIES = 10
+MAX_HISTORY_ENTRIES = 20
 
 
 def _norm_path(path: str) -> str:

@@ -125,6 +125,7 @@ from ui.page_manager import PageManager
 from ui.toolbar_layout_dialog import DEFAULT_TITLES, ToolbarLayoutDialog
 from ui.pdf_viewer import PDFViewer
 from ui.photo_to_pdf_dialog import PhotoToPdfDialog
+from ui.receipt_split_dialog import ReceiptSplitDialog
 from ui.region_ocr_ext import DirectViewerRegionOCRController
 from ui.reader_store import ReaderStore
 from ui.spread_reader import FullscreenSpreadReader
@@ -735,6 +736,7 @@ class MainWindow(QMainWindow):
         p1_label = QLabel(" 📒 会計試作: ")
         p1_label.setStyleSheet("font-weight: bold; padding-left: 4px;")
         p1_toolbar.addWidget(p1_label)
+        self.add_action(p1_toolbar, "📑 レシート分割", self.trial_receipt_split_dialog)
         self.add_action(p1_toolbar, "🧾 証憑一覧Excel", self.trial_voucher_dialog)
         self.add_action(p1_toolbar, "🗂 電帳法リネーム", self.trial_densho_rename_dialog)
         self.add_action(p1_toolbar, "🔢 インボイス番号", self.trial_invoice_dialog)
@@ -2040,6 +2042,19 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.information(
             self, "完了", f"{res['pages']}ページに適用しました。\n保存するとPDFに反映されます。")
+
+    def trial_receipt_split_dialog(self):
+        doc = self._trial_require_doc()
+        if doc is None:
+            return
+        data = self._trial_export_bytes()
+        work = fitz.open(stream=data, filetype="pdf")
+        try:
+            stem = Path(self.viewer.current_file or "document.pdf").stem
+            dlg = ReceiptSplitDialog(self, work, stem)
+            dlg.exec()
+        finally:
+            work.close()
 
     def trial_photo_to_pdf_dialog(self):
         # 写真から新規PDFを作る機能なので、PDFが開かれていなくても使える
