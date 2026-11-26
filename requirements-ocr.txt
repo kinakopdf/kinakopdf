@@ -1,0 +1,12 @@
+# OCR強化版専用の依存ライブラリ。通常版の requirements.txt とは分けて管理する。
+# ndlocr-lite 本体は pip install --no-deps で入れ、実行に必要な部品だけをここに書く
+# （公式GUI用の flet など、OCRの実行に不要なものは含めない）。
+PyQt6
+PyMuPDF
+numpy
+Pillow
+PyYAML
+lxml
+tqdm
+onnxruntime
+opencv-python-headless

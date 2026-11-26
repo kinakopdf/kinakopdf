@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-スキャン用紙の色抜き（カラー網掛け・色枠線・点々消去）＆ Windows標準OCR プレビューダイアログ
+スキャン用紙の色抜き（カラー網掛け・色枠線・点々消去）＆ NDLOCR-Lite プレビューダイアログ
 （QThreadPool による完全非同期ワーカースレッド実行・高精細プレビュー・全画面表示対応版）
 """
 import threading
@@ -45,9 +45,8 @@ from core.ocr_cleaner import (
     apply_cleaned_image_and_ocr_to_page,
     clean_scanned_qimage,
     render_page_to_qimage,
-    run_windows_ocr_batch_on_qimages,
-    run_windows_ocr_on_qimage,
 )
+from core.ocr_engine import run_ocr_batch_on_qimages, run_ocr_on_qimage
 
 PREVIEW_MAX_RENDER_PIXELS = 36_000_000
 
@@ -74,7 +73,7 @@ class _OcrTestWorker(QRunnable):
 
     def run(self):
         try:
-            chunks = run_windows_ocr_on_qimage(
+            chunks = run_ocr_on_qimage(
                 self.cleaned_img,
                 fix_numeric=self.fix_numeric,
                 cancel_event=self.cancel_event,
@@ -96,7 +95,7 @@ class _BatchApplySignals(QObject):
 
 
 class _BatchApplyWorker(QRunnable):
-    """対象ページ群の色抜き・Windows標準OCR・PDFページ構築をバックグラウンドで実行するワーカー"""
+    """対象ページ群の色抜き・NDLOCR-Lite・PDFページ構築をバックグラウンドで実行するワーカー"""
 
     def __init__(
         self,
@@ -172,7 +171,7 @@ class _BatchApplyWorker(QRunnable):
                 if self.need_ocr and cleaned_images:
                     self.signals.progress.emit(
                         batch_start,
-                        f"Windows標準OCRを実行中... ({batch_start + 1} / {num_targets})",
+                        f"文字認識を実行中... ({batch_start + 1} / {num_targets})",
                     )
 
                     def _on_ocr_page_done(done_i: int, _bs=batch_start):
@@ -181,10 +180,10 @@ class _BatchApplyWorker(QRunnable):
                         next_i = min(num_targets, _bs + done_i + 1)
                         self.signals.progress.emit(
                             min(num_targets - 1, next_i - 1),
-                            f"Windows標準OCRを実行中... ({next_i} / {num_targets})",
+                            f"文字認識を実行中... ({next_i} / {num_targets})",
                         )
 
-                    batch_chunks = run_windows_ocr_batch_on_qimages(
+                    batch_chunks = run_ocr_batch_on_qimages(
                         cleaned_images,
                         fix_numeric=self.fix_num,
                         cancel_event=self.cancel_event,
@@ -266,7 +265,7 @@ class _PreviewGraphicsView(QGraphicsView):
 
 
 class ScanCleanOcrDialog(QDialog):
-    """スキャン書類の色抜き・点々除去・Windows標準OCRダイアログ"""
+    """スキャン書類の色抜き・点々除去・NDLOCR-Liteダイアログ"""
 
     PRESETS = [
         (
@@ -299,7 +298,7 @@ class ScanCleanOcrDialog(QDialog):
             | Qt.WindowType.WindowMaximizeButtonHint
             | Qt.WindowType.WindowCloseButtonHint
         )
-        self.setWindowTitle("🧼 スキャン用紙の色抜き（カラー背景・点々消去）＆ Windows標準OCR")
+        self.setWindowTitle("🧼 スキャン用紙の色抜き（カラー背景・点々消去）＆ OCR（国会図書館 NDLOCR-Lite）")
         self.resize(1280, 820)
         self.setStyleSheet(
             "QDialog { background-color: #f6f7f9; color: #1a1a1a; }"
@@ -503,7 +502,7 @@ class ScanCleanOcrDialog(QDialog):
 
         right_layout.addWidget(grp_clean)
 
-        grp_ocr = QGroupBox("2. Windows標準OCR ＆ ページ反映オプション")
+        grp_ocr = QGroupBox("2. OCR（国会図書館 NDLOCR-Lite）＆ ページ反映オプション")
         ocr_layout = QVBoxLayout(grp_ocr)
 
         ocr_layout.addWidget(QLabel("実行内容:"))
@@ -786,7 +785,7 @@ class ScanCleanOcrDialog(QDialog):
         self._clear_ocr_overlay_boxes()
         self._test_cancel_event = threading.Event()
         self.btn_test_ocr.setText("⏳ OCR解析中... (クリックで中止)")
-        self.txt_ocr_preview.setPlainText("Windows標準OCRで文字を認識しています...")
+        self.txt_ocr_preview.setPlainText("NDLOCR-Liteで文字を認識しています...")
 
         worker = _OcrTestWorker(
             self._cleaned_qimg,
@@ -870,7 +869,7 @@ class ScanCleanOcrDialog(QDialog):
 
         progress_max = max(2, len(target_indices) + 1)
         dlg = QProgressDialog(
-            "スキャン色抜き・Windows標準OCRを実行中...",
+            "スキャン色抜き・文字認識を実行中...",
             "中止",
             0,
             progress_max,

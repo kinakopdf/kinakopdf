@@ -1,0 +1,132 @@
+# -*- coding: utf-8 -*-
+"""NDLOCR-Lite エンジン（core/ndl_ocr.py）のテスト。
+
+実際のパイプライン（ONNXモデル）は使わず、行結果の変換と
+バッチ処理の枠組みだけを検証する。実エンジンでの読み取り確認は
+合成文書による手動検証で行う。
+"""
+import sys
+import threading
+import types
+import unittest
+from importlib.util import find_spec
+
+from PyQt6.QtWidgets import QApplication
+
+from core import ndl_ocr
+
+
+def _line(text, x, y, w, h, vertical=False):
+    return {
+        "boundingBox": [[x, y], [x, y + h], [x + w, y], [x + w, y + h]],
+        "text": text,
+        "isVertical": "true" if vertical else "false",
+        "confidence": 0.9,
+    }
+
+
+class TestLinesToChunks(unittest.TestCase):
+    def test_single_line_becomes_one_chunk(self):
+        chunks = ndl_ocr._lines_to_chunks(
+            [_line("*38,233", 100, 50, 120, 30)], fix_numeric=True, numeric_only=False
+        )
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["text"], "*38,233")
+        self.assertEqual(chunks[0]["bbox"], (100.0, 50.0, 220.0, 80.0))
+
+    def test_far_apart_cells_stay_separate(self):
+        lines = [
+            _line("09-28", 40, 50, 80, 30),
+            _line("*13,971", 300, 50, 110, 30),
+            _line("*4,194,516", 700, 50, 160, 30),
+        ]
+        chunks = ndl_ocr._lines_to_chunks(lines, fix_numeric=True, numeric_only=False)
+        texts = [c["text"] for c in chunks]
+        self.assertEqual(texts, ["09-28", "*13,971", "*4,194,516"])
+
+    def test_empty_lines_are_skipped(self):
+        lines = [_line("  ", 0, 0, 10, 10), _line("オリコ", 0, 40, 60, 30)]
+        chunks = ndl_ocr._lines_to_chunks(lines, fix_numeric=True, numeric_only=False)
+        self.assertEqual([c["text"] for c in chunks], ["オリコ"])
+
+    def test_vertical_line_is_standalone_chunk(self):
+        lines = [
+            _line("合計", 300, 40, 30, 90, vertical=True),
+            _line("12,300円", 40, 50, 120, 30),
+        ]
+        chunks = ndl_ocr._lines_to_chunks(lines, fix_numeric=True, numeric_only=False)
+        texts = sorted(c["text"] for c in chunks)
+        self.assertEqual(texts, ["12,300円", "合計"])
+        vertical = [c for c in chunks if c["text"] == "合計"][0]
+        self.assertEqual(vertical["bbox"], (300.0, 40.0, 330.0, 130.0))
+
+
+@unittest.skipUnless(
+    find_spec("numpy") and find_spec("PIL"), "numpy/Pillow がない環境ではスキップ"
+)
+class TestBatchWithFakePipeline(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from PyQt6.QtGui import QImage
+
+        self.qimg = QImage(200, 100, QImage.Format.Format_RGB32)
+        self.qimg.fill(0xFFFFFFFF)
+
+        fake_ocr = types.ModuleType("ocr")
+
+        def fake_run(detector, r30, r50, r100, inputname, img, outputpath, save_viz=False):
+            return {
+                "json_lines": [
+                    _line("テスト", 10, 10, 80, 25),
+                    _line("*1,017,520", 10, 50, 140, 25),
+                ]
+            }
+
+        fake_ocr._run_ocr_on_image_array = fake_run
+        self._orig_ocr_mod = sys.modules.get("ocr")
+        sys.modules["ocr"] = fake_ocr
+        self._orig_ensure = ndl_ocr._ensure_engine
+        ndl_ocr._ensure_engine = lambda: (object(), object(), object(), object())
+
+    def tearDown(self):
+        ndl_ocr._ensure_engine = self._orig_ensure
+        if self._orig_ocr_mod is None:
+            sys.modules.pop("ocr", None)
+        else:
+            sys.modules["ocr"] = self._orig_ocr_mod
+
+    def test_batch_returns_chunks_per_page_and_reports_progress(self):
+        done = []
+        results = ndl_ocr.run_ndl_ocr_batch_on_qimages(
+            [self.qimg, self.qimg], progress_callback=done.append
+        )
+        self.assertEqual(len(results), 2)
+        for page_chunks in results:
+            texts = [c["text"] for c in page_chunks]
+            self.assertIn("テスト", texts)
+            self.assertIn("*1,017,520", texts)
+        self.assertEqual(done, [0, 1])
+
+    def test_batch_cancelled_returns_empty(self):
+        cancel = threading.Event()
+        cancel.set()
+        self.assertEqual(
+            ndl_ocr.run_ndl_ocr_batch_on_qimages([self.qimg], cancel_event=cancel),
+            [],
+        )
+
+    def test_single_image_wrapper(self):
+        chunks = ndl_ocr.run_ndl_ocr_on_qimage(self.qimg)
+        self.assertTrue(any(c["text"] == "テスト" for c in chunks))
+
+    def test_null_image_returns_empty(self):
+        from PyQt6.QtGui import QImage
+
+        self.assertEqual(ndl_ocr.run_ndl_ocr_on_qimage(QImage()), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -43,6 +43,17 @@
 - Windows 標準の OCR を使います。Microsoft の利用条件が別途適用されます。
 - OCR は Windows 専用です。
 
+## NDLOCR-Lite（OCR強化版のみ）
+- 国立国会図書館が開発・公開する日本語 OCR「NDLOCR-Lite」を使います。
+  出典：国立国会図書館 NDLOCR-Lite（https://github.com/ndl-lab/ndlocr-lite）
+- プログラムのライセンスは CC BY 4.0 です。
+- 読み取り用モデル（ONNX）は国立国会図書館の配布物を使います。
+  検出モデルには DINOv3 系の技術が含まれ、その利用条件も適用されます。
+- あわせて使う部品：ONNX Runtime（MIT License、Microsoft）、
+  OpenCV（Apache License 2.0）、NumPy（BSD License）、
+  Pillow（MIT-CMU License）、lxml（BSD License）、
+  PyYAML（MIT License）、tqdm（MIT License / MPL 2.0）。
+
 ## 配布時に入れるもの（チェックリスト）
 - [ ] `KinakoPDF.exe`（PyInstaller で作成）
 - [ ] ソースコード版 zip（同じ Release に添付）

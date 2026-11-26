@@ -1208,7 +1208,7 @@ class PageManager(QDockWidget):
             self.clear_thumbnail_cache()
             viewer.load_pdf(in_proc_doc, 0, fit_view=True)
             self.refresh_thumbnails()
-            self.main.setWindowTitle(f"{APP_NAME} - (新規結合ドキュメント)")
+            self.main.setWindowTitle(f"{APP_NAME}（OCR強化版） - (新規結合ドキュメント)")
             return
 
         insert_count = len(in_proc_doc)

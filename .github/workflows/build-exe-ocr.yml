@@ -1,0 +1,78 @@
+# OCR強化版（国会図書館 NDLOCR-Lite）専用のビルド。
+# 通常版の build-exe.yml とは分けてある。通常版の requirements.txt は汚さない。
+# タグの末尾が -ocr のときだけ動く（例: v1.0.7-ocr）。
+name: build-exe-ocr
+
+on:
+  push:
+    tags:
+      - "v*-ocr"
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe-ocr:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ocr.txt
+          pip install --no-deps ndlocr-lite==2.0.0
+          pip install pyinstaller
+      - name: Run tests first (fail the build if tests fail)
+        run: |
+          python -m unittest tests.test_core_logic -v
+          python -m unittest tests.test_ndl_ocr -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Stage NDLOCR-Lite models and config
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib
+          import shutil
+
+          import ocr
+          from model_download import MODELS, get_model_path
+
+          base = pathlib.Path(ocr.__file__).resolve().parent
+          model_out = pathlib.Path("ndl_model")
+          model_out.mkdir(exist_ok=True)
+          for filename, expected_hash in MODELS.values():
+              resolved = get_model_path(filename, expected_hash, model_out)
+              shutil.copy(resolved, model_out / filename)
+              print("model:", filename)
+          config_out = pathlib.Path("ndl_config")
+          config_out.mkdir(exist_ok=True)
+          for name in ("ndl.yaml", "NDLmoji.yaml"):
+              shutil.copy(base / "config" / name, config_out / name)
+              print("config:", name)
+          PY
+      - name: Build exe with PyInstaller (CI-only tool)
+        run: pyinstaller --noconfirm --onefile --windowed --name KinakoPDF-ocr --icon assets/kinako_pdf.ico --add-data "assets;assets" --add-data "ndl_model;model" --add-data "ndl_config;config" --hidden-import ocr --hidden-import deim --hidden-import parseq --hidden-import ndl_parser --hidden-import model_download --hidden-import character_inclusion --hidden-import html_output --hidden-import pdf_output_utils --hidden-import tcy_wrapper --hidden-import tablecenternet --hidden-import repath --hidden-import version --collect-submodules reading_order --collect-all onnxruntime secure_local_pdf_editor.pyw
+      - name: Check the exe exists
+        run: |
+          dir dist
+          if (-not (Test-Path dist\KinakoPDF-ocr.exe)) { throw "KinakoPDF-ocr.exe was not built" }
+      - name: Upload exe as a build artifact (kept 30 days)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KinakoPDF-ocr-windows-exe
+          path: dist/KinakoPDF-ocr.exe
+          retention-days: 30
+      - name: Check license files exist (fail if missing)
+        run: |
+          if (-not (Test-Path LICENSE)) { throw "LICENSE (AGPL-3.0 full text) is missing" }
+          if (-not (Test-Path THIRD_PARTY_NOTICES.md)) { throw "THIRD_PARTY_NOTICES.md is missing" }
+      - name: Attach exe to the GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" dist/KinakoPDF-ocr.exe LICENSE THIRD_PARTY_NOTICES.md --title "${{ github.ref_name }}" --generate-notes --verify-tag

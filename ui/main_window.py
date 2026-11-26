@@ -96,6 +96,9 @@ from ui.reader_store import ReaderStore
 from ui.spread_reader import FullscreenSpreadReader
 
 
+APP_TITLE = APP_NAME + "（OCR強化版）"
+
+
 class MainWindow(QMainWindow):
 
     _open_windows = []
@@ -104,7 +107,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         MainWindow._open_windows.append(self)
 
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(APP_TITLE)
         app_inst = QApplication.instance()
         if app_inst is not None and not app_inst.windowIcon().isNull():
             self.setWindowIcon(app_inst.windowIcon())
@@ -368,7 +371,7 @@ class MainWindow(QMainWindow):
         act_ocr = QAction("🧼 色抜き・OCR", self)
         act_ocr.triggered.connect(self.open_scan_clean_ocr_dialog)
         act_ocr.setShortcut(QKeySequence("Ctrl+Shift+O"))
-        act_ocr.setToolTip("スキャンした明細から黄・赤・青の背景や点々を消し、Windows標準OCRで文字認識します (Ctrl+Shift+O)")
+        act_ocr.setToolTip("スキャンした明細から黄・赤・青の背景や点々を消し、国会図書館のOCR（NDLOCR-Lite）で文字認識します (Ctrl+Shift+O)")
         self.act_ocr = act_ocr
         self._register_movable(
             "ocr", act_ocr, "🧼 色抜き・OCR", "more", top_toolbar, "text_sep"
@@ -1031,11 +1034,11 @@ class MainWindow(QMainWindow):
     def update_window_title(self):
         self._sync_text_data_action()
         if not self.viewer.current_pdf:
-            self.setWindowTitle(APP_NAME)
+            self.setWindowTitle(APP_TITLE)
             return
         name = Path(self.viewer.current_file).name if self.viewer.current_file else "(新規結合ドキュメント)"
         mark = " *" if self.viewer.is_modified else ""
-        self.setWindowTitle(f"{APP_NAME} - {name}{mark}")
+        self.setWindowTitle(f"{APP_TITLE} - {name}{mark}")
 
     def update_page_indicator(self):
         doc = self.viewer.current_pdf
@@ -1272,7 +1275,7 @@ class MainWindow(QMainWindow):
         self.page_manager.refresh_thumbnails()
         self._add_recent_file(filepath)
 
-        self.setWindowTitle(f"{APP_NAME} - {Path(filepath).name}")
+        self.setWindowTitle(f"{APP_TITLE} - {Path(filepath).name}")
         self.statusBar().showMessage(f"読み込み完了: {filepath}")
 
     def _encryption_strip_confirmed(self):
@@ -2346,7 +2349,7 @@ class MainWindow(QMainWindow):
             self.viewer.history.mark_saved()
             self._add_recent_file(filepath)
 
-            self.setWindowTitle(f"{APP_NAME} - {Path(filepath).name}")
+            self.setWindowTitle(f"{APP_TITLE} - {Path(filepath).name}")
             self.statusBar().showMessage(f"保存完了: {filepath}")
 
             QMessageBox.information(
@@ -2900,7 +2903,7 @@ class MainWindow(QMainWindow):
         return True
 
     def open_scan_clean_ocr_dialog(self):
-        """スキャン用紙の色抜き（黄・赤・青・点々消去）＆Windows標準OCRダイアログを開く"""
+        """スキャン用紙の色抜き（黄・赤・青・点々消去）＆NDLOCR-Liteダイアログを開く"""
         if not self.viewer.current_pdf or len(self.viewer.current_pdf) == 0:
             QMessageBox.information(self, "案内", "先にスキャンされたPDFファイルを開いてください。")
             return

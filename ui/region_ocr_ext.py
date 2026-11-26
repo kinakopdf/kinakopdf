@@ -26,11 +26,11 @@ from core.geometry import (
     view_point_to_raw_pdf_from_geom,
     view_rect_to_raw_rect,
 )
+from core.ocr_engine import run_ocr_on_qimage
 from core.ocr_cleaner import (
     _DOT_LIKE_CHARS,
     clean_scanned_qimage,
     normalize_strict_numeric_text,
-    run_windows_ocr_on_qimage,
     OCR_TEXT_MARKER_RGB,
     OCR_TEXT_MARKER_SRGB_INTS,
 )
@@ -387,7 +387,7 @@ class _RegionOcrWorker(QRunnable):
             if self.cancel_event.is_set():
                 self.signals.finished.emit([], 1.0, 0, 0, "", True)
                 return
-            chunks = run_windows_ocr_on_qimage(
+            chunks = run_ocr_on_qimage(
                 proc_img,
                 fix_numeric=True,
                 cancel_event=self.cancel_event,
@@ -402,7 +402,7 @@ class _RegionOcrWorker(QRunnable):
                     remove_lines=False,
                 )
                 if not self.cancel_event.is_set():
-                    alt_chunks = run_windows_ocr_on_qimage(
+                    alt_chunks = run_ocr_on_qimage(
                         alt_img,
                         fix_numeric=True,
                         cancel_event=self.cancel_event,
@@ -762,7 +762,7 @@ class DirectViewerRegionOCRController(QObject):
         }
 
         mode_label = "⏳ 範囲OCR [数字特化] 解析中..." if numeric_only else "⏳ 範囲OCR解析中..."
-        self.toast.show_result("Windows標準OCRで選択範囲を解析しています...", mode_label)
+        self.toast.show_result("NDLOCR-Liteで選択範囲を解析しています...", mode_label)
         worker = _RegionOcrWorker(
             raw_qimg=qimg,
             clean_color=self.toast.chk_clean.isChecked(),
