@@ -85,4 +85,4 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" dist/KinakoPDF-ocr.exe LICENSE THIRD_PARTY_NOTICES.md --title "${{ github.ref_name }}" --generate-notes --verify-tag
+        run: gh release create "${{ github.ref_name }}" dist/KinakoPDF-ocr.exe LICENSE THIRD_PARTY_NOTICES.md licenses/DINOv3-LICENSE.md --title "${{ github.ref_name }}" --generate-notes --verify-tag

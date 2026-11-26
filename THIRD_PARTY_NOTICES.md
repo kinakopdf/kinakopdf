@@ -47,8 +47,13 @@
 - 国立国会図書館が開発・公開する日本語 OCR「NDLOCR-Lite」を使います。
   出典：国立国会図書館 NDLOCR-Lite（https://github.com/ndl-lab/ndlocr-lite）
 - プログラムのライセンスは CC BY 4.0 です。
-- 読み取り用モデル（ONNX）は国立国会図書館の配布物を使います。
-  検出モデルには DINOv3 系の技術が含まれ、その利用条件も適用されます。
+  （https://creativecommons.org/licenses/by/4.0/deed.ja）
+- NDLOCR-Lite 本体と読み取り用モデル（ONNX）は、国立国会図書館の配布物を
+  改変せずにそのまま使っています。
+- レイアウト認識モデルには DINOv3 を蒸留したモデルが含まれており、
+  Meta の DINOv3 ライセンスも適用されます。本文は同梱の
+  `licenses/DINOv3-LICENSE.md` をご覧ください。軍事・核・諜報などの
+  用途は DINOv3 ライセンスで禁止されています。
 - あわせて使う部品：ONNX Runtime（MIT License、Microsoft）、
   OpenCV（Apache License 2.0）、NumPy（BSD License）、
   Pillow（MIT-CMU License）、lxml（BSD License）、
