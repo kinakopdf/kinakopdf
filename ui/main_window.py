@@ -282,7 +282,7 @@ class MainWindow(QMainWindow):
 
         self.btn_recent_files = QToolButton(self)
         self.btn_recent_files.setText("🕘 最近のファイル")
-        self.btn_recent_files.setToolTip("最近開いたPDFファイル（最大5件）から選択して開きます")
+        self.btn_recent_files.setToolTip("最近開いたPDFファイル（最大20件）から選択して開きます")
         self.btn_recent_files.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.recent_files_menu = QMenu(self)
         self.btn_recent_files.setMenu(self.recent_files_menu)
