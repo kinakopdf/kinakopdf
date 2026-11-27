@@ -2536,3 +2536,72 @@ class TestReplacementSelectableByTextEdit(_WindowTestBase):
                     self.assertEqual(viewer._text_sel_text, "これはテストです")
                 finally:
                     viewer.clear_text_selection()
+
+
+class TestRotatedSearchAndTokens(_WindowTestBase):
+    """回転ページで検索ハイライトとテキスト編集トークンがずれないこと。
+
+    search_for / rawdict の座標は「未回転・cropbox基準」で返るのに、
+    表示座標とみなして view→raw 変換をかけていたため、回転ページでは
+    ハイライトもトークンも回転ぶんずれた場所に出ていた（実ファイルで
+    2026-11-27 に再現・修正）。
+    """
+
+    def _open_rotated(self, rotation=90):
+        doc = _rotated_frag_doc(rotation, display_upright=True)
+        path = Path(self._tmp.name) / f"rot{rotation}.pdf"
+        path.write_bytes(doc.tobytes())
+        doc.close()
+        self._open(str(path))
+        return self.window.viewer
+
+    def test_search_matches_on_rotated_page(self):
+        viewer = self._open_rotated(90)
+        page = viewer.current_pdf[0]
+        hits = [fitz.Rect(h) for h in page.search_for("テストです")]
+        self.assertTrue(hits)
+        results = viewer._collect_search_matches("テストです")
+        self.assertEqual(len(results), len(hits))
+        for r in results:
+            rr = fitz.Rect(r["raw_rect"])
+            self.assertTrue(
+                any(
+                    abs(rr.x0 - h.x0) < 2 and abs(rr.y0 - h.y0) < 2
+                    and abs(rr.x1 - h.x1) < 2 and abs(rr.y1 - h.y1) < 2
+                    for h in hits
+                ),
+                f"検索結果の矩形 {rr} が実際のヒット {hits} と一致しない",
+            )
+
+    def test_tokens_on_rotated_page(self):
+        from core.geometry import raw_rect_to_view_rect
+
+        viewer = self._open_rotated(90)
+        page = viewer.current_pdf[0]
+        tokens = viewer._get_page_pdf_text_tokens(page_idx=0)
+        target = [t for t in tokens if t["text"] == "テストです"]
+        self.assertEqual(len(target), 1)
+        # トークンの raw_rect を表示座標に戻すと、実際の字形の位置に重なるはず
+        tv = raw_rect_to_view_rect(page, fitz.Rect(target[0]["raw_rect"]))
+        span = None
+        for b in page.get_text("dict")["blocks"]:
+            if b.get("type") != 0:
+                continue
+            for ln in b["lines"]:
+                for sp in ln["spans"]:
+                    if sp.get("text") == "テストです":
+                        span = fitz.Rect(sp["bbox"])
+        self.assertIsNotNone(span)
+        corners = [
+            fitz.Point(span.x0, span.y0) * page.rotation_matrix,
+            fitz.Point(span.x1, span.y1) * page.rotation_matrix,
+        ]
+        sv = fitz.Rect(
+            min(c.x for c in corners), min(c.y for c in corners),
+            max(c.x for c in corners), max(c.y for c in corners),
+        )
+        center = fitz.Point((tv.x0 + tv.x1) / 2, (tv.y0 + tv.y1) / 2)
+        self.assertTrue(
+            fitz.Rect(sv.x0 - 6, sv.y0 - 6, sv.x1 + 6, sv.y1 + 6).contains(center),
+            f"トークン表示矩形 {tv} が字形 {sv} とずれている",
+        )
