@@ -299,6 +299,107 @@ def _min_area_rect_quad(points):
     return [tl, tr, br, bl]
 
 
+def _projection_score(pts, angle_rad, bin_size=2.0):
+    """点を angle_rad だけ戻し回転し、行ごとの点数の偏り（Σc²）を返す。
+
+    文字の行が水平にそろう角度ほど、行ごとの点数が偏って大きくなる。
+    """
+    ca = math.cos(angle_rad)
+    sa = math.sin(angle_rad)
+    counts = {}
+    for (x, y) in pts:
+        ry = -x * sa + y * ca
+        key = int(ry // bin_size)
+        counts[key] = counts.get(key, 0) + 1
+    return sum(c * c for c in counts.values())
+
+
+def _best_text_angle_delta(ink_pts, base_angle_rad):
+    """文字の行が最もそろう角度の、base からのずれ（度）を返す。
+
+    見つからなければ 0。点は重心を引いた相対座標で渡すこと。
+    行の手がかりが弱い（縦書き・横倒しなど）場合は、スコアの伸びが
+    小さいため 0 のままになり、元の角度が維持される。
+    """
+    if len(ink_pts) < 200:
+        return 0.0
+    base_score = _projection_score(ink_pts, base_angle_rad)
+    if base_score <= 0:
+        return 0.0
+    best_delta, best_score = 0.0, base_score
+    delta = -10.0
+    while delta <= 10.0:
+        s = _projection_score(
+            ink_pts, base_angle_rad + math.radians(delta))
+        if s > best_score:
+            best_delta, best_score = delta, s
+        delta += 1.0
+    if best_delta != 0.0:
+        fine = best_delta - 0.9
+        while fine <= best_delta + 0.9:
+            s = _projection_score(
+                ink_pts, base_angle_rad + math.radians(fine))
+            if s > best_score:
+                best_delta, best_score = fine, s
+            fine += 0.3
+    # 行がはっきりそろう場合だけ採用する（誤補正の防止）
+    if best_score > base_score * 1.02:
+        return best_delta
+    return 0.0
+
+
+def _quad_with_angle(points, angle_rad):
+    """points を angle_rad の向きの外接長方形で囲んだ四隅を返す。"""
+    ca = math.cos(angle_rad)
+    sa = math.sin(angle_rad)
+    rot = [(x * ca + y * sa, -x * sa + y * ca) for (x, y) in points]
+    xs = [p[0] for p in rot]
+    ys = [p[1] for p in rot]
+    corners = []
+    for (x, y) in ((min(xs), min(ys)), (max(xs), min(ys)),
+                   (max(xs), max(ys)), (min(xs), max(ys))):
+        corners.append((x * ca - y * sa, x * sa + y * ca))
+    tl = min(corners, key=lambda p: p[0] + p[1])
+    br = max(corners, key=lambda p: p[0] + p[1])
+    tr = max(corners, key=lambda p: p[0] - p[1])
+    bl = min(corners, key=lambda p: p[0] - p[1])
+    return [tl, tr, br, bl]
+
+
+def _refine_ink_quad(mask, w, comp, quad0):
+    """インク系統の四隅の角度を、文字の行の傾きで補正する。
+
+    最小面積の長方形は、ロゴやバーコードなど黒い部分の散らばり方に
+    引っ張られて、実際のレシートより大きく傾くことがある。そこで
+    元のインク（太らせる前）を使い、文字の行が水平にそろう角度を
+    探して、枠の角度だけをそちらへ寄せる。大きさ・位置は塊の
+    外接のままにする。
+    """
+    if not comp.points or quad0 is None:
+        return quad0
+    (x1, y1), (x2, y2) = quad0[0], quad0[1]
+    base = math.atan2(y2 - y1, x2 - x1)
+    # 塊の外接範囲内にある元のインクを集める（2px 間引きで十分）
+    ink_pts = []
+    for yy in range(comp.min_y, comp.max_y + 1, 2):
+        off = yy * w
+        for xx in range(comp.min_x, comp.max_x + 1, 2):
+            if mask[off + xx]:
+                ink_pts.append((float(xx), float(yy)))
+    if len(ink_pts) < 200:
+        return quad0
+    if len(ink_pts) > 6000:
+        step = len(ink_pts) // 6000 + 1
+        ink_pts = ink_pts[::step]
+    cx = sum(p[0] for p in ink_pts) / len(ink_pts)
+    cy = sum(p[1] for p in ink_pts) / len(ink_pts)
+    rel = [(x - cx, y - cy) for (x, y) in ink_pts]
+    delta = _best_text_angle_delta(rel, base)
+    if delta == 0.0:
+        return quad0
+    return _quad_with_angle(comp.points, base + math.radians(delta))
+
+
 def _quads_from_ink(data, w, h, stride, thr):
     page_area = float(w * h)
     mask = _mask_from(data, w, h, stride, thr, bright=False)
@@ -322,6 +423,8 @@ def _quads_from_ink(data, w, h, stride, thr):
         quad = None
         if comp.points:
             quad = _min_area_rect_quad(comp.points)
+            if quad is not None:
+                quad = _refine_ink_quad(mask, w, comp, quad)
         quads.append(quad if quad is not None else comp.quad())
     return quads
 

@@ -195,6 +195,30 @@ class ReceiptSplitTest(unittest.TestCase):
         out2 = _filter_outlier_quads([big1, big2, small])
         self.assertEqual(len(out2), 3)
 
+    def test_text_angle_delta_recovers_tilt(self):
+        import math
+
+        from core.receipt_split import _best_text_angle_delta
+
+        def line_points(deg):
+            t = math.tan(math.radians(deg))
+            pts = []
+            for b in range(0, 320, 40):
+                for x in range(0, 220, 4):
+                    pts.append((float(x), x * t + b))
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            return [(x - cx, y - cy) for (x, y) in pts]
+
+        # 6°傾いた行の集まり → ずれは約6°と分かる
+        delta = _best_text_angle_delta(line_points(6.0), 0.0)
+        self.assertAlmostEqual(delta, 6.0, delta=0.9)
+        # 傾いていない行 → 補正しない
+        delta0 = _best_text_angle_delta(line_points(0.0), 0.0)
+        self.assertEqual(delta0, 0.0)
+        # 点が少なすぎる場合は補正しない
+        self.assertEqual(_best_text_angle_delta([(0.0, 0.0)] * 10, 0.0), 0.0)
+
     def test_merge_nearby_small_quads(self):
         from core.receipt_split import _merge_nearby_small_quads
 
