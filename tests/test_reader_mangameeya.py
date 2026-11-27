@@ -471,6 +471,51 @@ class TestReaderNavigationUi(_ReaderTestBase):
         reader.btn_hud_fs.click()
         self.assertFalse(reader._is_fullscreen)
 
+    def test_exit_fullscreen_gives_closeable_framed_window(self):
+        from PyQt6.QtCore import Qt
+
+        reader = self._make_reader([(595, 842)] * 4, cover_single=False)
+        reader.set_fullscreen(False)
+        self._app.processEvents()
+        flags = reader.windowFlags()
+        # 通常表示ではタイトルバーの閉じるボタンがある（枠なしのまま
+        # 縮小すると閉じることも動かすこともできなくなる）
+        self.assertTrue(flags & Qt.WindowType.WindowCloseButtonHint)
+        self.assertFalse(flags & Qt.WindowType.FramelessWindowHint)
+        self.assertTrue(reader.isVisible())
+        # 全画面に戻すと枠なしに戻る
+        reader.set_fullscreen(True)
+        self._app.processEvents()
+        self.assertTrue(reader.windowFlags() & Qt.WindowType.FramelessWindowHint)
+
+    def test_mouse_move_shows_hud_only_near_bottom(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        reader = self._make_reader([(595, 842)] * 4, cover_single=False)
+        reader.hud_timer.stop()
+        reader.hud_opacity.setOpacity(0.0)
+        reader.hud_container.hide()
+
+        def move(x, y):
+            ev = QMouseEvent(
+                QEvent.Type.MouseMove, QPointF(x, y),
+                Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier)
+            reader.mouseMoveEvent(ev)
+            self._app.processEvents()
+
+        # 画面の真ん中でマウスを動かしてもバーは出ない
+        move(reader.width() // 2, reader.height() // 2)
+        self.assertEqual(reader.hud_opacity.opacity(), 0.0)
+        # ページ移動でも出ない（マウスが下の方に無いとき）
+        reader.next_spread()
+        self._app.processEvents()
+        self.assertEqual(reader.hud_opacity.opacity(), 0.0)
+        # 下の方へ持っていくと出る
+        move(reader.width() // 2, reader.height() - 5)
+        self.assertEqual(reader.hud_opacity.opacity(), 1.0)
+
 
 class TestReaderResume(_ReaderTestBase):
     def test_resume_restores_saved_page(self):

@@ -979,7 +979,7 @@ class FullscreenSpreadReader(QWidget):
                 self.current_spread_idx = idx
                 break
         self._update_current_spread_cache()
-        self._show_hud()
+        self._show_hud_for_navigation()
         self.update()
 
     def _current_real_page(self) -> Optional[int]:
@@ -1010,7 +1010,7 @@ class FullscreenSpreadReader(QWidget):
         self._pan_offset = QPointF(0.0, 0.0)
         self._hover_screen_rect = None
         self._update_current_spread_cache()
-        self._show_hud()
+        self._show_hud_for_navigation()
         self.update()
 
     def next_spread(self):
@@ -1220,12 +1220,26 @@ class FullscreenSpreadReader(QWidget):
             return
         self._is_fullscreen = on
         if on:
+            # 全画面では枠なし（タイトルバーなし）にする
+            self.setWindowFlags(
+                Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
             self.showFullScreen()
         else:
+            # 通常表示ではタイトルバー（閉じるボタン付き）のある普通の
+            # ウインドウに戻す。枠なしのまま縮小すると、タイトルバーも
+            # 閉じるボタンも無く、動かすことも閉じることもできなくなる。
+            self.setWindowFlags(
+                Qt.WindowType.Window
+                | Qt.WindowType.WindowTitleHint
+                | Qt.WindowType.WindowSystemMenuHint
+                | Qt.WindowType.WindowCloseButtonHint
+                | Qt.WindowType.WindowMinMaxButtonsHint)
             self.showNormal()
-            if self.width() < 480 or self.height() < 360:
+            if self.width() < 640 or self.height() < 480:
                 self.resize(1100, 800)
+            self.show()
         self._sync_fs_button()
+        self._position_overlays()
         self._show_hud("🖥 全画面表示" if on else "🖥 通常表示（Fで全画面に戻ります）")
 
     def toggle_fullscreen(self):
@@ -1324,6 +1338,37 @@ class FullscreenSpreadReader(QWidget):
             return
         if self.history_open_callback is not None:
             self.history_open_callback(path)
+
+    def _cursor_near_hud(self) -> bool:
+        """マウスが画面の下の方（HUDバーの出る場所）にあるか。"""
+        try:
+            pos = self.mapFromGlobal(self.cursor().pos())
+        except Exception:
+            return False
+        if not (0 <= pos.x() <= self.width() and 0 <= pos.y() <= self.height()):
+            return False
+        if self.hud_container.isVisible() and self.hud_container.geometry().adjusted(
+                -16, -16, 16, 16).contains(pos):
+            return True
+        return pos.y() >= self.height() - 120
+
+    def _show_hud_for_navigation(self):
+        """ページ移動時のHUD表示。
+
+        マウス操作のたびにバーが出ると読書の邪魔になるため、バーが
+        すでに出ているときか、マウスが下の方にあるときだけ更新する。
+        それ以外のページ移動では出さない（ページ番号は下端へマウスを
+        持っていけば見られる）。
+        """
+        hud_visible = (
+            hasattr(self, "hud_opacity")
+            and self.hud_container.isVisible()
+            and self.hud_opacity.opacity() > 0.05
+        )
+        from_keyboard = getattr(self, "_nav_from_keyboard", False)
+        self._nav_from_keyboard = False
+        if hud_visible or from_keyboard or self._cursor_near_hud():
+            self._show_hud()
 
     def _show_hud(self, extra_text=""):
         if not self.spreads or not hasattr(self, "hud_label"):
@@ -2352,7 +2397,11 @@ class FullscreenSpreadReader(QWidget):
         if not self._toolbar_pinned and self.mode == "view":
             self.close_hide_timer.start()
 
-        self._show_hud()
+        # HUDバーは、マウスを画面の下の方へ持ってきたときだけ出す。
+        # 以前はマウスを動かすたびに出て、消えるタイマーも伸び続けたため
+        # ずっと出っぱなしで読書の邪魔になっていた。
+        if pos.y() >= self.height() - 120:
+            self._show_hud()
 
         if self._panning:
             delta = pos - self._pan_start_pt
@@ -2623,6 +2672,14 @@ class FullscreenSpreadReader(QWidget):
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
         mods = event.modifiers()
+        # キーボードでページ移動したときはページ番号（HUD）を出してよい
+        if key in (
+            Qt.Key.Key_Right, Qt.Key.Key_Left, Qt.Key.Key_Down, Qt.Key.Key_Up,
+            Qt.Key.Key_PageDown, Qt.Key.Key_PageUp, Qt.Key.Key_Space,
+            Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Backspace,
+            Qt.Key.Key_Home, Qt.Key.Key_End,
+        ):
+            self._nav_from_keyboard = True
 
         if key == Qt.Key.Key_Space and (self._zoom > 1.01 or self.mode != "view"):
             if not event.isAutoRepeat():
