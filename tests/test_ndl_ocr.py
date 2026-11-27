@@ -253,3 +253,34 @@ class TestQImageToArray(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOffsetMediaboxApply:
+    """原点がずれた MediaBox のページでも適用が例外なく終わり、
+    回転が元に戻ること（監査で見つけた実バグの回帰防止）。"""
+
+    def test_offset_mediabox_rotated_page(self):
+        import fitz
+        from core.ocr_cleaner import apply_cleaned_image_and_ocr_to_page
+
+        doc = fitz.open()
+        page = doc.new_page(width=400, height=300)
+        page.set_mediabox(fitz.Rect(100, 80, 500, 380))
+        try:
+            page.set_cropbox(fitz.Rect(120, 90, 480, 290))
+        except Exception:
+            pass
+        page.set_rotation(90)
+        vw, vh = int(page.rect.width), int(page.rect.height)
+        chunk = {"text": "オフセット", "bbox": (30.0, 40.0, 180.0, 70.0)}
+        inserted = apply_cleaned_image_and_ocr_to_page(
+            doc=doc, page_idx=0, cleaned_qimg=None, ocr_chunks=[chunk],
+            ocr_img_size=(vw, vh), apply_cleaned_visual=False)
+        assert inserted == 1
+        assert doc[0].rotation == 90
+        # cropbox も元どおりに戻っていること
+        assert fitz.Rect(doc[0].cropbox) == fitz.Rect(120, 90, 480, 290)
+        # 文字が入っていること（原点ずれMediaBoxではMuPDFの抽出が
+        # 一部を取りこぼすことがあるため、入った文字の一部で確認）
+        assert "セット" in doc[0].get_text()
+        doc.close()

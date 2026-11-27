@@ -805,12 +805,21 @@ def apply_cleaned_image_and_ocr_to_page(
         saved_crop = get_effective_cropbox(page)
         view_rect = fitz.Rect(page.rect)
 
-        if saved_rot != 0:
-            page.set_rotation(0)
-        if saved_crop != page.mediabox:
-            page.set_cropbox(page.mediabox)
-
         try:
+            if saved_rot != 0:
+                page.set_rotation(0)
+            if saved_crop != page.mediabox:
+                # 原点がずれた MediaBox などでは、cropbox を mediabox へ
+                # 広げる操作自体が例外になることがある。その場合は
+                # 今の cropbox のまま処理を続ける（座標計算は saved_crop
+                # 基準なので、そのままでも位置は合う）。
+                try:
+                    page.set_cropbox(page.mediabox)
+                except Exception:
+                    logger.debug(
+                        "Failed to widen cropbox to mediabox; continuing",
+                        exc_info=True,
+                    )
             if apply_cleaned_visual and cleaned_qimg is not None and not cleaned_qimg.isNull():
                 img_to_insert = cleaned_qimg
                 if saved_rot != 0:
@@ -947,8 +956,15 @@ def apply_cleaned_image_and_ocr_to_page(
                     if _insert_chunk_text(text_str, view_baseline_pt, est_fs):
                         inserted_count += 1
         finally:
-            if page.rotation != saved_rot:
-                page.set_rotation(saved_rot)
-            if saved_crop != page.mediabox:
-                page.set_cropbox(saved_crop)
+            # 復元は必ず試みる（片方が失敗しても、もう片方は戻す）
+            try:
+                if page.rotation != saved_rot:
+                    page.set_rotation(saved_rot)
+            except Exception:
+                logger.debug("Failed to restore page rotation", exc_info=True)
+            try:
+                if fitz.Rect(page.cropbox) != saved_crop:
+                    page.set_cropbox(saved_crop)
+            except Exception:
+                logger.debug("Failed to restore cropbox", exc_info=True)
     return inserted_count
