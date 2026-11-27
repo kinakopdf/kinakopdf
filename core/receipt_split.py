@@ -327,6 +327,123 @@ def _quads_from_ink(data, w, h, stride, thr):
 
 
 # ============================================================
+# 誤検出の後処理（ロゴなどの小さな図形を書類と数えない）
+# ============================================================
+
+def _quad_bbox(quad):
+    xs = [p[0] for p in quad]
+    ys = [p[1] for p in quad]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _bbox_overlap_frac(small_box, big_box):
+    """small_box の面積のうち big_box と重なる割合（0.0〜1.0）。"""
+    ix = max(0.0, min(small_box[2], big_box[2])
+             - max(small_box[0], big_box[0]))
+    iy = max(0.0, min(small_box[3], big_box[3])
+             - max(small_box[1], big_box[1]))
+    area = max(1.0, (small_box[2] - small_box[0])
+               * (small_box[3] - small_box[1]))
+    return ix * iy / area
+
+
+def _bbox_gap(box_a, box_b):
+    """2つの外接矩形の間の距離（重なっていれば 0）。"""
+    gx = max(0.0, max(box_a[0], box_b[0]) - min(box_a[2], box_b[2]))
+    gy = max(0.0, max(box_a[1], box_b[1]) - min(box_a[3], box_b[3]))
+    return math.hypot(gx, gy)
+
+
+def _merge_nearby_small_quads(quads, page_long):
+    """小さい四隅が大きい四隅のすぐ近くにあれば、その一部として統合する。
+
+    レシートの上部にあるロゴマークなどは、文字の塊と少し離れていると
+    別の書類として数えられてしまう。近くにある場合はレシートの一部
+    とみなし、枠を広げて取り込む（ロゴも切り分け結果に含まれる）。
+    どの大きい四隅にも近くない小さいものは、そのまま残す（本当に
+    小さいレシートかもしれないため。切り分けは _filter_outlier_quads
+    側の極端に小さいものだけに限る）。
+    """
+    if len(quads) < 2:
+        return list(quads)
+    areas = [_polygon_area(q) for q in quads]
+    ordered = sorted(a for a in areas if a > 0)
+    if not ordered:
+        return list(quads)
+    ref = ordered[len(ordered) // 2]
+    gap_limit = 0.055 * page_long
+    bigs = []
+    smalls = []
+    for q, a in zip(quads, areas):
+        (bigs if a >= 0.5 * ref else smalls).append(q)
+    if not bigs or not smalls:
+        return list(quads)
+    result = list(bigs)
+    big_boxes = [_quad_bbox(q) for q in result]
+    for s in smalls:
+        s_box = _quad_bbox(s)
+        best_i, best_gap = -1, None
+        for i, b_box in enumerate(big_boxes):
+            gap = _bbox_gap(s_box, b_box)
+            if best_gap is None or gap < best_gap:
+                best_i, best_gap = i, gap
+        if best_i >= 0 and best_gap is not None and best_gap <= gap_limit:
+            merged = _min_area_rect_quad(
+                [tuple(p) for p in result[best_i]]
+                + [tuple(p) for p in s])
+            if merged is not None:
+                result[best_i] = merged
+                big_boxes[best_i] = _quad_bbox(merged)
+                continue
+        result.append(s)
+    return result
+
+
+def _filter_outlier_quads(quads):
+    """書類らしくない四隅を取り除く。
+
+    - 他の四隅にすっぽり含まれる小さいもの（内側の図形など）
+    - ほかの書類と比べて極端に小さいもの
+
+    取り除きすぎを避けるため、大きさの基準は検出された四隅の
+    中央値（多い側）を使い、その2割未満だけを対象にする。
+    本当に小さいレシートを取り除いてしまった場合は、プレビューの
+    手動修正で枠を追加できる。
+    """
+    if len(quads) < 2:
+        return list(quads)
+    areas = [_polygon_area(q) for q in quads]
+    boxes = [_quad_bbox(q) for q in quads]
+    keep = [True] * len(quads)
+    # 包含: 小さい方の外接矩形の8割以上が大きい方に重なっていたら落とす
+    for i in range(len(quads)):
+        if areas[i] <= 0:
+            keep[i] = False
+            continue
+        for j in range(len(quads)):
+            if i == j or areas[j] <= areas[i]:
+                continue
+            ix = max(0.0, min(boxes[i][2], boxes[j][2])
+                     - max(boxes[i][0], boxes[j][0]))
+            iy = max(0.0, min(boxes[i][3], boxes[j][3])
+                     - max(boxes[i][1], boxes[j][1]))
+            box_area = max(1.0, (boxes[i][2] - boxes[i][0])
+                           * (boxes[i][3] - boxes[i][1]))
+            if ix * iy >= 0.8 * box_area:
+                keep[i] = False
+                break
+    # 大きさ: 基準（中央値のうち大きい側）の2割未満は落とす
+    remaining = [a for a, k in zip(areas, keep) if k and a > 0]
+    if len(remaining) >= 2:
+        ordered = sorted(remaining)
+        ref = ordered[len(ordered) // 2]
+        for i in range(len(quads)):
+            if keep[i] and areas[i] < 0.2 * ref:
+                keep[i] = False
+    return [q for q, k in zip(quads, keep) if k]
+
+
+# ============================================================
 # 検出の入口
 # ============================================================
 
@@ -362,15 +479,27 @@ def detect_receipt_quads(image: QImage, max_dim: int = DETECT_MAX_DIM):
         return []
     thr = _otsu_threshold(data, gw, gh, stride)
     paper = _quads_from_paper(data, gw, gh, stride, thr)
+    ink = _quads_from_ink(data, gw, gh, stride, thr)
+    if paper and ink:
+        # □ロゴのような閉じた図形の内側は、明るい成分として「紙」と
+        # 誤認されることがある。インクの四隅にすっぽり入る紙の四隅は
+        # 図形の内側とみなして取り除く。
+        ink_boxes = [_quad_bbox(q) for q in ink]
+        paper = [
+            q for q in paper
+            if not any(
+                _bbox_overlap_frac(_quad_bbox(q), ib) >= 0.8
+                for ib in ink_boxes)
+        ]
     if len(paper) >= 2:
         # 紙の形が取れているなら、そちらの方が正確なので採用する
         chosen, ratio = paper, PAPER_EXPAND_RATIO
+    elif len(ink) > len(paper):
+        chosen, ratio = ink, INK_EXPAND_RATIO
     else:
-        ink = _quads_from_ink(data, gw, gh, stride, thr)
-        if len(ink) > len(paper):
-            chosen, ratio = ink, INK_EXPAND_RATIO
-        else:
-            chosen, ratio = paper, PAPER_EXPAND_RATIO
+        chosen, ratio = paper, PAPER_EXPAND_RATIO
+    chosen = _merge_nearby_small_quads(chosen, max(gw, gh))
+    chosen = _filter_outlier_quads(chosen)
     inv = 1.0 / scale if scale else 1.0
     out = []
     for quad in chosen:
