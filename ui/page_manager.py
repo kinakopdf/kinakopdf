@@ -1374,10 +1374,13 @@ class PageManager(QDockWidget):
                 f"プレビューの準備に失敗しました。\n{e}")
             return
 
+        keep_originals = False
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             merged_doc = dialog.build_merged_doc()
+            keep_fn = getattr(dialog, "keep_originals", None)
+            keep_originals = bool(keep_fn()) if callable(keep_fn) else False
         except Exception as e:
             QMessageBox.critical(
                 self, "🧩 2ページを1枚に結合",
@@ -1389,12 +1392,17 @@ class PageManager(QDockWidget):
         cmd = MergeTwoPagesCommand(
             doc, first_idx, second_idx, merged_doc,
             viewer.page_annotations, viewer.current_page_idx,
-            take_ownership=True)
+            take_ownership=True, keep_originals=keep_originals)
         cmd.redo(viewer)
         viewer.history.push(cmd)
 
-        self.main.statusBar().showMessage(
-            f"{first_idx + 1}ページ目と{second_idx + 1}ページ目を1枚に結合しました")
+        if keep_originals:
+            self.main.statusBar().showMessage(
+                f"{first_idx + 1}ページ目と{second_idx + 1}ページ目を1枚に結合しました"
+                "（元のページは残しています）")
+        else:
+            self.main.statusBar().showMessage(
+                f"{first_idx + 1}ページ目と{second_idx + 1}ページ目を1枚に結合しました")
 
     def perspective_correct_page(self):
         """台形補正（ページ上の書類部分を四隅指定で長方形に直す）。

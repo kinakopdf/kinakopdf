@@ -589,7 +589,8 @@ class PDFDocumentManager:
     @classmethod
     def build_merged_two_pages_doc(cls, doc, first_idx, second_idx,
                                    orientation="horizontal",
-                                   trim_first=0.0, trim_second=0.0):
+                                   trim_first=0.0, trim_second=0.0,
+                                   offset_second_x=0.0, offset_second_y=0.0):
         """2ページを左右または上下に並べた、1ページだけの新しい文書を返す。
 
         FAXで1枚の書類が2ページに分かれて届いた場合などに、2ページを
@@ -607,6 +608,11 @@ class PDFDocumentManager:
           焼き込んでから貼るため、表示どおりの向きで結合される。
         - サイズの異なる2ページは、並べる方向と直交する軸で中央寄せする
           （左右なら縦方向、上下なら横方向）。
+        - offset_second_x / offset_second_y は2枚目の位置の微調整（pt）。
+          左右並びで上下の段差を直す、上下並びで左右のずれを直す、といった
+          使い方を想定する。ずらした分はできあがりのページが広がって
+          受け止めるため、端が切れることはない（重ねる方向にずらした
+          場合は、その分ページが小さくなる）。
         """
         if orientation not in ("horizontal", "vertical"):
             raise ValueError(f"orientation が不正です: {orientation!r}")
@@ -633,12 +639,15 @@ class PDFDocumentManager:
                 def _clamp_trim(trim, length):
                     return max(0.0, min(float(trim), max(0.0, length - 20.0)))
 
+                # 2枚目の位置の微調整（±500pt に丸める）
+                off_x = max(-500.0, min(500.0, float(offset_second_x or 0.0)))
+                off_y = max(-500.0, min(500.0, float(offset_second_y or 0.0)))
+
                 if orientation == "horizontal":
                     trim_a = _clamp_trim(trim_first, sizes[0][0])
                     trim_b = _clamp_trim(trim_second, sizes[1][0])
                     kept = [sizes[0][0] - trim_a, sizes[1][0] - trim_b]
-                    new_w = kept[0] + kept[1]
-                    new_h = max(sizes[0][1], sizes[1][1])
+                    base_h = max(sizes[0][1], sizes[1][1])
                     # clip はメディアボックス座標（cropbox 基準）で指定する
                     clips = [
                         fitz.Rect(crops[0].x0, crops[0].y0,
@@ -646,30 +655,40 @@ class PDFDocumentManager:
                         fitz.Rect(crops[1].x0 + trim_b, crops[1].y0,
                                   crops[1].x1, crops[1].y1),
                     ]
-                    targets = [
-                        fitz.Rect(0, (new_h - sizes[0][1]) / 2,
-                                  kept[0], (new_h + sizes[0][1]) / 2),
-                        fitz.Rect(kept[0], (new_h - sizes[1][1]) / 2,
-                                  new_w, (new_h + sizes[1][1]) / 2),
+                    origins = [
+                        (0.0, (base_h - sizes[0][1]) / 2),
+                        (kept[0] + off_x, (base_h - sizes[1][1]) / 2 + off_y),
                     ]
+                    dims = [(kept[0], sizes[0][1]), (kept[1], sizes[1][1])]
                 else:
                     trim_a = _clamp_trim(trim_first, sizes[0][1])
                     trim_b = _clamp_trim(trim_second, sizes[1][1])
                     kept = [sizes[0][1] - trim_a, sizes[1][1] - trim_b]
-                    new_w = max(sizes[0][0], sizes[1][0])
-                    new_h = kept[0] + kept[1]
+                    base_w = max(sizes[0][0], sizes[1][0])
                     clips = [
                         fitz.Rect(crops[0].x0, crops[0].y0,
                                   crops[0].x1, crops[0].y1 - trim_a),
                         fitz.Rect(crops[1].x0, crops[1].y0 + trim_b,
                                   crops[1].x1, crops[1].y1),
                     ]
-                    targets = [
-                        fitz.Rect((new_w - sizes[0][0]) / 2, 0,
-                                  (new_w + sizes[0][0]) / 2, kept[0]),
-                        fitz.Rect((new_w - sizes[1][0]) / 2, kept[0],
-                                  (new_w + sizes[1][0]) / 2, new_h),
+                    origins = [
+                        ((base_w - sizes[0][0]) / 2, 0.0),
+                        ((base_w - sizes[1][0]) / 2 + off_x, kept[0] + off_y),
                     ]
+                    dims = [(sizes[0][0], kept[0]), (sizes[1][0], kept[1])]
+
+                # ずらし分も含めた全体の外接範囲を新しいページにする
+                min_x = min(o[0] for o in origins)
+                min_y = min(o[1] for o in origins)
+                max_x = max(o[0] + d[0] for o, d in zip(origins, dims))
+                max_y = max(o[1] + d[1] for o, d in zip(origins, dims))
+                new_w = max_x - min_x
+                new_h = max_y - min_y
+                targets = [
+                    fitz.Rect(ox - min_x, oy - min_y,
+                              ox - min_x + dw, oy - min_y + dh)
+                    for (ox, oy), (dw, dh) in zip(origins, dims)
+                ]
 
                 merged = fitz.open()
                 try:

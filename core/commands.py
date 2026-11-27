@@ -773,11 +773,13 @@ class MergeTwoPagesCommand(BaseCommand):
     """
 
     def __init__(self, doc, first_idx, second_idx, merged_doc,
-                 page_annotations, prev_page_idx, take_ownership=False):
+                 page_annotations, prev_page_idx, take_ownership=False,
+                 keep_originals=False):
         super().__init__()
         if first_idx == second_idx:
             raise ValueError("結合する2ページに同じページが指定されています")
         self.first_idx, self.second_idx = sorted((first_idx, second_idx))
+        self.keep_originals = bool(keep_originals)
         self.prev_page_idx = prev_page_idx
         self.backup_doc = fitz.open()
         self.saved_annots = {}
@@ -818,25 +820,37 @@ class MergeTwoPagesCommand(BaseCommand):
 
         with FITZ_LOCK:
             doc.insert_pdf(self.merged_doc, start_at=i)
-            # 挿入で元ページは i+1 と j+1 にずれる。後ろから消す。
-            doc.delete_page(j + 1)
-            doc.delete_page(i + 1)
+            if not self.keep_originals:
+                # 挿入で元ページは i+1 と j+1 にずれる。後ろから消す。
+                doc.delete_page(j + 1)
+                doc.delete_page(i + 1)
 
-        # 注釈の付け替え: 結合した2ページ分は破棄（焼き込み済み）。
-        # i より前は不変、i と j の間は「挿入+1」と「手前の削除-1」で相殺され不変、
-        # j より後ろは1つ前に詰まる。
-        new_annots = {}
-        for old_idx, anns in viewer.page_annotations.items():
-            if old_idx in (i, j) or not anns:
-                continue
-            if old_idx < i:
-                new_idx = old_idx
-            elif old_idx < j:
-                new_idx = old_idx
-            else:
-                new_idx = old_idx - 1
-            new_annots[new_idx] = anns
-        viewer.page_annotations = new_annots
+        if self.keep_originals:
+            # 元ページを残す場合: 結合ページを i に挿入するだけ。
+            # i 以降の注釈は1つ後ろへずれる（元ページの注釈もそのまま残る）。
+            new_annots = {}
+            for old_idx, anns in viewer.page_annotations.items():
+                if not anns:
+                    continue
+                new_idx = old_idx if old_idx < i else old_idx + 1
+                new_annots[new_idx] = anns
+            viewer.page_annotations = new_annots
+        else:
+            # 注釈の付け替え: 結合した2ページ分は破棄（焼き込み済み）。
+            # i より前は不変、i と j の間は「挿入+1」と「手前の削除-1」で相殺され不変、
+            # j より後ろは1つ前に詰まる。
+            new_annots = {}
+            for old_idx, anns in viewer.page_annotations.items():
+                if old_idx in (i, j) or not anns:
+                    continue
+                if old_idx < i:
+                    new_idx = old_idx
+                elif old_idx < j:
+                    new_idx = old_idx
+                else:
+                    new_idx = old_idx - 1
+                new_annots[new_idx] = anns
+            viewer.page_annotations = new_annots
 
         viewer.load_pdf(doc, i, fit_view=True)
         viewer.notify_pages_updated(None)
@@ -848,6 +862,23 @@ class MergeTwoPagesCommand(BaseCommand):
             logger.debug("MergeTwoPagesCommand.undo: no document; no-op")
             return
         i, j = self.first_idx, self.second_idx
+
+        if self.keep_originals:
+            # 結合ページ（位置 i）を消すだけ。元ページは最初から残っている。
+            with FITZ_LOCK:
+                if 0 <= i < len(doc):
+                    doc.delete_page(i)
+            new_annots = {}
+            for cur_idx, anns in viewer.page_annotations.items():
+                if cur_idx == i or not anns:
+                    continue
+                old_idx = cur_idx if cur_idx < i else cur_idx - 1
+                new_annots[old_idx] = anns
+            viewer.page_annotations = new_annots
+            target = _clamp_page_idx(viewer, self.prev_page_idx)
+            viewer.load_pdf(doc, target if target is not None else i, fit_view=True)
+            viewer.notify_pages_updated(None)
+            return
 
         with FITZ_LOCK:
             if 0 <= i < len(doc):
