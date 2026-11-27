@@ -152,6 +152,91 @@ class TestBatchWithFakePipeline(unittest.TestCase):
         self.assertEqual(ndl_ocr.run_ndl_ocr_on_qimage(QImage()), [])
 
 
+class TestApplyInsertedCount(unittest.TestCase):
+    """適用処理が「埋め込めたブロック数」を返すことの検証。
+
+    認識したのに埋め込みが0件だったケースを、ダイアログ側で
+    検出して警告するために使う戻り値。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_returns_inserted_count_and_text_is_searchable(self):
+        import fitz
+
+        from core.ocr_cleaner import apply_cleaned_image_and_ocr_to_page
+
+        doc = fitz.open()
+        doc.new_page(width=400, height=300)
+        chunks = [
+            {"text": "領収書", "bbox": (20.0, 30.0, 120.0, 60.0)},
+            {"text": "合計3,140円", "bbox": (20.0, 100.0, 200.0, 130.0)},
+            {"text": "縦書き", "bbox": (300.0, 30.0, 330.0, 150.0),
+             "vertical": True},
+        ]
+        inserted = apply_cleaned_image_and_ocr_to_page(
+            doc=doc, page_idx=0, cleaned_qimg=None, ocr_chunks=chunks,
+            ocr_img_size=(400, 300), apply_cleaned_visual=False,
+        )
+        self.assertEqual(inserted, 3)
+        extracted = doc[0].get_text("text")
+        # フォントによっては抽出時に互換文字へ寄る字があるため、
+        # 埋め込みの有無は合計の文字列と検索ヒットで確認する
+        self.assertIn("合計3,140円", extracted)
+        self.assertGreaterEqual(len(doc[0].search_for("合計3,140円")), 1)
+        doc.close()
+
+    def test_no_chunks_returns_zero(self):
+        import fitz
+
+        from core.ocr_cleaner import apply_cleaned_image_and_ocr_to_page
+
+        doc = fitz.open()
+        doc.new_page(width=200, height=200)
+        inserted = apply_cleaned_image_and_ocr_to_page(
+            doc=doc, page_idx=0, cleaned_qimg=None, ocr_chunks=[],
+            ocr_img_size=(200, 200), apply_cleaned_visual=False,
+        )
+        self.assertEqual(inserted, 0)
+        doc.close()
+
+
+class TestDialogDefaultMode(unittest.TestCase):
+    """ダイアログの標準の実行内容が「OCR文字も埋め込む」であること。
+
+    以前は「色抜き画像のみ」が標準で、テスト実行で文字が見えても
+    そのまま適用すると埋め込まれない、という落とし穴があった。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_default_action_mode_includes_ocr(self):
+        import fitz
+        from types import SimpleNamespace
+
+        from ui.ocr_dialog import ScanCleanOcrDialog
+
+        doc = fitz.open()
+        doc.new_page(width=200, height=200)
+        viewer = SimpleNamespace(current_pdf=doc, current_page_idx=0)
+        dlg = ScanCleanOcrDialog(viewer)
+        try:
+            self.assertEqual(dlg.combo_action_mode.currentData(), "both")
+            clean_item = dlg.combo_action_mode.findData("clean_only")
+            self.assertGreaterEqual(clean_item, 0)
+            self.assertIn(
+                "埋め込まない",
+                dlg.combo_action_mode.itemText(clean_item),
+            )
+        finally:
+            dlg.close()
+            doc.close()
+
+
 @unittest.skipUnless(find_spec("numpy"), "numpy がない環境ではスキップ")
 class TestQImageToArray(unittest.TestCase):
     def test_shape_and_pixel_values(self):

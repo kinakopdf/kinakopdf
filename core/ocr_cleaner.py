@@ -789,9 +789,16 @@ def apply_cleaned_image_and_ocr_to_page(
     ocr_chunks: Optional[List[Dict[str, Any]]],
     ocr_img_size: Tuple[int, int],
     apply_cleaned_visual: bool = True,
-) -> None:
+) -> int:
+    """色抜き画像とOCR文字をページへ反映し、埋め込めたブロック数を返す。
+
+    埋め込みは例外を握りつぶして続行する作りのため、呼び出し側が
+    「認識したのに1件も埋め込めなかった」ことを検出できるよう、
+    実際に挿入できた chunk の数を返す。
+    """
     from PyQt6.QtCore import QBuffer, QIODevice
 
+    inserted_count = 0
     with FITZ_LOCK:
         page = doc[page_idx]
         saved_rot = page.rotation % 360
@@ -884,7 +891,7 @@ def apply_cleaned_image_and_ocr_to_page(
                                 color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
                                 fontfile=JAPANESE_FONT, fontname=font_alias, render_mode=3,
                             )
-                            return
+                            return True
                         except Exception:
                             pass
                     try:
@@ -893,8 +900,10 @@ def apply_cleaned_image_and_ocr_to_page(
                             color=OCR_TEXT_MARKER_RGB, rotate=saved_rot,
                             fontname="japan", render_mode=3,
                         )
+                        return True
                     except Exception:
                         logger.debug("Failed to insert OCR text chunk", exc_info=True)
+                    return False
 
                 for chunk in ocr_chunks:
                     text_str = str(chunk.get("text", "")).strip()
@@ -916,9 +925,13 @@ def apply_cleaned_image_and_ocr_to_page(
                         cell_h = box_h / char_count
                         fs_v = max(4.0, min(72.0, box_w * 0.88, cell_h * 0.95))
                         char_x = vx0 + max(0.0, (box_w - fs_v) / 2.0)
+                        any_ok = False
                         for i, ch in enumerate(text_str):
                             baseline_y = vy0 + cell_h * i + cell_h * 0.5 + fs_v * 0.36
-                            _insert_chunk_text(ch, fitz.Point(char_x, baseline_y), fs_v)
+                            if _insert_chunk_text(ch, fitz.Point(char_x, baseline_y), fs_v):
+                                any_ok = True
+                        if any_ok:
+                            inserted_count += 1
                         continue
 
                     est_fs = max(4.5, min(72.0, box_h * 0.88))
@@ -931,9 +944,11 @@ def apply_cleaned_image_and_ocr_to_page(
                             pass
 
                     view_baseline_pt = fitz.Point(vx0, vy0 + box_h * 0.84)
-                    _insert_chunk_text(text_str, view_baseline_pt, est_fs)
+                    if _insert_chunk_text(text_str, view_baseline_pt, est_fs):
+                        inserted_count += 1
         finally:
             if page.rotation != saved_rot:
                 page.set_rotation(saved_rot)
             if saved_crop != page.mediabox:
                 page.set_cropbox(saved_crop)
+    return inserted_count

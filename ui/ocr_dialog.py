@@ -91,7 +91,8 @@ class _OcrTestWorker(QRunnable):
 
 class _BatchApplySignals(QObject):
     progress = pyqtSignal(int, str)
-    finished = pyqtSignal(object, list, int, str)
+    # after_doc, processed_indices, total_ocr_words, total_inserted, err_msg
+    finished = pyqtSignal(object, list, int, int, str)
 
 
 class _BatchApplyWorker(QRunnable):
@@ -130,13 +131,14 @@ class _BatchApplyWorker(QRunnable):
 
         processed_indices: List[int] = []
         total_ocr_words = 0
+        total_inserted = 0
         num_targets = len(self.target_indices)
 
         def _cancel_and_finish():
             with FITZ_LOCK:
                 after_doc.close()
                 src_doc.close()
-            self.signals.finished.emit(None, [], 0, "CANCELED")
+            self.signals.finished.emit(None, [], 0, 0, "CANCELED")
 
         try:
             for batch_start in range(0, num_targets, self.BATCH_SIZE):
@@ -212,7 +214,7 @@ class _BatchApplyWorker(QRunnable):
                         single_doc.insert_pdf(src_doc, from_page=step_i, to_page=step_i)
                     try:
                         c_img = cleaned_images[j]
-                        apply_cleaned_image_and_ocr_to_page(
+                        inserted = apply_cleaned_image_and_ocr_to_page(
                             doc=single_doc,
                             page_idx=0,
                             cleaned_qimg=c_img if self.need_visual_clean else None,
@@ -220,6 +222,7 @@ class _BatchApplyWorker(QRunnable):
                             ocr_img_size=(c_img.width(), c_img.height()),
                             apply_cleaned_visual=self.need_visual_clean,
                         )
+                        total_inserted += int(inserted or 0)
                         with FITZ_LOCK:
                             after_doc.insert_pdf(single_doc, from_page=0, to_page=0)
                         processed_indices.append(p_idx)
@@ -235,13 +238,15 @@ class _BatchApplyWorker(QRunnable):
             with FITZ_LOCK:
                 src_doc.close()
 
-            self.signals.finished.emit(after_doc, processed_indices, total_ocr_words, "")
+            self.signals.finished.emit(
+                after_doc, processed_indices, total_ocr_words, total_inserted, ""
+            )
 
         except Exception as e:
             with FITZ_LOCK:
                 after_doc.close()
                 src_doc.close()
-            self.signals.finished.emit(None, [], 0, str(e))
+            self.signals.finished.emit(None, [], 0, 0, str(e))
 
 
 class _PreviewGraphicsView(QGraphicsView):
@@ -515,10 +520,10 @@ class ScanCleanOcrDialog(QDialog):
         ocr_layout.addWidget(QLabel("実行内容:"))
         self.combo_action_mode = QComboBox()
         self.combo_action_mode.addItem(
-            "🧼 色抜き（白黒クリーンアップ）画像のみページに反映する（標準）", "clean_only"
+            "✨ 色抜き画像＋透明OCR文字も埋め込む（標準）", "both"
         )
         self.combo_action_mode.addItem(
-            "✨ 色抜き画像＋透明OCR文字も埋め込む", "both"
+            "🧼 色抜き（白黒クリーンアップ）画像のみページに反映する（OCR文字は埋め込まない）", "clean_only"
         )
         self.combo_action_mode.addItem(
             "🔎 ページの見た目（カラー）は変えず、透明OCR文字だけ埋め込む", "ocr_only"
@@ -953,6 +958,7 @@ class ScanCleanOcrDialog(QDialog):
         after_doc: Optional[fitz.Document],
         processed_indices: list,
         total_ocr_words: int,
+        total_inserted: int,
         err_msg: str,
     ):
         active_batch = getattr(self, "_active_batch_worker_ref", None)
@@ -996,11 +1002,12 @@ class ScanCleanOcrDialog(QDialog):
         cmd.redo(self.viewer)
         self.viewer.history.push(cmd)
 
+        ocr_requested = getattr(self, "_pending_need_ocr", False)
         win = self.viewer.window()
         if hasattr(win, "statusBar"):
-            if getattr(self, "_pending_need_ocr", False):
+            if ocr_requested:
                 win.statusBar().showMessage(
-                    f"🧼 色抜き＆OCR完了: {len(processed_indices)}ページ処理（認識ブロック: {total_ocr_words}件 — Ctrl+Fで検索・Ctrl+クリックで電卓合計が可能です）"
+                    f"🧼 色抜き＆OCR完了: {len(processed_indices)}ページ処理（埋め込んだブロック: {total_inserted}件 — Ctrl+Fで検索・Ctrl+クリックで電卓合計が可能です）"
                 )
             else:
                 win.statusBar().showMessage(
@@ -1008,3 +1015,22 @@ class ScanCleanOcrDialog(QDialog):
                 )
 
         self.accept()
+
+        # OCRを選んだのに1件も埋め込めなかった場合は、成功と見せかけず
+        # 理由が分かる形で知らせる（ページの見た目の反映自体は済んでいる）
+        if ocr_requested and processed_indices and total_inserted == 0:
+            if total_ocr_words == 0:
+                QMessageBox.warning(
+                    self.viewer.window() or self,
+                    "OCRの文字は埋め込まれませんでした",
+                    "ページの見た目は反映しましたが、文字を1件も認識できなかったため、"
+                    "OCRの文字は埋め込まれませんでした。\n"
+                    "解像度（DPI）を上げるか、色抜きを弱めると読み取れることがあります。",
+                )
+            else:
+                QMessageBox.warning(
+                    self.viewer.window() or self,
+                    "OCRの文字は埋め込まれませんでした",
+                    f"文字は{total_ocr_words}件認識できましたが、ページへの埋め込みに失敗しました。\n"
+                    "ページの見た目だけ反映しています。お手数ですが、もう一度お試しください。",
+                )
