@@ -6,7 +6,7 @@ QSettings("SecureLocalPDFEditor", "SecureLocalPDFEditor") で、値は JSON 文�
 すべてローカル保存のみで、ネットワーク通信は行わない。
 
 - reader_positions: {正規化パス: {"page": int, "ts": float}}
-- reader_history:   [{"path": str, "page": int, "ts": float}, ...] 新しい順・最大10件
+- reader_history:   [{"path": str, "page": int, "ts": float}, ...] 新しい順・最大20件
 - reader_prefs:     {"right_to_left": bool, "cover_single": bool}
 
 JSON が壊れている場合は例外を出さず、既定値（未保存扱い）にフォールバックする。
@@ -23,7 +23,7 @@ from core import logger
 _POSITIONS_KEY = "reader_positions"
 _HISTORY_KEY = "reader_history"
 _PREFS_KEY = "reader_prefs"
-MAX_HISTORY_ENTRIES = 10
+MAX_HISTORY_ENTRIES = 20
 
 
 def _norm_path(path: str) -> str:
@@ -119,7 +119,7 @@ class ReaderStore:
         self._save_json(_HISTORY_KEY, history[:MAX_HISTORY_ENTRIES])
 
     def get_history(self) -> List[Dict[str, Any]]:
-        """簡易履歴（新しい順・最大10件）。各要素は {"path", "page", "ts"}。"""
+        """簡易履歴（新しい順・最大20件）。各要素は {"path", "page", "ts"}。"""
         return self._load_history()
 
     def remove_entry(self, path: str) -> None:

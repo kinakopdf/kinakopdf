@@ -105,6 +105,68 @@ class TestPageManagerRenameAndZoom(unittest.TestCase):
         event.accept.assert_called_once()
         self.assertGreater(self.pm.list_widget.iconSize().width(), before.width())
 
+    def test_grid_size_follows_icon_size(self):
+        self.pm.zoom_thumbnails(3)
+        self._app.processEvents()
+        icon = self.pm.list_widget.iconSize()
+        grid = self.pm.list_widget.gridSize()
+        self.assertGreaterEqual(grid.width(), icon.width())
+        self.assertGreaterEqual(grid.height(), icon.height())
+        self.assertEqual(grid, self.pm.sub_list_widget.gridSize())
+
+    def test_no_overlap_when_zoomed_in_fullscreen(self):
+        # 全画面＋最大ズーム＋スクロールでもサムネイル同士が重ならないこと
+        # （以前はマスが実画像サイズで決まり、隣同士が重なって崩れた）
+        path = str(Path(self._tmp.name) / "many.pdf")
+        _make_pdf(path, pages=16)
+        self.window.open_file_from_path(path)
+        self._app.processEvents()
+        self.pm.toggle_fullscreen()
+        self._app.processEvents()
+        self.pm.zoom_thumbnails(12)
+        self._app.processEvents()
+        from PyQt6.QtTest import QTest
+
+        QTest.qWait(300)
+        self._app.processEvents()
+        lw = self.pm.list_widget
+        bar = lw.verticalScrollBar()
+        bar.setValue(bar.maximum() // 2)
+        self._app.processEvents()
+        rects = [lw.visualItemRect(lw.item(i)) for i in range(lw.count())]
+        for a in range(len(rects)):
+            for b in range(a + 1, len(rects)):
+                self.assertFalse(
+                    rects[a].intersects(rects[b]),
+                    f"items {a} and {b} overlap: {rects[a]} vs {rects[b]}")
+        self.pm.toggle_fullscreen()
+        self._app.processEvents()
+
+    def test_wheel_scroll_is_gentle_when_zoomed(self):
+        # 拡大時のホイールスクロールは、1ノッチで大きく飛ばないこと
+        from PyQt6.QtCore import Qt
+
+        path = str(Path(self._tmp.name) / "many.pdf")
+        _make_pdf(path, pages=16)
+        self.window.open_file_from_path(path)
+        self._app.processEvents()
+        self.pm.zoom_thumbnails(12)
+        self._app.processEvents()
+        lw = self.pm.list_widget
+        bar = lw.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 200)
+        bar.setValue(200)
+        self._app.processEvents()
+        event = mock.Mock()
+        event.modifiers.return_value = Qt.KeyboardModifier.NoModifier
+        event.pixelDelta.return_value.y.return_value = 0
+        event.angleDelta.return_value.y.return_value = -120
+        lw.wheelEvent(event)
+        event.accept.assert_called_once()
+        moved = bar.value() - 200
+        self.assertGreater(moved, 0)
+        self.assertLessEqual(moved, 100)
+
     # --- サブPDF欄の畳み込み ---
     def test_sub_collapse_hides_body(self):
         self.pm.set_sub_collapsed(False)

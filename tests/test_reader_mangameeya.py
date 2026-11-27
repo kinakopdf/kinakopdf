@@ -174,12 +174,12 @@ class TestReaderStore(unittest.TestCase):
         self.assertEqual(self.store.get_position("/tmp/book.pdf"), 2)
 
     def test_history_newest_first_dedup_and_cap(self):
-        for i in range(12):
+        for i in range(25):
             self.store.set_position(f"/tmp/book{i}.pdf", i)
         history = self.store.get_history()
-        self.assertEqual(len(history), 10)
-        self.assertEqual(history[0]["path"], os.path.abspath("/tmp/book11.pdf"))
-        self.assertEqual(history[0]["page"], 11)
+        self.assertEqual(len(history), 20)
+        self.assertEqual(history[0]["path"], os.path.abspath("/tmp/book24.pdf"))
+        self.assertEqual(history[0]["page"], 24)
         # 同じファイルを更新すると先頭に来て重複しない
         self.store.set_position("/tmp/book5.pdf", 42)
         history = self.store.get_history()
@@ -325,6 +325,32 @@ class TestReaderDirection(_ReaderTestBase):
         self.assertEqual(reader.current_spread_idx, 1)
         press(w * 0.8, Qt.MouseButton.RightButton)
         self.assertEqual(reader.current_spread_idx, 0)
+
+
+class TestReaderRotate(_ReaderTestBase):
+    def test_rotate_buttons_exist_and_rotate_current_spread(self):
+        reader = self._make_reader([(595, 842)] * 4)
+        self.assertTrue(hasattr(reader, "btn_hud_rot_left"))
+        self.assertTrue(hasattr(reader, "btn_hud_rot_right"))
+        doc = reader.doc
+        self.assertEqual(doc[0].rotation, 0)
+        reader.rotate_current_spread(90)
+        self._app.processEvents()
+        self.assertEqual(doc[0].rotation, 90)
+        reader.rotate_current_spread(-90)
+        self._app.processEvents()
+        self.assertEqual(doc[0].rotation, 0)
+
+    def test_rotate_marks_edited_and_keeps_anchor_page(self):
+        reader = self._make_reader([(595, 842)] * 6, cover_single=False)
+        reader.set_current_page(2)
+        self._app.processEvents()
+        anchor = reader._current_real_page()
+        reader.rotate_current_spread(90)
+        self._app.processEvents()
+        self.assertTrue(reader._has_edited)
+        # 回転後も同じページを含む見開きに留まる
+        self.assertIn(anchor, reader.spreads[reader.current_spread_idx].page_indices)
 
 
 class TestReaderBlankPages(_ReaderTestBase):

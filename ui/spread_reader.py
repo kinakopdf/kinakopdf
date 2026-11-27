@@ -289,6 +289,21 @@ class FullscreenSpreadReader(QWidget):
         hud_layout.addWidget(self.btn_hud_dir)
         self._sync_dir_button()
 
+        # 現在の見開きのページを回転するボタン（横向きページの修正用）
+        self.btn_hud_rot_left = QPushButton("↺ 回転", self.hud_container)
+        self.btn_hud_rot_left.setToolTip("現在の見開きのページを左へ90°回転します（PDFに反映されます。元に戻す操作で戻せます）")
+        self.btn_hud_rot_left.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_rot_left.setStyleSheet(hud_btn_style)
+        self.btn_hud_rot_left.clicked.connect(lambda: self.rotate_current_spread(-90))
+        hud_layout.addWidget(self.btn_hud_rot_left)
+
+        self.btn_hud_rot_right = QPushButton("↻ 回転", self.hud_container)
+        self.btn_hud_rot_right.setToolTip("現在の見開きのページを右へ90°回転します（PDFに反映されます。元に戻す操作で戻せます）")
+        self.btn_hud_rot_right.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hud_rot_right.setStyleSheet(hud_btn_style)
+        self.btn_hud_rot_right.clicked.connect(lambda: self.rotate_current_spread(90))
+        hud_layout.addWidget(self.btn_hud_rot_right)
+
         # 表示だけの白紙ページをはさむ／取り除くボタン（組を1ページ進める／戻す）
         self.btn_hud_blank_add = QPushButton("📄+ 白紙", self.hud_container)
         self.btn_hud_blank_add.setToolTip("現在の見開きの先頭に表示だけの白紙をはさみ、組を1ページ進めます（PDFは変更されません）")
@@ -1017,6 +1032,69 @@ class FullscreenSpreadReader(QWidget):
         self._pan_offset = QPointF(0.0, 0.0)
         self._hover_screen_rect = None
         self._update_current_spread_cache()
+
+    # ---- ページの回転（現在の見開き） ----
+
+    def rotate_current_spread(self, delta_angle: int):
+        """現在の見開きに含まれる実ページを ±90° 回転する。
+
+        横向きにスキャンされたページを見開きのまま直すための機能。
+        メインエディタとつながっている場合は RotatePagesCommand として
+        メイン側の履歴に積むため、見開き側の「元に戻す」でも戻せる。
+        単独起動（フォルダ一括読み込み）の場合はその場で回転を反映する。
+        回転で縦横が入れ替わると見開きの組み直しが要るため、先読みを
+        破棄してアンカーページ基準で組み直す。
+        """
+        if self.doc is None or not self.spreads:
+            return
+        idx = max(0, min(self.current_spread_idx, len(self.spreads) - 1))
+        page_indices = list(self.spreads[idx].page_indices)
+        if not page_indices:
+            self._show_hud("回転できるページがありません")
+            return
+        self._cancel_active_drawing()
+        lock = self.fitz_lock
+        rotations = []
+        try:
+            if lock is not None:
+                lock.acquire()
+            for page_idx in page_indices:
+                if 0 <= page_idx < len(self.doc):
+                    old_rot = self.doc[page_idx].rotation % 360
+                    new_rot = (old_rot + int(delta_angle)) % 360
+                    if old_rot != new_rot:
+                        rotations.append((page_idx, old_rot, new_rot))
+        finally:
+            if lock is not None:
+                lock.release()
+        if not rotations:
+            return
+
+        if self.viewer is not None and getattr(self.viewer, "current_pdf", None) is self.doc:
+            from core.commands import RotatePagesCommand
+
+            cmd = RotatePagesCommand(rotations)
+            cmd.redo(self.viewer)
+            self.viewer.history.push(cmd)
+        else:
+            try:
+                if lock is not None:
+                    lock.acquire()
+                for page_idx, _old, new_rot in rotations:
+                    self.doc[page_idx].set_rotation(new_rot)
+            finally:
+                if lock is not None:
+                    lock.release()
+            for page_idx, _old, _new in rotations:
+                self._sync_main_viewer_after_edit(page_idx)
+
+        self._has_edited = True
+        self._last_edited_page_idx = rotations[0][0]
+        self._invalidate_prefetch()
+        self._rebuild_spreads_keep_page(rotations[0][0])
+        pages_text = "・".join(f"{p + 1}" for p, _o, _n in rotations)
+        self._show_hud(f"↻ {pages_text}ページを回転しました")
+        self.update()
 
     # ---- 表示だけの白紙ページ（組を1ページ進める／戻す） ----
 

@@ -112,6 +112,10 @@ class BasePageListWidget(QListWidget):
 
         self.setViewMode(QListWidget.ViewMode.IconMode)
         self.setIconSize(QSize(95, 130))
+        # マスの大きさをアイコンに合わせて明示する。自動任せだと拡大時に
+        # サムネイル実画像の大きさでマスが決まってしまい、隣同士が重なって
+        # 表示が崩れる（全画面で拡大したときに特に目立つ）。
+        self.setGridSize(QSize(95 + 14, 130 + 30))
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.setMovement(QListWidget.Movement.Static)
         self.setSpacing(6)
@@ -123,16 +127,34 @@ class BasePageListWidget(QListWidget):
             "QListWidget::item:selected:!active { "
             "background: #ffab40; border: 2px solid #e65100; color: black; }")
 
+    # 通常ホイール1ノッチで動かす量(px)。拡大するほどマスが大きくなり、
+    # 標準のスクロールでは1ノッチで何百pxも飛んでしまうため、倍率に
+    # かかわらず一定の小さな量にして、ゆっくり動くようにする。
+    WHEEL_SCROLL_PX_PER_NOTCH = 72
+
     def wheelEvent(self, event):
         # Ctrl+ホイールでサムネイルの拡大・縮小（通常のホイールは一覧のスクロール）
-        if self.zoom_callback is not None and (
-            event.modifiers() & Qt.KeyboardModifier.ControlModifier
-        ):
-            steps = 1 if event.angleDelta().y() > 0 else -1
-            self.zoom_callback(steps)
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if self.zoom_callback is not None:
+                steps = 1 if event.angleDelta().y() > 0 else -1
+                self.zoom_callback(steps)
             event.accept()
             return
-        super().wheelEvent(event)
+        # 通常のスクロールは、ゆるやかな量で自前で動かす
+        pixel_delta = event.pixelDelta().y()
+        if pixel_delta:
+            pixels = pixel_delta
+        else:
+            angle = event.angleDelta().y()
+            if not angle:
+                super().wheelEvent(event)
+                return
+            pixels = int(round(angle / 120.0 * self.WHEEL_SCROLL_PX_PER_NOTCH))
+            if pixels == 0:
+                pixels = 1 if angle > 0 else -1
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.value() - pixels)
+        event.accept()
 
     def startDrag(self, supportedActions):
         doc = self.doc_provider()
@@ -852,8 +874,22 @@ class PageManager(QDockWidget):
             round(self._THUMB_BASE_W * self._thumb_scale),
             round(self._THUMB_BASE_H * self._thumb_scale),
         )
-        self.list_widget.setIconSize(size)
-        self.sub_list_widget.setIconSize(size)
+        grid = QSize(size.width() + 14, size.height() + 30)
+        for lw in (self.list_widget, self.sub_list_widget):
+            bar = lw.verticalScrollBar()
+            old_max = bar.maximum()
+            fraction = (bar.value() / old_max) if old_max > 0 else 0.0
+            lw.setIconSize(size)
+            lw.setGridSize(grid)
+            # マスの変更をその場でレイアウトへ反映する（全画面では後続の
+            # リサイズが来ないため、反映しないと重なったまま崩れて見える）
+            try:
+                lw.doItemsLayout()
+            except Exception:
+                pass
+            new_max = bar.maximum()
+            if new_max > 0 and fraction > 0.0:
+                bar.setValue(int(round(fraction * new_max)))
         self._settings_timer.start(500)
         # 大きく表示するときは描画の解像度も上げて、画質を保つ
         bucket = self._bucket_for(self._thumb_scale)
