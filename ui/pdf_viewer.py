@@ -693,12 +693,20 @@ class PDFViewer(QGraphicsView):
             page_matches_raw = []
 
             try:
-                hit_view_rects = page.search_for(clean_q)
+                hit_rects = page.search_for(clean_q)
             except Exception:
-                hit_view_rects = []
+                hit_rects = []
 
-            for vr in hit_view_rects:
-                raw_r = view_rect_to_raw_rect(page, vr)
+            # search_for の矩形は get_text と同じ「未回転・cropbox基準」の
+            # 座標で返る。raw 座標へは cropbox の原点を足すだけでよい
+            # （view_rect_to_raw_rect を使うと回転ページで二重に回転してしまう）。
+            for vr in hit_rects:
+                raw_r = fitz.Rect(
+                    vr.x0 + effective_crop.x0,
+                    vr.y0 + effective_crop.y0,
+                    vr.x1 + effective_crop.x0,
+                    vr.y1 + effective_crop.y0,
+                )
                 center = fitz.Point((raw_r.x0 + raw_r.x1) / 2.0, (raw_r.y0 + raw_r.y1) / 2.0)
                 if not effective_crop.contains(center):
                     continue
@@ -750,7 +758,14 @@ class PDFViewer(QGraphicsView):
                         for k in range(c_start + 1, c_end + 1):
                             vr |= line_chars[k][1]
 
-                        raw_r = view_rect_to_raw_rect(page, vr)
+                        # 文字矩形も未回転・cropbox基準の座標なので、
+                        # search_for と同じく原点を足して raw 座標にする
+                        raw_r = fitz.Rect(
+                            vr.x0 + effective_crop.x0,
+                            vr.y0 + effective_crop.y0,
+                            vr.x1 + effective_crop.x0,
+                            vr.y1 + effective_crop.y0,
+                        )
                         center = fitz.Point((raw_r.x0 + raw_r.x1) / 2.0, (raw_r.y0 + raw_r.y1) / 2.0)
                         if effective_crop.contains(center) and not is_rect_substantially_erased(raw_r, erased_rects):
                             clipped_r = raw_r & effective_crop
@@ -2060,24 +2075,37 @@ class PDFViewer(QGraphicsView):
                         for item in chunk[1:]:
                             union_rect |= fitz.Rect(item[0]["bbox"])
 
+                        # rawdict の bbox / origin は「未回転・cropbox基準」の
+                        # 座標系で返る（表示座標ではない）。raw 座標へは
+                        # cropbox の原点を足すだけでよい。表示座標として
+                        # view→raw 変換をかけると、回転ページで二重に
+                        # 回転して位置がずれてしまう。
+                        _crop = get_effective_cropbox(page)
+                        _ox, _oy = _crop.x0, _crop.y0
+
                         first_origin = chunk[0][0].get("origin")
                         if first_origin:
-                            view_base_pt = fitz.Point(first_origin[0], first_origin[1])
+                            base_pt = fitz.Point(first_origin[0], first_origin[1])
                         else:
                             first_bbox = fitz.Rect(chunk[0][0]["bbox"])
-                            view_base_pt = fitz.Point(
+                            base_pt = fitz.Point(
                                 first_bbox.x0 - dy * fontsize * 0.88,
                                 first_bbox.y0 + dx * fontsize * 0.88,
                             )
 
-                        view_top_pt = fitz.Point(
-                            view_base_pt.x + dy * fontsize * 0.88,
-                            view_base_pt.y - dx * fontsize * 0.88,
+                        top_pt = fitz.Point(
+                            base_pt.x + dy * fontsize * 0.88,
+                            base_pt.y - dx * fontsize * 0.88,
                         )
 
-                        raw_rect = view_rect_to_raw_rect(page, union_rect)
-                        raw_base = view_point_to_raw_pdf(page, view_base_pt)
-                        raw_top = view_point_to_raw_pdf(page, view_top_pt)
+                        raw_rect = fitz.Rect(
+                            union_rect.x0 + _ox,
+                            union_rect.y0 + _oy,
+                            union_rect.x1 + _ox,
+                            union_rect.y1 + _oy,
+                        )
+                        raw_base = fitz.Point(base_pt.x + _ox, base_pt.y + _oy)
+                        raw_top = fitz.Point(top_pt.x + _ox, top_pt.y + _oy)
 
                         tokens.append({
                             "text": text_str,
